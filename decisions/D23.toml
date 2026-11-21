@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D23"
 step = "M3.3"
 also = ["ui-cli"]
 code = ["crates/schedr-ui/src/live.rs::tail"]
-checked = 2026-11-16
+checked = 2026-11-21

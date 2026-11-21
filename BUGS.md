@@ -109,6 +109,10 @@ step touches their code or the user schedules them.
 ## B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing
 
 - **Rating:** severity **medium**, probability **likely**, tests (score 6): crates/schedr/tests/roles.rs run whole in parallel on one Postgres: 0-9 of 40 fail, on the last commit as on the next (cleanup moves, SIGTERM drains, cancels; `db migrate` timing out on the pool, 'the master's lease isn't renewed in time'); connections peak at 95-98 of Postgres's 100; make check failed once on three of them.
+- **Again:** 2026-11-21, `make check` on a cold build (after `cargo clean`):
+  `lease::the_lease_is_renewed_while_change_notifications_wait_on_a_lock` failed ("another
+  master took the lease during the switch", a 1 s lease period); alone it passed three times of
+  three.
 - **Found:** 2026-11-19, `make check` before the M5.2f commit: three cleanup-move tests of
   `roles.rs` timed out (`waited too long for the run to end`, a moved cleanup's handle missing),
   the master's log saying its lease wasn't renewed in time. Alone, the three pass.

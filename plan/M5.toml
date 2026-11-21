@@ -541,7 +541,8 @@ scope = '''
 done_when = '''
 the Kubernetes plugin on kind shows its phases, links and metrics on the task and the Extensions page, and its stop reasons change what it does; the helpers, crate, schema and protocol page agree; tests for each message and for the samples' path; a Python task's, a command task's and a plugin's structured lines shown with level and fields in the Logs tab
 '''
-status = "planned"
+status = "done"
+done = 2026-11-21
 
 [[steps]]
 id = "M5.2i6"
@@ -551,6 +552,17 @@ scope = '''
 '''
 done_when = '''
 an example shell plugin (in `examples/extensions/`) run end to end in `make standalone`: payload, output, a secret, a handle and its cleanup, status, a link and a metric, a stop; the same `task-ctx` commands working in a command task; the guide's Extensions page
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2i10"
+title = "Chart functions: a panel's point, combine, group_by and limit (decision 516)"
+scope = '''
+(the user, 2026-11-21: "ok, record it as a decision and plan it") decision 516: a panel's `point`, `combine`, `group_by` and `limit`, each with its default (what is drawn today unchanged); declared in the plugin's hello and in `[extensions.<name>]` panels, checked at load (a function the metric's kind doesn't have refused); applied by the API's metrics read (the minute samples and the 15-minute rollups alike: a rollup's gauge keeps what `max` and `mean` need to combine workers right) and drawn by the page; the dummy's `queue_depth` declares `combine: max`, the Kubernetes plugin's cluster-wide gauges too; the Python helper's and the Rust crate's panel types; the guide's Extensions page. Built before M5.2i7, so the demo's cluster-wide gauges show right
+'''
+done_when = '''
+each function and its default tested on the API's read (minutes and rollups) and on the page; a gauge read by two workers from one place shows once with `combine: max`; `limit` keeps the largest lines and folds the rest into `other`; the schema and the plugin protocol page agree
 '''
 status = "planned"
 
@@ -588,6 +600,17 @@ discussed with the user; designed, built, or dropped by their word
 status = "planned"
 
 [[steps]]
+id = "M5.2i11"
+title = "The Kubernetes plugin widened: an async client with watches, and every panel kind"
+scope = '''
+(the user, 2026-11-21: "I want A and B, but make it after long-running plugins are added, so that we can test/use those") the Kubernetes plugin (`examples/extensions/kubernetes/`), still built on `schedr.extension`, drives the cluster with `kubernetes_asyncio` instead of `kubectl` subprocesses: a watch on its Job and pod instead of polling each second, a Kubernetes Secret for `secret_env` instead of plain variables, its stop and cleanup as now; what its tasks share (the client, a watch on the namespace's pods for cluster-wide gauges) in its extension's long-running process (M5.2i9, as designed there); its page uses every chart kind (number, table, histogram, quantiles, line, rate, stacked, bars, events) on real figures, the cluster-wide gauges declaring `combine: max` (M5.2i10); `kubernetes_asyncio` a dependency of the example only, never of schedr; `make demo-kind` (M5.2i7) shows it; the guide's Extensions page. Not chosen now: notifications through it (with M5.2i8, later), a shell twin (M5.2i6's example instead)
+'''
+done_when = '''
+`make demo-kind` runs the widened plugin: its Jobs succeed and fail as before (the existing standalone and kind tests pass), its pod watched, not polled; two workers show a cluster-wide gauge once with `combine: max`; each chart kind drawn with points on its page
+'''
+status = "planned"
+
+[[steps]]
 id = "M5.2i4"
 title = "The plugin protocol's specification, and a schema of just its messages"
 scope = '''
@@ -611,6 +634,17 @@ status = "dropped"
 
 [[steps]]
 id = "M5.2j"
+title = "Runs and DAGs in numbered pages (decision 517)"
+scope = '''
+(the user, 2026-11-21: "Runs, as well as DAGs should have paging") decision 517 as DN23 corrects it: `page` and `limit` on `GET /api/v1/runs` and `GET /api/v1/dags`, each answer saying whether there is more (a page read with one row extra; nothing counted); the Runs and DAGs pages numbered `< 1 2 [3] 4 5 ... >`, to two past the page shown as far as pages exist and `...` where more follow, with Previous and Next, no total or last page, 50 a page, filters, order and page in the address and kept across the live update; the CLI's `runs list` and `dags list` with `--page` and `--limit`; the Runs page's "Older runs" removed; the guide's UI page
+'''
+done_when = '''
+both pages paged in the browser tests (a page's rows, the numbers, the filters kept, the last page), the APIs' `more` tested with filters on SQLite and Postgres, a deep page over many runs measured fast enough for the page's refresh
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2k"
 title = "The bugs found and left before 1.2.0 fixed"
 scope = '''
 (the user, 2026-11-20) after M5.2i: the bugs found during M5.2 and the ones still open fixed, as the bug rules say (each rated; security at once; then every one rated high or above; a reproducing test first), the rest decided one by one with the user (B38 and B39 stay with M6)

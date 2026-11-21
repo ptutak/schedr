@@ -16,4 +16,4 @@ history = "archive/PROJECT.md#D76"
 step = "M4.3b"
 also = ["protocol", "serialization"]
 code = ["python/schedr/runner/task.py", "crates/schedr-master/src/mapping.rs::into_inputs"]
-checked = 2026-11-09
+checked = 2026-11-21

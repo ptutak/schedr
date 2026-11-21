@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D100"
 step = "M4.3e"
 also = ["workers"]
 code = ["crates/schedr-agent/src/supervise.rs::left_after_leader"]
-checked = 2026-11-18
+checked = 2026-11-21

@@ -33,6 +33,9 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN24 | 2026-11-21 | user | adds to D466 | Every line drawn across up to five empty steps, everywhere |
+| DN23 | 2026-11-21 | user | corrects D517 | Numbered pages without a total or a last page: nothing counted |
+| DN22 | 2026-11-21 | claude | adds to D466 | Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not |
 | DN21 | 2026-11-21 | user | adds to D513 | The Extensions page in tabs, one per extension; inside, all workers and each worker |
 | DN20 | 2026-11-21 | user | corrects D515 | One EXTENSION_EVENT for every plugin's declared events, no narrowing |
 | DN19 | 2026-11-21 | user | adds to D513 | An events panel shows the worker's events for the extension, its attempts' phases, and its plugin's declared events |
@@ -59,9 +62,11 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
+| D516 | 2026-11-21 | user | planned (M5.2i10) | task-processes | Chart functions: point, combine, group_by and limit |
 | D515 | 2026-11-21 | user | planned (M5.2i8) | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
-| D514 | 2026-11-20 | user | planned (M5.2i5) | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
-| D513 | 2026-11-20 | user | planned (M5.2i5) | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
+| D514 | 2026-11-20 | user | built M5.2i5 | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
+| D513 | 2026-11-20 | user | built M5.2i5 | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
 | D511 | 2026-11-20 | user | built M5.2h6 | secrets | A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly |
 | D510 | 2026-11-20 | user | built M5.2i | task-processes | Extensions: a task kind run by a plugin executable the open worker supervises |
@@ -1000,6 +1005,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-processes
 
+- D516: Chart functions: point, combine, group_by and limit
 - D513: Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page
 - D510: Extensions: a task kind run by a plugin executable the open worker supervises
 - D385: A worker's interpreters serve all its roots
@@ -1034,6 +1040,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### ui-cli
 
+- D517: Runs and DAGs in numbered pages
 - D500: The DAGs page filters by name, trigger switch, kind and tag
 - D499: The Metrics page folds the processes that ended into one line
 - D491: A process's memory includes its tasks; memory is split by kind

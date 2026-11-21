@@ -1,0 +1,14 @@
+title = "Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not"
+date = 2026-11-21
+by = "claude"
+on = "D466"
+kind = "adds"
+summary = '''
+Charts have 20 series colours (`--series-1` to `--series-20`), each in a light and a dark form:
+the first eight are D466's, checked for colour blindness on the UI's backgrounds; the twelve after
+them came with decision 513 (a panel or a series may name one) and were not checked that way.
+A series naming no colour takes the first eight in turn (`chart::SERIES`), so only a colour an
+author names is one of the twelve; a histogram's bars take their series' colour in every slot
+(M5.2i5: only slot 1 had one, the others drew black).
+'''
+history = "JOURNAL.md#DN22"

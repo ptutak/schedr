@@ -3,30 +3,31 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-20)
+## Now (2026-11-21)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i5, M5.2i6, M5.2i7, M5.2i8, M5.2i9.
+- **Then:** M5.2i6, M5.2i10, M5.2i7, M5.2i8, M5.2i9.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 8; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B276 (low/possible) (`BUGS.md`).
+- **Open bugs:** 9; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B277 (low/possible) (`BUGS.md`).
 
 ## Recent
 
-- DN21 (2026-11-21): the Extensions page in tabs, all workers and each worker (adds to D513)
-- DN20 (2026-11-21): one EXTENSION_EVENT (corrects D515)
-- DN19 (2026-11-21): what an events panel lists (adds to D513)
-- DN18 (2026-11-21): one RUN_STARTED with a reason (corrects D515)
-- D514 (2026-11-20): logs through stdout and stderr, one structured format
+- DN24 (2026-11-21): Every line drawn across up to five empty steps, everywhere (adds to D466)
+- DN23 (2026-11-21): Numbered pages without a total or a last page: nothing counted (corrects D517)
+- DN22 (2026-11-21): Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not (adds to D466)
+- D517 (2026-11-21): Runs and DAGs in numbered pages
+- D516 (2026-11-21): chart functions
+- M5.2i5 (2026-11-21): Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page
 - M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
 - M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
-- M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)
 
 ## In progress
 
-- M5.2i, M5.2i2 done locally (extensions; the Kubernetes plugin on kind; reviews by Grok and Codex, all findings fixed); B273, B274 (option B), B275 fixed; decisions 513, 514 and M5.2i5, M5.2i6 planned; M5.2i4's first version kept, the step reopened last. make check passed; squashed per point; not pushed: waits for the user's acceptance.
-- Next: M5.2i5 (decisions 513, 514), then M5.2i6, then M5.2i4.
+- M5.2i, M5.2i2, M5.2i5 done locally (M5.2i5 squashed into one commit, reviewed twice by Codex, all findings fixed; DN18-DN21, D515, D516 recorded; M5.2i9, M5.2i10 planned). Not pushed: waits for the user's acceptance.
+- Closing M5.2i5, uncommitted: the D493 fix (four constants made hidden limits), the extension charts fitting their cells (no scroll; drawn at the cell's shape; every bar slot coloured), a DN on D466 (20 series colours) still to write; then each affected record's whole summary read before `checked` is set, make check, folded into the M5.2i5 commit.
+- Next: M5.2i6, M5.2i10 (chart functions, D516), M5.2i7, M5.2i8, M5.2i4; each reviewed by agy (Codex the fallback).
 
 ## Waiting for the user
 
@@ -36,7 +37,7 @@ Nothing.
 
 - Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its measurement and make check, no push; stop for any decision (M5.2cB4's layout agreed with the user, 2026-11-18). One review at the end of M5.2c over all its parts (the user: "I mean at the end of M5.2c"), then the whole stress suite; M5.2d reviewed on its own.
 - Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
-- One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.
+- One review per step: agy (gemini-4-neon-high, the agy skill) since 2026-11-21, Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
 - Stress runs only nightly or when the user asks; a step changing how the master recovers runs the cut scenarios 17-21 locally before pushing.
 - Before stating how something behaves, read the code or run it, and say which.

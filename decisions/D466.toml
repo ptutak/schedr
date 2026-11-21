@@ -16,6 +16,6 @@ uPlot (hover and zoom); Grafana dashboards in the Helm chart, for now.
 '''
 history = "JOURNAL.md#D466"
 step = "M5.1j"
-checked = 2026-11-15
+checked = 2026-11-21
 code = ["crates/schedr-ui/src/chart.rs"]
 also = []

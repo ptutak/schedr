@@ -21,4 +21,4 @@ history = "JOURNAL.md#D496"  # <a id="D496"></a> starts its JOURNAL.md entry
 step = "M5.1q"
 also = ["components"]
 code = ["crates/schedr-db/src/database.rs::is_transient", "crates/schedr-db/src/backend.rs::database_place", "crates/schedr/src/roles.rs::once_reached", "crates/schedr/src/roles.rs::wait_for_schema"]
-checked = 2026-11-19
+checked = 2026-11-21

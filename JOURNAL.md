@@ -2793,6 +2793,23 @@ day, the API taking `?worker=`. Not chosen (B): rollups per worker too, 30 days 
 column in the open migration; storage growing with workers, and pods that come and go leave
 many); (C) one tab per extension, summed only.
 
+### <a id="D516"></a>2026-11-21: chart functions (decision 516)
+
+A side agent's note: the "All workers" tab adds up each gauge across workers, so a value every
+worker reads from one place (a cluster's pending pods) shows multiplied. The user: "We should
+provide different functions for charts, suggestions?" Claude proposed four (`over_time`,
+`across`, `by`, `top`); the user: "\"by\" and \"top\" is not expressive enough, \"across\" also
+sounds strange"; after three other forms (one line in words, a PromQL subset, plain `fn`,
+`group` and `limit` keys): "i just wanter rewording of your initial proposal". Chosen: `point`,
+`combine`, `group_by`, `limit`; "ok, record it as a decision and plan it" (M5.2i10).
+
+### <a id="D517"></a>2026-11-21: Runs and DAGs in numbered pages (decision 517)
+
+The user: "Runs, as well as DAGs should have paging". The Runs page had only "Older runs" (a
+cursor by time, no way back); the DAGs page drew every DAG. Asked how: chosen numbered pages
+with the total; not chosen Newer and Older by time (recommended, the pages not shifting as runs
+arrive), nor "Show 50 more".
+
 ### 2026-11-21: an extension's long-running process, an idea (M5.2i9)
 
 A side agent's note answered a sidecar design (a local service in the worker's pod, thin plugins
@@ -2810,3 +2827,44 @@ limit resets after some settle-time... say 24h". Written as an idea to discuss (
 write them". Asked how a plugin and the process talk: C, a connection per attempt, a socket pair
 the worker makes, one end passed to the process; not A, through the agent, nor B, a socket path
 any task of the same user could find. Not M5.2i3's controller (dropped): plugins stay per attempt.
+
+### <a id="DN22"></a>2026-11-21: Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not (decision note 22; adds to D466)
+
+Found reading the records M5.2i5 touched: D466 says eight series colours, the stylesheet has 20
+since decision 513. No check of the twelve for colour blindness is recorded, so the note says so
+rather than claim one.
+
+### <a id="DN23"></a>2026-11-21: Numbered pages without a total or a last page: nothing counted (decision note 23; corrects D517)
+
+A side agent's note: a total means counting every matching run on each refresh, seconds on a
+large Postgres database. The user: "maybe let's not present the last page?" So no total and no
+last page: a page read with one row extra says whether a next one exists.
+
+### <a id="DN24"></a>2026-11-21: Every line drawn across up to five empty steps, everywhere (decision note 24; adds to D466)
+
+On the dummy extension's page, counters a job grows every other minute drew lone dots, then,
+with empty minutes read as 0, a sawtooth; the user chose bars per bucket, then: "nope bars look
+worse, at least for \"Steps\" - is it possible to interpolate?" and "this has to be a general
+rule". So the chart joins readings across up to five empty steps, on every page.
+
+A side agent's note: a joined counter line reads at its busy minutes' level, about double the
+average of a job every other minute. The user: "I think it's up to the user to decide what he
+chooses, so we interpolate and if the user wants to see \"breaks\" he chooses a different type
+of chart": a `bars` kind for panels, in M5.2i10.
+
+### 2026-11-21: the paging and bug-fix steps swap letters
+
+The user: "M5.2k should be after spec", then "switch k and j letters". The paging step
+(decision 517) is M5.2j now and the bug fixes M5.2k, in that order after M5.2i4; the entry above
+naming "M5.2j (bugs)" was written before.
+
+### 2026-11-21: the Kubernetes plugin widened, after long-running processes (M5.2i11)
+
+Thinking together about what extensions should offer: the user's line, plugins as "native"
+entities, getting what tasks get (statuses, logs, events, links, one notification type, basic
+metrics) "for free", the reason to write a plugin rather than run one's own service; D516's
+functions name what the Metrics page already chooses in code for schedr's own entities. "I think
+kubernetes plugin could excersice everything ... maybe we could make it a little \"wider\"?"
+Claude offered an async client (A), every panel kind (B), notifications (C) and a shell twin
+(D); the user: "I want A and B, but make it after long-running plugins are added, so that we can
+test/use those". Planned as M5.2i11, after M5.2i9.

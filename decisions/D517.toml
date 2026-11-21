@@ -1,0 +1,21 @@
+title = "Runs and DAGs in numbered pages"
+date = 2026-11-21
+by = "user"
+status = "active"
+topic = "ui-cli"
+section = "Pages and live updates"
+summary = '''
+The Runs and DAGs pages are paged with numbers: `< 1 2 [3] 4 5 ... >`, from the first page to
+two past the one shown as far as pages exist, `...` where more follow, with Previous and Next; no total and no last page, so
+nothing is counted (corrected by DN23). 50 rows a page, the filters and the order kept from page
+to page and in the address (`page`). `GET /api/v1/runs` and `GET /api/v1/dags` take `page` and
+`limit` and answer whether there is more, a page read with one row extra; the CLI's lists page
+the same way. A page's rows can shift while one reads it: a new run moves the rest one place
+down, a known cost of numbers. The Runs page's "Older runs"
+button and its `before` / `before_run` cursor give way to them (the API keeps the cursor
+parameters for a client that uses them). Not chosen: Newer and Older by time (the pages don't
+shift); "Show 50 more" at the bottom.
+'''
+history = "JOURNAL.md#D517"
+step = "M5.2j"
+code = []

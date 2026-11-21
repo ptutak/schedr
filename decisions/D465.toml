@@ -19,6 +19,6 @@ column (`memory` on `GET /api/v1/workers`). Below them, its attempts ended and t
 '''
 history = "JOURNAL.md#D465"
 step = "M5.1j"
-checked = 2026-11-16
+checked = 2026-11-21
 code = ["crates/schedr-ui/src/metrics.rs", "crates/schedr-api/src/series.rs", "crates/schedr-ui/templates/metrics.html"]
 also = ["observability"]

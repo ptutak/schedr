@@ -1,0 +1,13 @@
+title = "Numbered pages without a total or a last page: nothing counted"
+date = 2026-11-21
+by = "user"
+on = "D517"
+kind = "corrects"
+summary = '''
+No total and no last page: counting the matching runs on every refresh takes seconds on a large
+Postgres database (a side agent's note). A page reads its rows and one more: the extra row says
+a next page exists. The numbers run from the first page to two past the one shown, as far as
+pages are known to exist, then `...` where more follow (`< 1 2 [3] 4 5 ... >`; the user: "show just \"...\""), with Previous and Next; nothing is counted. The
+APIs take `page` and `limit` and answer whether there is more (`more`), not a total.
+'''
+history = "JOURNAL.md#DN23"

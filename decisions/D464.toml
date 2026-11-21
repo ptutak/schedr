@@ -19,5 +19,5 @@ deployment's totals are weighted (DN5); minute rows are kept 24 h, rollups 30 d
 history = "JOURNAL.md#D464"
 step = "M5.1i"
 also = ["state"]
-checked = 2026-11-15
+checked = 2026-11-21
 code = ["crates/schedr-db/src/samples.rs", "crates/schedr-master/src/samples.rs::Sampler", "crates/schedr-master/src/samples.rs::sample_webserver"]

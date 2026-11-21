@@ -16,4 +16,4 @@ a fixed name for `.`, the worker role too.
 history = "JOURNAL.md#D488"  # <a id="D488"></a> starts its JOURNAL.md entry
 step = "M5.1n"  # the plan step that builds it; "later"; "n/a" for a rule
 code = ["crates/schedr/src/cli.rs::root_path", "crates/schedr-config/src/sources.rs::OverrideValue"]
-checked = 2026-11-15
+checked = 2026-11-21

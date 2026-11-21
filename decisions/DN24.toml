@@ -1,0 +1,19 @@
+title = "Every line drawn across up to five empty steps, everywhere"
+date = 2026-11-21
+by = "user"
+on = "D466"
+kind = "adds"
+summary = '''
+A general rule for every line in the UI, a line chart's or a sparkline's (the Metrics page's and
+the extensions' alike, and stacked areas: the user, "the \"interpolation\" should be only for
+\"lines\" chart", then "Maybe also for \"jobs by outcome\""; a band breaks at every gap): a line runs from one reading to the next across up to five steps without one (`chart::BRIDGE`);
+a longer gap breaks it, nothing having been sent there. A job every few minutes, a counter growing
+only some minutes, a worker's figures sent twice in one minute and none in the next no longer
+read as lone dots or a sawtooth. Nothing is added to the data: no zeros, no carried values. Not
+chosen: counters as a bar per bucket (tried: "bars look worse"); empty buckets read as 0. A joined
+counter reads at its busy minutes' level, about twice a job's average when it runs every other
+minute (a side agent's note); the user: "it's up to the user to decide ... if the user wants to
+see \"breaks\" he chooses a different type of chart": a panel's `bars` kind, a bar per bucket, an
+empty one left empty ("you can add \"bars\" chart as another chart type now": M5.2i5).
+'''
+history = "JOURNAL.md#DN24"

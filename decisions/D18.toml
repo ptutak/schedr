@@ -12,4 +12,4 @@ history = "archive/PROJECT.md#D18"
 step = "M2.5.4b"
 also = ["observability"]
 code = ["crates/schedr-agent/src/process.rs", "crates/schedr-agent/src/usage.rs::zombie_usage"]
-checked = 2026-11-18
+checked = 2026-11-21

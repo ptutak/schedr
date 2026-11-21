@@ -1,11 +1,12 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-20
+updated = 2026-11-21
 
 in_progress = [
-    "M5.2i, M5.2i2 done locally (extensions; the Kubernetes plugin on kind; reviews by Grok and Codex, all findings fixed); B273, B274 (option B), B275 fixed; decisions 513, 514 and M5.2i5, M5.2i6 planned; M5.2i4's first version kept, the step reopened last. make check passed; squashed per point; not pushed: waits for the user's acceptance.",
-    "Next: M5.2i5 (decisions 513, 514), then M5.2i6, then M5.2i4.",
+    "M5.2i, M5.2i2, M5.2i5 done locally (M5.2i5 squashed into one commit, reviewed twice by Codex, all findings fixed; DN18-DN21, D515, D516 recorded; M5.2i9, M5.2i10 planned). Not pushed: waits for the user's acceptance.",
+    "Closing M5.2i5, uncommitted: the D493 fix (four constants made hidden limits), the extension charts fitting their cells (no scroll; drawn at the cell's shape; every bar slot coloured), a DN on D466 (20 series colours) still to write; then each affected record's whole summary read before `checked` is set, make check, folded into the M5.2i5 commit.",
+    "Next: M5.2i6, M5.2i10 (chart functions, D516), M5.2i7, M5.2i8, M5.2i4; each reviewed by agy (Codex the fallback).",
 ]
 
 waiting = []
@@ -13,7 +14,7 @@ waiting = []
 rules = [
     "Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its measurement and make check, no push; stop for any decision (M5.2cB4's layout agreed with the user, 2026-11-18). One review at the end of M5.2c over all its parts (the user: \"I mean at the end of M5.2c\"), then the whole stress suite; M5.2d reviewed on its own.",
     "Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).",
-    "One review per step: Codex (security in its prompt) until its limit, then Grok without asking; always at high effort; reviews cover code only.",
+    "One review per step: agy (gemini-4-neon-high, the agy skill) since 2026-11-21, Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
     "Stress runs only nightly or when the user asks; a step changing how the master recovers runs the cut scenarios 17-21 locally before pushing.",
     "Before stating how something behaves, read the code or run it, and say which.",
