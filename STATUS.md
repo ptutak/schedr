@@ -3,31 +3,30 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-21)
+## Now (2026-11-22)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i6, M5.2i10, M5.2i7, M5.2i8, M5.2i9.
+- **Then:** M5.2i10, M5.2i7, M5.2i8, M5.2i9, M5.2i11.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 9; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B277 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN25 (2026-11-21): A service's memory 256 MiB by default (corrects D518)
 - D519 (2026-11-21): shell plugins' details
 - D518 (2026-11-21): an extension's service
 - DN24 (2026-11-21): Every line drawn across up to five empty steps, everywhere (adds to D466)
 - DN23 (2026-11-21): Numbered pages without a total or a last page: nothing counted (corrects D517)
-- DN22 (2026-11-21): Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not (adds to D466)
+- M5.2i6 (2026-11-22): Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx`
 - M5.2i5 (2026-11-21): Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page
 - M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
-- M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
 
 ## In progress
 
-- M5.2i, M5.2i2, M5.2i5 done locally (M5.2i5 squashed into one commit, reviewed twice by Codex, all findings fixed; DN18-DN21, D515, D516 recorded; M5.2i9, M5.2i10 planned). Not pushed: waits for the user's acceptance.
-- Closing M5.2i5, uncommitted: the D493 fix (four constants made hidden limits), the extension charts fitting their cells (no scroll; drawn at the cell's shape; every bar slot coloured), a DN on D466 (20 series colours) still to write; then each affected record's whole summary read before `checked` is set, make check, folded into the M5.2i5 commit.
-- Next: M5.2i6, M5.2i10 (chart functions, D516), M5.2i7, M5.2i8, M5.2i4; each reviewed by agy (Codex the fallback).
+- The user asleep (2026-11-21, ~23:30 CET): M5.2 finished alone, in order M5.2i10, i7, i8, i9, i11, i4, then M5.2j (paging), then M5.2k (all open bugs but B38, B39); answers given ahead in memory (m5-2-night-pre-accepted); each step reviewed by agy, make check, pushed. Every choice made alone recorded "Claude's, to confirm" and shown to the user in the morning as an options table.
+- M5.2i6 done (shell plugins, D519): agy's review, 12 findings, all fixed.
 
 ## Waiting for the user
 

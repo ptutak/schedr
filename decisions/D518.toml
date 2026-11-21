@@ -15,7 +15,7 @@ offers the extension's versions only while it is ready, only those it serves. Ea
 a private connection (option C): a socket pair, one end the plugin's, the other passed to the
 service with `attempt_connected {attempt_id, task, version}`; a plugin reaches only its own
 extension's service (`await channel.service.call(...)`, an error without one), the worker not
-in the data path. A crash (or memory past `service_memory`, 512 MiB) closes the attempts'
+in the data path. A crash (or memory past `service_memory`, 256 MiB by default: DN25) closes the attempts'
 connections, their plugins failing them (retries apply), offers withdrawn until ready again,
 restarted backing off 1 s to 60 s; past `service_restarts` (5) within `service_settle` (24 h)
 the extension is turned off on that worker. Its secrets declared in config

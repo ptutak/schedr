@@ -23,6 +23,7 @@ pub mod ops;
 pub mod roles;
 pub mod secret_storage;
 pub mod secrets;
+pub mod shell_plugin;
 pub mod standalone;
 pub mod task_api;
 pub use schedr_client::times;
@@ -91,6 +92,12 @@ where
             );
         }
         return task_exec(*data_limit, command, err);
+    }
+    if let cli::Command::Extension {
+        command: cli::ExtensionCommand::Shell { command },
+    } = &cli.command
+    {
+        return shell_plugin::run(command, env, err);
     }
     if let cli::Command::DagCtx { command } = &cli.command {
         return match ctx::run_dag_ctx(command, env, VERSION, out) {

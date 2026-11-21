@@ -168,6 +168,13 @@ pub enum Command {
         #[command(subcommand)]
         command: TaskCtxCommand,
     },
+    /// An extension's plugin made of a script (M5.2i6): configured as the extension's command,
+    /// started by a worker.
+    Extension {
+        /// The extension command.
+        #[command(subcommand)]
+        command: ExtensionCommand,
+    },
     /// Inside a running task: the run's parameters and run information.
     DagCtx {
         /// The DAG context command.
@@ -189,6 +196,19 @@ pub enum Command {
         #[arg(long)]
         barrier_wait_ms: Option<u64>,
         /// The program and its arguments, after `--`.
+        #[arg(last = true, required = true, value_parser = clap::value_parser!(std::ffi::OsString))]
+        command: Vec<std::ffi::OsString>,
+    },
+}
+
+/// `schedr extension ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ExtensionCommand {
+    /// Runs a script as the extension's plugin (decision 519): the payload as JSON on its stdin,
+    /// the run as `SCHEDR_*` variables, its output, secrets, handles, status, links and metrics
+    /// through `schedr task-ctx`, exit 0 succeeding; a cleanup runs it with `SCHEDR_CLEANUP=1`.
+    Shell {
+        /// The script and its arguments, after `--`.
         #[arg(last = true, required = true, value_parser = clap::value_parser!(std::ffi::OsString))]
         command: Vec<std::ffi::OsString>,
     },
@@ -669,6 +689,50 @@ pub enum TaskCtxCommand {
         #[arg(long, value_name = "JSON")]
         data: Option<String>,
     },
+    /// Says where the task is now (decision 519): its phase, shown on the task with its time.
+    Status {
+        /// Its phase (`pulling`, `running`, ...).
+        phase: String,
+        /// A line about it.
+        #[arg(long)]
+        message: Option<String>,
+        /// How far along it is, from 0 to 1.
+        #[arg(long, value_name = "FRACTION")]
+        progress: Option<String>,
+    },
+    /// A link shown on the task (decision 519): `http` or `https`.
+    Link {
+        /// Its label.
+        label: String,
+        /// Its address.
+        url: String,
+    },
+    /// A point of the extension's declared metric: only in a shell plugin (decision 519).
+    Metric {
+        /// The metric.
+        name: String,
+        /// Its value: for a counter what it grew by, for a gauge its value, for a histogram
+        /// one observation.
+        #[arg(allow_negative_numbers = true)]
+        value: String,
+        /// A label, `name=value`. Repeatable.
+        #[arg(long = "label", value_name = "NAME=VALUE")]
+        labels: Vec<String>,
+    },
+    /// Why the task is being stopped, after `SIGTERM`: only in a shell plugin (decision 519).
+    /// Prints `{"reason": ..., "seconds_left": ...}`; the reason is `cancel`, `timeout`,
+    /// `drain`, `master_lost`, or null while it isn't stopped.
+    StopReason {
+        /// How to print it.
+        #[command(flatten)]
+        field: FieldArg,
+    },
+    /// The extension's own: only in a shell plugin (`schedr extension shell`, M5.2i6).
+    Extension {
+        /// The extension command.
+        #[command(subcommand)]
+        command: ExtensionCtxCommand,
+    },
     /// Writes a structured log line to stderr (decision 514): shown in the Logs tab with its
     /// level and fields, as a Python task's `logging` is.
     Log {
@@ -680,6 +744,29 @@ pub enum TaskCtxCommand {
         /// A field, `name=value`: a JSON value, or the text as it is. Repeatable.
         #[arg(long = "field", value_name = "NAME=VALUE")]
         fields: Vec<String>,
+    },
+}
+
+/// `schedr task-ctx extension ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ExtensionCtxCommand {
+    /// The task's output.
+    Output {
+        /// The output command.
+        #[command(subcommand)]
+        command: OutputCommand,
+    },
+}
+
+/// `schedr task-ctx extension output ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum OutputCommand {
+    /// Sets the task's output: JSON, or `@file.json`; set again, the last one counts. None set,
+    /// it is null.
+    Set {
+        /// The output.
+        #[arg(value_name = "JSON", allow_hyphen_values = true)]
+        value: String,
     },
 }
 
@@ -897,6 +984,7 @@ impl Command {
             | Self::Connections { .. }
             | Self::DagCtx { .. }
             | Self::TaskExec { .. }
+            | Self::Extension { .. }
             | Self::TaskCtx { .. } => None,
         }
     }
@@ -924,6 +1012,7 @@ impl Command {
             Self::TaskCtx { .. } => "task-ctx",
             Self::DagCtx { .. } => "dag-ctx",
             Self::TaskExec { .. } => "task-exec",
+            Self::Extension { .. } => "extension",
         }
     }
 }

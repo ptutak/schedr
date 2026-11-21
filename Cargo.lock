@@ -3183,6 +3183,7 @@ dependencies = [
  "schedr-client",
  "schedr-config",
  "schedr-db",
+ "schedr-extension",
  "schedr-fd",
  "schedr-master",
  "schedr-model",

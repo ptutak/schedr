@@ -36,4 +36,4 @@ code = [
     "crates/schedr-master/src/slow_equals.rs::SlowEquals",
     "crates/schedr/src/roles.rs::queue_depth",
 ]
-checked = 2026-11-21
+checked = 2026-11-22

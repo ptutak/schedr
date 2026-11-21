@@ -276,6 +276,12 @@ events](22-events.md#posting-from-a-task):
 | `events post`, `events list`, `api METHOD PATH` | Post or list events, or call an allowed API route as the task. |
 | `resource set [FIELD ...] [--json JSON]` | Reports the setup's value, checked immediately against `CommandResource(..., value=T)` or `ScriptResource(..., value=T)`. Fields are `key=value` (text) or `key:=json`; alternatively, `--json` takes any JSON value. Report once per setup attempt. Only a command or script resource setup can call it. |
 | `resource get [--field NAME]` | Prints the setup's value in a resource's command or script cleanup: one line of JSON, in the form `--params` takes. `--field` prints a top-level string as text and other fields as JSON, followed by a newline. A resource with no value returns `null`. |
+| `status PHASE [--message TEXT] [--progress FRACTION]` | Says where the task is now: shown on the task with its time, the latest on top. The progress is from 0 to 1. |
+| `link LABEL URL` | A link shown on the task, `http` or `https` (a job's page, a dashboard). |
+
+`metric`, `stop-reason` and `extension output set` belong to an extension's shell plugin
+([Extensions](../03-guide/21-extensions.md#a-shell-script-as-a-plugin)); a command task is told
+so.
 
 ## The running task's own context: `task_ctx`
 

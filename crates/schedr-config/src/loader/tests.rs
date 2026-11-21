@@ -1638,6 +1638,15 @@ versions = ["1.0", "1.1"]
         &env(&[
             ("SCHEDR_CONFIG__EXTENSIONS__K8S__COMMAND", "[\"/opt/k8s\"]"),
             ("SCHEDR_CONFIG__EXTENSIONS__K8S__VERSIONS", "[\"2\"]"),
+            // A shell plugin declares in config (decision 519): tables inline, as TOML writes them.
+            (
+                "SCHEDR_CONFIG__EXTENSIONS__K8S__METRICS",
+                r#"[{name = "files", kind = "counter", help = "Files"}]"#,
+            ),
+            (
+                "SCHEDR_CONFIG__EXTENSIONS__K8S__PANELS",
+                r#"[{title = "Files", metric = "files", chart = "bars", row = 1, cell = "full"}]"#,
+            ),
         ]),
         &[],
     )
@@ -1650,6 +1659,11 @@ versions = ["1.0", "1.1"]
         ["/opt/acme/schedr-ext-spark", "--quiet"]
     );
     assert_eq!(section.plugins["k8s"].versions, ["2"]);
+    assert_eq!(section.plugins["k8s"].metrics[0].name, "files");
+    assert_eq!(
+        section.plugins["k8s"].panels[0].chart,
+        schedr_model::extension::ChartKind::Bars
+    );
     assert!(!load(None, &env(&[]), &[]).unwrap().extensions.discover);
 }
 

@@ -321,6 +321,63 @@
           "type": "object"
         },
         {
+          "description": "The status, link, metric point or output is kept.",
+          "properties": {
+            "type": {
+              "const": "reported",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the status, link, metric point or output isn't kept; the connection stays open.",
+          "properties": {
+            "reason": {
+              "description": "What went wrong.",
+              "type": "string"
+            },
+            "type": {
+              "const": "report_refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the task is being stopped: `cancel`, `timeout`, `drain` or `master_lost`; none\nwhile it isn't.",
+          "properties": {
+            "reason": {
+              "description": "The reason.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seconds_left": {
+              "description": "The seconds left before `SIGKILL`.",
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "stop_reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "seconds_left"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A request the agent can't answer (one it doesn't know, out of order); the connection\nis closed after it.",
           "properties": {
             "reason": {
@@ -544,6 +601,123 @@
           },
           "required": [
             "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Where the task is now (`schedr task-ctx status`, decision 519): kept with the attempt,\nshown on the task, as a plugin's (decision 513).",
+          "properties": {
+            "message": {
+              "description": "A line about it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "description": "Its phase.",
+              "type": "string"
+            },
+            "progress": {
+              "description": "From 0 to 1.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "status_set",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A link shown on the task (`schedr task-ctx link`, decision 519).",
+          "properties": {
+            "label": {
+              "description": "Its label.",
+              "type": "string"
+            },
+            "type": {
+              "const": "link_set",
+              "type": "string"
+            },
+            "url": {
+              "description": "Its address, `http` or `https`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "label",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A point of an extension's declared metric (`schedr task-ctx metric`): only within an\nextension's shell plugin (decision 519).",
+          "properties": {
+            "labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Its labels.",
+              "type": "object"
+            },
+            "name": {
+              "description": "The metric.",
+              "type": "string"
+            },
+            "type": {
+              "const": "metric_add",
+              "type": "string"
+            },
+            "value": {
+              "description": "Its value.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Why the task is being stopped (`schedr task-ctx stop-reason`): only within an\nextension's shell plugin (decision 519).",
+          "properties": {
+            "type": {
+              "const": "stop_reason_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The task's output (`schedr task-ctx extension output set`): only within an extension's\nshell plugin (M5.2i6).",
+          "properties": {
+            "type": {
+              "const": "output_set",
+              "type": "string"
+            },
+            "value": {
+              "description": "The output, JSON."
+            }
+          },
+          "required": [
+            "type",
+            "value"
           ],
           "type": "object"
         }

@@ -333,6 +333,50 @@ own types (decision note 17).
 cleanup after a failure, a timeout, a version no worker serves, and plugins in two languages side
 by side (the dummy and the Rust `hello-plugin`, which those targets build and configure by path).
 
+## A shell script as a plugin
+
+`schedr extension shell -- <script> [args]` makes any script an extension's plugin: it speaks the
+protocol with the worker and runs the script for each attempt. Configure it as the extension's
+command, its metrics and panels beside it (a script sends no `hello`, so they are declared here):
+
+```toml
+[extensions.backup]
+command  = ["schedr", "extension", "shell", "--", "/opt/ops/backup.sh"]
+versions = ["1.0"]
+metrics  = [{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]
+panels   = [{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]
+```
+
+The script gets:
+
+- **the payload** as JSON on its stdin;
+- **the run** as `SCHEDR_*` variables, as a command task does (`SCHEDR_DAG_ID`, `SCHEDR_RUN_ID`,
+  `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, ...), with `SCHEDR_EXTENSION` and
+  `SCHEDR_EXTENSION_VERSION`;
+- **its log**: its stdout and stderr; `schedr task-ctx log` writes a structured line;
+- **its end**: exit 0 succeeds, anything else fails the attempt ("the script exited with 3").
+
+It talks to the worker through `schedr task-ctx`, the folder of the `schedr` running it first
+on its `PATH`, so the commands are that build's:
+
+| Command | What it does |
+|---|---|
+| `extension output set JSON` | The task's output (JSON, or `@file.json`); set again, the last counts; none set, it is null |
+| `secret get PATH#KEY`, `connection NAME --json` | A declared secret, a connection's values (`--env` isn't served: it writes files in a command task's folder) |
+| `cleanup add TYPE FIELD...`, `cleanup list` | A handle, before what it cleans up; the handles, in the cleanup |
+| `status PHASE [--message TEXT] [--progress FRACTION]`, `link LABEL URL` | Its phase and links, on the task |
+| `metric NAME VALUE [--label NAME=VALUE]...` | A point of a metric declared in the config |
+| `stop-reason [--field reason]` | After `SIGTERM`: `cancel`, `timeout`, `drain` or `master_lost`, and the seconds left |
+| `api METHOD PATH`, `events post` | schedr's API and events, as the task |
+
+A cleanup (`ExtensionTask(..., cleanup=True)`) runs the same script with `SCHEDR_CLEANUP=1`. A
+stop reaches the script itself: the worker signals the plugin's whole process group, so a
+`trap ... TERM` runs, and may ask why. A configured extension only: discovery asks `--describe`
+of `schedr-ext-*` programs, which a script isn't.
+
+`examples/extensions/backup/backup.sh` is one, configured by `make standalone`;
+`examples/extensions/backup_extension.py` has its DAGs, one that succeeds and one that fails.
+
 ## The Kubernetes plugin
 
 `examples/extensions/kubernetes/schedr-ext-kubernetes` runs each attempt as a Kubernetes Job,

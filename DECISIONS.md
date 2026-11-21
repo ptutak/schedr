@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN25 | 2026-11-21 | user | corrects D518 | A service's memory 256 MiB by default |
 | DN24 | 2026-11-21 | user | adds to D466 | Every line drawn across up to five empty steps, everywhere |
 | DN23 | 2026-11-21 | user | corrects D517 | Numbered pages without a total or a last page: nothing counted |
 | DN22 | 2026-11-21 | claude | adds to D466 | Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not |
@@ -62,7 +63,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D519 | 2026-11-21 | user | planned (M5.2i6) | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
+| D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
 | D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
 | D516 | 2026-11-21 | user | planned (M5.2i10) | task-processes | Chart functions: point, combine, group_by and limit |

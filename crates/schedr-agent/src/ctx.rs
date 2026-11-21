@@ -62,6 +62,41 @@ pub struct CtxInfo {
     /// The most connections the task may have open at once
     /// (`SCHEDR_HIDDEN__WORKER__TASK_CONNECTIONS_OPEN`).
     pub max_connections: usize,
+    /// Its status and links (`schedr task-ctx status`, `link`, decision 519); none: it can't.
+    pub reports: Option<Arc<crate::reports::AttemptReports>>,
+}
+
+/// What answers a channel's requests after the handshake: the agent's, for a command task
+/// ([`CtxInfo`]); or an extension's shell plugin, passing them on to the worker (M5.2i6).
+pub trait Answers: Send + Sync + 'static {
+    /// The answering side's schedr version, for a refusal's message.
+    fn version(&self) -> &str;
+
+    /// The most connections served at once.
+    fn max_connections(&self) -> usize;
+
+    /// The answer to `request`.
+    fn answer(
+        &self,
+        request: CtxRequest,
+    ) -> Pin<Box<dyn std::future::Future<Output = CtxAnswer> + Send + '_>>;
+}
+
+impl Answers for CtxInfo {
+    fn version(&self) -> &str {
+        &self.version
+    }
+
+    fn max_connections(&self) -> usize {
+        self.max_connections
+    }
+
+    fn answer(
+        &self,
+        request: CtxRequest,
+    ) -> Pin<Box<dyn std::future::Future<Output = CtxAnswer> + Send + '_>> {
+        Box::pin(answer_to(self, request))
+    }
 }
 
 impl CtxInfo {
@@ -83,6 +118,7 @@ impl CtxInfo {
             resource: None,
             api: None,
             max_connections: MAX_CONNECTIONS,
+            reports: None,
         }
     }
 }
@@ -112,11 +148,17 @@ impl Drop for Serving {
 /// Serves the agent's end of a channel in the background, until the returned guard drops.
 #[must_use]
 pub fn serve(socket: UnixDatagram, info: CtxInfo) -> Serving {
-    Serving(tokio::spawn(accept(socket, Arc::new(info))))
+    serve_with(socket, Arc::new(info))
+}
+
+/// The same, answered by `answers`.
+#[must_use]
+pub fn serve_with(socket: UnixDatagram, answers: Arc<dyn Answers>) -> Serving {
+    Serving(tokio::spawn(accept(socket, answers)))
 }
 
 /// Takes the ends sent over `socket` and serves each; its connections end with it.
-async fn accept(socket: UnixDatagram, info: Arc<CtxInfo>) {
+async fn accept(socket: UnixDatagram, info: Arc<dyn Answers>) {
     let mut connections = JoinSet::new();
     loop {
         let end = match receive_end(&socket).await {
@@ -131,7 +173,7 @@ async fn accept(socket: UnixDatagram, info: Arc<CtxInfo>) {
         let Some(end) = connection(end) else {
             continue;
         };
-        let most = info.max_connections.max(1);
+        let most = info.max_connections().max(1);
         if connections.len() >= most {
             tracing::debug!("a task has {most} context connections open; refused one");
             // Said on the fresh connection (its buffer is empty, so the send doesn't wait),
@@ -158,7 +200,7 @@ async fn accept(socket: UnixDatagram, info: Arc<CtxInfo>) {
         let info = Arc::clone(&info);
         connections.spawn(async move {
             let mut stream = stream;
-            if let Err(error) = converse(&mut stream, &info).await {
+            if let Err(error) = converse(&mut stream, &*info).await {
                 tracing::debug!(%error, "a context connection ended");
             }
         });
@@ -315,7 +357,7 @@ pub enum CtxError {
 /// [`CtxError`] when the connection breaks or a message is over the limit.
 pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
-    info: &CtxInfo,
+    info: &dyn Answers,
 ) -> Result<(), CtxError> {
     match read_request(stream).await? {
         Some(Ok(CtxRequest::Hello { protocol, .. })) if protocol == CTX_PROTOCOL => {
@@ -329,7 +371,8 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
                 "this schedr ({schedr_version}) speaks protocol {protocol} of the task's \
                  context, the task's agent ({}) protocol {CTX_PROTOCOL}: use schedr {} (or one \
                  speaking protocol {CTX_PROTOCOL}) in the task",
-                info.version, info.version
+                info.version(),
+                info.version()
             );
             return write_answer(stream, &CtxAnswer::Refused { reason }).await;
         }
@@ -342,7 +385,7 @@ pub async fn converse<S: AsyncRead + AsyncWrite + Unpin>(
             Some(Ok(CtxRequest::Hello { .. })) => {
                 return refuse(stream, "`hello` was said already").await;
             }
-            Some(Ok(request)) => answer_to(info, request).await,
+            Some(Ok(request)) => info.answer(request).await,
             Some(Err(reason)) => return refuse(stream, &reason).await,
         };
         write_answer(stream, &answer).await?;
@@ -412,6 +455,25 @@ async fn answer_to(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
                 reason: "`cleanup list` works only inside a cleanup".to_owned(),
             },
         },
+        request @ (CtxRequest::ConnectionGet { .. } | CtxRequest::ConnectionEnvGet { .. }) => {
+            connection_answer(info, request).await
+        }
+        CtxRequest::ResourceSet { value } => resource_answer(info, Some(&value)),
+        CtxRequest::ResourceGet => resource_answer(info, None),
+        request @ (CtxRequest::StatusSet { .. }
+        | CtxRequest::LinkSet { .. }
+        | CtxRequest::MetricAdd { .. }
+        | CtxRequest::StopReasonGet
+        | CtxRequest::OutputSet { .. }) => report_answer(info, request),
+        CtxRequest::Hello { .. } => CtxAnswer::Error {
+            reason: "`hello` was said already".to_owned(),
+        },
+    }
+}
+
+/// A connection's values, or its variables (its files written), or why not.
+async fn connection_answer(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
+    match request {
         CtxRequest::ConnectionGet { name } => {
             let opened = match &info.secrets {
                 Some(secrets) => secrets.connection(&name).await,
@@ -442,17 +504,68 @@ async fn answer_to(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
                 },
             }
         }
-        CtxRequest::ResourceSet { value } => resource_answer(info, Some(&value)),
-        CtxRequest::ResourceGet => resource_answer(info, None),
-        CtxRequest::Hello { .. } => CtxAnswer::Error {
-            reason: "`hello` was said already".to_owned(),
+        _ => CtxAnswer::Error {
+            reason: "not a connection".to_owned(),
+        },
+    }
+}
+
+/// The answer to a report (decision 519): a status or link kept, the rest refused.
+fn report_answer(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
+    match request {
+        CtxRequest::StatusSet {
+            phase,
+            message,
+            progress,
+        } => reported(info, |reports| {
+            reports.status(&phase, message.as_deref(), progress)
+        }),
+        CtxRequest::LinkSet { label, url } => reported(info, |reports| reports.link(&label, &url)),
+        // An extension's only (decision 519): a command task declares no metrics, its output
+        // is its result file's or its stdout's, and it isn't asked why it stops.
+        CtxRequest::MetricAdd { .. } => CtxAnswer::ReportRefused {
+            reason: "a metric is an extension's: `task-ctx metric` works only in a shell \
+                     plugin (`schedr extension shell`)"
+                .to_owned(),
+        },
+        CtxRequest::StopReasonGet => CtxAnswer::Error {
+            reason: "`task-ctx stop-reason` works only in a shell plugin (`schedr extension \
+                     shell`)"
+                .to_owned(),
+        },
+        CtxRequest::OutputSet { .. } => CtxAnswer::ReportRefused {
+            reason: "`task-ctx extension output set` works only in a shell plugin (`schedr \
+                     extension shell`)"
+                .to_owned(),
+        },
+        _ => CtxAnswer::Error {
+            reason: "not a report".to_owned(),
+        },
+    }
+}
+
+/// A status or link kept through the attempt's reports, or why not.
+fn reported(
+    info: &CtxInfo,
+    keep: impl FnOnce(&crate::reports::AttemptReports) -> Result<(), crate::reports::Refused>,
+) -> CtxAnswer {
+    match info.reports.as_deref() {
+        Some(reports) => match keep(reports) {
+            Ok(()) => CtxAnswer::Reported,
+            Err(refused) => CtxAnswer::ReportRefused {
+                reason: refused.to_string(),
+            },
+        },
+        None => CtxAnswer::ReportRefused {
+            reason: "this task's status and links aren't kept".to_owned(),
         },
     }
 }
 
 /// An API answer, or a 502 when it is over what the context's connection takes (Codex's
 /// review of M4.11h): the connection would break instead.
-fn api_answer(status: u16, body: serde_json::Value, note: Option<String>) -> CtxAnswer {
+#[must_use]
+pub fn api_answer(status: u16, body: serde_json::Value, note: Option<String>) -> CtxAnswer {
     let size = serde_json::to_vec(&body).map_or(usize::MAX, |bytes| bytes.len());
     let limit = usize::try_from(MAX_CTX_MESSAGE_SIZE).unwrap_or(usize::MAX);
     // Room for the answer's own fields.

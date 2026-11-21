@@ -553,7 +553,8 @@ scope = '''
 done_when = '''
 an example shell plugin (in `examples/extensions/`) run end to end in `make standalone`: payload, output, a secret, a handle and its cleanup, status, a link and a metric, a stop; the same `task-ctx` commands working in a command task; the guide's Extensions page
 '''
-status = "planned"
+status = "done"
+done = 2026-11-22
 
 [[steps]]
 id = "M5.2i10"

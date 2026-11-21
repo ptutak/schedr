@@ -1,12 +1,11 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-21
+updated = 2026-11-22
 
 in_progress = [
-    "M5.2i, M5.2i2, M5.2i5 done locally (M5.2i5 squashed into one commit, reviewed twice by Codex, all findings fixed; DN18-DN21, D515, D516 recorded; M5.2i9, M5.2i10 planned). Not pushed: waits for the user's acceptance.",
-    "Closing M5.2i5, uncommitted: the D493 fix (four constants made hidden limits), the extension charts fitting their cells (no scroll; drawn at the cell's shape; every bar slot coloured), a DN on D466 (20 series colours) still to write; then each affected record's whole summary read before `checked` is set, make check, folded into the M5.2i5 commit.",
-    "Next: M5.2i6, M5.2i10 (chart functions, D516), M5.2i7, M5.2i8, M5.2i4; each reviewed by agy (Codex the fallback).",
+    "The user asleep (2026-11-21, ~23:30 CET): M5.2 finished alone, in order M5.2i10, i7, i8, i9, i11, i4, then M5.2j (paging), then M5.2k (all open bugs but B38, B39); answers given ahead in memory (m5-2-night-pre-accepted); each step reviewed by agy, make check, pushed. Every choice made alone recorded \"Claude's, to confirm\" and shown to the user in the morning as an options table.",
+    "M5.2i6 done (shell plugins, D519): agy's review, 12 findings, all fixed.",
 ]
 
 waiting = []

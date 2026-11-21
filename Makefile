@@ -242,7 +242,8 @@ PRELOAD ?= ["sqlite3", "asyncio", "json", "shutil", "tempfile", "random"]
 # examples/test_docs.py gives them.
 STANDALONE_CONFIG := $(abspath examples/standalone.toml)
 STANDALONE_SECRETS := "etl/db password=s3cret-db-password" "etl/api token=s3cret-api-token" \
-	"tenants/acme api_key=s3cret-acme-key" "greenhouse/devices token=s3cret-device-token"
+	"tenants/acme api_key=s3cret-acme-key" "greenhouse/devices token=s3cret-device-token" \
+	"backup/target token=s3cret-backup-token"
 # `prepare DIR`, a shell function for a standalone whose SQLite database is DIR/schedr.db: a
 # secret key made once in DIR/secret.key (`SCHEDR_SECRET_KEY`), and STANDALONE_SECRETS set
 # where missing (listed, never decrypted: one written under another key is kept). The database is migrated first, new or not: one left from an older version
@@ -265,11 +266,17 @@ STANDALONE_PREPARE = prepare() { \
 # The dummy extension (examples/extensions/dummy, decision 510) found by discovery: its folder
 # first on the workers' PATH (`uv run` puts the environment's python3 before it).
 # And the Rust example plugin (crates/schedr-extension/examples/hello-plugin.rs), configured by
-# path: two plugins in two languages, found two ways.
+# path: two plugins in two languages, found two ways. And a shell script's (M5.2i6,
+# examples/extensions/backup/backup.sh), run by `schedr extension shell`, its metrics and panel
+# declared in config.
 HELLO_PLUGIN = $(abspath target/debug/examples/hello-plugin)
 EXT_ENV = SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$$PATH" \
 	SCHEDR_CONFIG__EXTENSIONS__HELLO__COMMAND='["$(HELLO_PLUGIN)"]' \
-	SCHEDR_CONFIG__EXTENSIONS__HELLO__VERSIONS='["1.0"]'
+	SCHEDR_CONFIG__EXTENSIONS__HELLO__VERSIONS='["1.0"]' \
+	SCHEDR_CONFIG__EXTENSIONS__BACKUP__COMMAND='["$(abspath target/debug/schedr)", "extension", "shell", "--", "$(abspath examples/extensions/backup/backup.sh)"]' \
+	SCHEDR_CONFIG__EXTENSIONS__BACKUP__VERSIONS='["1.0"]' \
+	SCHEDR_CONFIG__EXTENSIONS__BACKUP__METRICS='[{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]' \
+	SCHEDR_CONFIG__EXTENSIONS__BACKUP__PANELS='[{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]'
 
 
 standalone: SHELL := /bin/bash

@@ -693,6 +693,9 @@ pub async fn run_command(
         what: spec.program.display().to_string(),
         source,
     };
+    // A status held past the rate is sent once it ends, as a plugin's is (agy's review of M5.2i6:
+    // a command task's last one was lost).
+    let reports = ctx.as_ref().and_then(|info| info.reports.clone());
     let (mut process, _serving) = match ctx {
         Some(info) => {
             let (ours, theirs) = crate::ctx::channel().map_err(start)?;
@@ -722,6 +725,9 @@ pub async fn run_command(
         .finish(spec.output_drain)
         .await
         .map_err(LaunchError::Supervise)?;
+    if let Some(reports) = &reports {
+        reports.flush();
+    }
     Ok(Ran {
         supervised,
         runner_result: None,

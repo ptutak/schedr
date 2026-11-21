@@ -24,6 +24,7 @@ clap.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
 schedr-agent.workspace = true
+schedr-extension.workspace = true
 schedr-api.workspace = true
 schedr-client.workspace = true
 schedr-ui.workspace = true

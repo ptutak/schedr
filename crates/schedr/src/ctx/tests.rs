@@ -37,6 +37,7 @@ fn info(version: &str) -> CtxInfo {
         resource: None,
         api: None,
         max_connections: schedr_agent::ctx::MAX_CONNECTIONS,
+        reports: None,
     }
 }
 
@@ -688,4 +689,35 @@ fn a_log_line_is_structured_with_typed_fields_and_refuses_what_it_cant_be() {
             .unwrap_err()
             .contains("name=value")
     );
+}
+
+#[test]
+fn a_report_takes_negative_numbers_and_refuses_what_isnt_finite() {
+    use clap::Parser as _;
+    // agy's review of M5.2i6: `-5.5` was read as a flag, `NaN` sent as null.
+    let parsed = crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "metric", "temp", "-5.5"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    let parsed =
+        crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "extension", "output", "set", "-1"]);
+    assert!(parsed.is_ok(), "{parsed:?}");
+    let env = BTreeMap::new();
+    for value in ["NaN", "inf", "-inf", "x"] {
+        let command = TaskCtxCommand::Metric {
+            name: "temp".to_owned(),
+            value: value.to_owned(),
+            labels: Vec::new(),
+        };
+        let got = run_task_ctx_report(&command, &env, "1.0", &mut Vec::new());
+        assert_eq!(got, Err(format!("the value `{value}` isn't a number")));
+    }
+}
+
+#[test]
+fn a_request_over_the_channels_limit_is_refused_before_it_is_sent() {
+    // agy's review of M5.2i6: the agent closed the connection unanswered.
+    let value = serde_json::json!("x".repeat(MAX_CTX_MESSAGE_SIZE as usize));
+    let mut sent = Vec::new();
+    let got = write_message(&mut sent, &CtxRequest::OutputSet { value });
+    assert!(got.is_err_and(|e| e.contains("over the task context's limit")));
+    assert_eq!(sent, Vec::<u8>::new());
 }

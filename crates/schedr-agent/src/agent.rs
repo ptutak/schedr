@@ -941,12 +941,14 @@ impl ProcessExecutor {
         spec: &AttemptSpec,
         (secrets, handles): (&Arc<AttemptSecrets>, &Arc<AttemptHandles>),
         resource: Option<&Arc<AttemptResource>>,
+        reports: &Arc<crate::reports::AttemptReports>,
     ) -> CtxInfo {
         let mut ctx = CtxInfo::of(&spec.run, AGENT_VERSION);
         ctx.max_connections = self.setup.timeouts.task_connections_open;
         (ctx.secrets, ctx.handles) = (Some(Arc::clone(secrets)), Some(Arc::clone(handles)));
         ctx.resource = resource.cloned();
         ctx.api.clone_from(&spec.api);
+        ctx.reports = Some(Arc::clone(reports));
         ctx
     }
 
@@ -1035,7 +1037,7 @@ impl ProcessExecutor {
                 run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
             }
             Plan::Command(process) => {
-                let ctx = self.command_ctx(spec, (secrets, handles), resource.as_ref());
+                let ctx = self.command_ctx(spec, (secrets, handles), resource.as_ref(), reports);
                 run_command(&process, Some(ctx), limits, stop, |pid| spawned(pid, false)).await
             }
         };

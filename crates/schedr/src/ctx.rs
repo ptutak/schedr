@@ -119,6 +119,11 @@ pub fn run_task_ctx(
         TaskCtxCommand::Events { command } => {
             run_task_ctx_events(command, env, version, (out, err))
         }
+        command @ (TaskCtxCommand::Status { .. }
+        | TaskCtxCommand::Link { .. }
+        | TaskCtxCommand::Metric { .. }
+        | TaskCtxCommand::StopReason { .. }
+        | TaskCtxCommand::Extension { .. }) => run_task_ctx_report(command, env, version, out),
         TaskCtxCommand::Log {
             message,
             level,
@@ -146,6 +151,122 @@ pub fn run_task_ctx(
             };
             api_call(env, version, &request, err).map(|_| ())
         }
+    }
+}
+
+/// Runs `schedr task-ctx status`, `link`, `metric`, `stop-reason` and `extension output set`
+/// (decision 519).
+///
+/// # Errors
+///
+/// Outside a task, on a value that doesn't read, or when the agent refuses it (its reason).
+pub fn run_task_ctx_report(
+    command: &TaskCtxCommand,
+    env: &BTreeMap<String, String>,
+    version: &str,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    match command {
+        TaskCtxCommand::Status {
+            phase,
+            message,
+            progress,
+        } => {
+            let progress = progress
+                .as_deref()
+                .map(|text| {
+                    text.parse::<f64>()
+                        .ok()
+                        .filter(|p| p.is_finite())
+                        .ok_or_else(|| format!("`--progress {text}` isn't a number"))
+                })
+                .transpose()?;
+            let request = CtxRequest::StatusSet {
+                phase: phase.clone(),
+                message: message.clone(),
+                progress,
+            };
+            report(env, version, &request)
+        }
+        TaskCtxCommand::Link { label, url } => {
+            let request = CtxRequest::LinkSet {
+                label: label.clone(),
+                url: url.clone(),
+            };
+            report(env, version, &request)
+        }
+        TaskCtxCommand::Metric {
+            name,
+            value,
+            labels,
+        } => {
+            let value = value
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| format!("the value `{value}` isn't a number"))?;
+            let labels = labels
+                .iter()
+                .map(|label| {
+                    label
+                        .split_once('=')
+                        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                        .ok_or_else(|| format!("`--label {label}` isn't `name=value`"))
+                })
+                .collect::<Result<_, _>>()?;
+            let request = CtxRequest::MetricAdd {
+                name: name.clone(),
+                value,
+                labels,
+            };
+            report(env, version, &request)
+        }
+        TaskCtxCommand::StopReason { field } => {
+            let mut stream = connect(env, Ctx::Task)?;
+            let value = match call(&mut stream, version, &CtxRequest::StopReasonGet)? {
+                CtxAnswer::StopReason {
+                    reason,
+                    seconds_left,
+                } => serde_json::json!({"reason": reason, "seconds_left": seconds_left}),
+                CtxAnswer::Error { reason } | CtxAnswer::Refused { reason } => return Err(reason),
+                _ => return Err("the agent answered with something else".to_owned()),
+            };
+            let text = printed(&value, field.field.as_deref())?;
+            out.write_all(text.as_bytes())
+                .map_err(|e| format!("can't write output: {e}"))
+        }
+        TaskCtxCommand::Extension {
+            command:
+                crate::cli::ExtensionCtxCommand::Output {
+                    command: crate::cli::OutputCommand::Set { value },
+                },
+        } => {
+            let text = match value.strip_prefix('@') {
+                Some(path) => std::fs::read_to_string(path)
+                    .map_err(|e| format!("can't read `{path}`: {e}"))?,
+                None => value.clone(),
+            };
+            let value: Value =
+                serde_json::from_str(&text).map_err(|e| format!("the output isn't JSON: {e}"))?;
+            report(env, version, &CtxRequest::OutputSet { value })
+        }
+        _ => Err("not a report".to_owned()),
+    }
+}
+
+/// A status, link, metric point or output sent: kept, or why not.
+fn report(
+    env: &BTreeMap<String, String>,
+    version: &str,
+    request: &CtxRequest,
+) -> Result<(), String> {
+    let mut stream = connect(env, Ctx::Task)?;
+    match call(&mut stream, version, request)? {
+        CtxAnswer::Reported => Ok(()),
+        CtxAnswer::ReportRefused { reason }
+        | CtxAnswer::Error { reason }
+        | CtxAnswer::Refused { reason } => Err(reason),
+        _ => Err("the agent answered with something else than the report".to_owned()),
     }
 }
 
@@ -584,6 +705,9 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         | CtxAnswer::ResourceRefused { .. } => {
             Err("the agent answered with a resource to another request".to_owned())
         }
+        CtxAnswer::Reported | CtxAnswer::ReportRefused { .. } | CtxAnswer::StopReason { .. } => {
+            Err("the agent answered with a report to another request".to_owned())
+        }
         // Never printed in a message: it may hold a value.
         CtxAnswer::Secret { .. }
         | CtxAnswer::SecretFailed { .. }
@@ -752,6 +876,14 @@ fn lost(e: &io::Error) -> String {
 
 fn write_message(stream: &mut impl Write, request: &CtxRequest) -> Result<(), String> {
     let body = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    // Over the channel's limit the agent would close it unanswered (agy's review of M5.2i6: an
+    // output near 1 MiB): said here instead.
+    if body.len() > MAX_CTX_MESSAGE_SIZE as usize {
+        return Err(format!(
+            "the request takes {} bytes, over the task context's limit of {MAX_CTX_MESSAGE_SIZE}",
+            body.len()
+        ));
+    }
     let size = u32::try_from(body.len()).map_err(|e| e.to_string())?;
     stream
         .write_all(&size.to_be_bytes())

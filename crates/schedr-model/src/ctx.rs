@@ -33,7 +33,7 @@ pub const CTX_PROTOCOL: u32 = 1;
 pub const MAX_CTX_MESSAGE_SIZE: u32 = 1024 * 1024;
 
 /// A request from a process of the task to the agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CtxRequest {
     /// The first message: the protocol the caller speaks ([`CTX_PROTOCOL`]), which must be
@@ -95,10 +95,49 @@ pub enum CtxRequest {
     },
     /// The value of the resource a command cleanup cleans up (`schedr task-ctx resource get`).
     ResourceGet,
+    /// Where the task is now (`schedr task-ctx status`, decision 519): kept with the attempt,
+    /// shown on the task, as a plugin's (decision 513).
+    StatusSet {
+        /// Its phase.
+        phase: String,
+        /// A line about it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// From 0 to 1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress: Option<f64>,
+    },
+    /// A link shown on the task (`schedr task-ctx link`, decision 519).
+    LinkSet {
+        /// Its label.
+        label: String,
+        /// Its address, `http` or `https`.
+        url: String,
+    },
+    /// A point of an extension's declared metric (`schedr task-ctx metric`): only within an
+    /// extension's shell plugin (decision 519).
+    MetricAdd {
+        /// The metric.
+        name: String,
+        /// Its value.
+        value: f64,
+        /// Its labels.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        labels: std::collections::BTreeMap<String, String>,
+    },
+    /// Why the task is being stopped (`schedr task-ctx stop-reason`): only within an
+    /// extension's shell plugin (decision 519).
+    StopReasonGet,
+    /// The task's output (`schedr task-ctx extension output set`): only within an extension's
+    /// shell plugin (M5.2i6).
+    OutputSet {
+        /// The output, JSON.
+        value: serde_json::Value,
+    },
 }
 
 /// The agent's answer to a [`CtxRequest`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CtxAnswer {
     /// The handshake succeeded.
@@ -179,6 +218,22 @@ pub enum CtxAnswer {
         kind: String,
         /// What went wrong, naming the connection (never a value).
         reason: String,
+    },
+    /// The status, link, metric point or output is kept.
+    Reported,
+    /// Why the status, link, metric point or output isn't kept; the connection stays open.
+    ReportRefused {
+        /// What went wrong.
+        reason: String,
+    },
+    /// Why the task is being stopped: `cancel`, `timeout`, `drain` or `master_lost`; none
+    /// while it isn't.
+    StopReason {
+        /// The reason.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        /// The seconds left before `SIGKILL`.
+        seconds_left: f64,
     },
     /// A request the agent can't answer (one it doesn't know, out of order); the connection
     /// is closed after it.

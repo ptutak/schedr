@@ -1,0 +1,12 @@
+title = "A service's memory 256 MiB by default"
+date = 2026-11-21
+by = "user"
+on = "D518"
+kind = "corrects"
+summary = '''
+`service_memory` defaults to 256 MiB, not 512: a service runs on every worker with its extension
+configured with one, all the time, its memory inside the worker's budget (a side agent's note:
+two extensions with services on 10 workers could hold 10 GiB). An operator raises it where a
+service needs more.
+'''
+history = "JOURNAL.md#DN25"

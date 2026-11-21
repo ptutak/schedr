@@ -15,4 +15,4 @@ history = "archive/PROJECT.md#D143"
 step = "M4.5b"
 also = ["protocol", "task-processes"]
 code = ["crates/schedr-fd/src/lib.rs", "crates/schedr-model/src/ctx.rs", "crates/schedr-agent/src/ctx.rs::serve", "crates/schedr-agent/src/ctx.rs::MAX_CONNECTIONS"]
-checked = 2026-11-15
+checked = 2026-11-22

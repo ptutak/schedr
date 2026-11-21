@@ -4245,3 +4245,144 @@ with Dag("oversized"):
     let logs = logs(standalone.dir.path());
     assert!(logs.contains("cut off:"), "{logs}");
 }
+
+/// M5.2i6 (decision 519): `schedr extension shell` runs a script as an extension's plugin: the
+/// payload on its stdin, a declared secret, a handle and its cleanup, statuses, a link and a
+/// metric point through `schedr task-ctx`, its output set; a failing exit fails the attempt, and
+/// a cancel reaches the script, which asks why. A command task reports a status and a link too,
+/// and is refused a metric.
+#[test]
+fn a_shell_script_is_an_extensions_plugin_through_task_ctx() {
+    const DAG: &str = r#"
+from schedr import CommandOperator, Dag, ExtensionTask
+
+for dag_id, payload in [("backups", {"source": "/data"}), ("slow_backups", {"slow": True}),
+                        ("failing_backups", {"fail": True})]:
+    with Dag(dag_id):
+        ExtensionTask("nightly", name="backup", version="1.0", payload=payload,
+                      secrets=["backup/target"], cleanup=True)
+
+with Dag("reporting_command"):
+    CommandOperator("report", ["sh", "-c", "{bin} task-ctx status working --progress 0.5"
+                               " && {bin} task-ctx link Docs https://docs.example/x"
+                               " && ! {bin} task-ctx metric x 1 2>&1"])
+"#;
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/backup/backup.sh")
+        .canonicalize()
+        .unwrap();
+    let config = format!(
+        "\n[extensions.backup]\ncommand = [\"{BINARY}\", \"extension\", \"shell\", \"--\", \
+         \"{}\"]\nversions = [\"1.0\"]\nmetrics = [{{name = \"files_copied\", kind = \
+         \"counter\", help = \"Files copied\", labels = [{{name = \"kind\"}}]}}]\n",
+        script.display()
+    );
+    let dag = DAG.replace("{bin}", BINARY);
+    let standalone =
+        Standalone::start_configured(&[("backups.py", dag.as_str())], None, &[], &config, &[]);
+    let (code, out, err) =
+        standalone.secrets(None, &["set", "backup/target", "token=s3cret-token-99"]);
+    assert_eq!(code, 0, "{out}{err}");
+    standalone.wait("the DAGs to be found", || standalone.dag_ids().len() == 4);
+
+    let run = standalone.trigger("backups");
+    standalone.wait_for_state(&run, "success");
+    let output = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/nightly/output"))
+        .unwrap();
+    assert_eq!(
+        output["value"],
+        serde_json::json!({"snapshot": format!("snap-{run}"), "files": 3}),
+        "{output}"
+    );
+    let attempts = standalone
+        .get(&format!("/api/v1/runs/{run}/tasks/nightly/attempts"))
+        .unwrap();
+    let attempt = &attempts["attempts"][0];
+    let phases: Vec<&str> = attempt["statuses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases, ["preparing", "copying", "done"], "{attempt}");
+    assert_eq!(
+        attempt["links"][0]["url"],
+        format!("https://backups.example/snapshots/snap-{run}"),
+        "{attempt}"
+    );
+    standalone.wait("the cleanup to remove the snapshot", || {
+        logs(standalone.dir.path()).contains(&format!("removing snapshot snap-{run}"))
+    });
+    let logs_now = logs(standalone.dir.path());
+    assert!(
+        logs_now.contains(r#"backing up {"source":"/data"}"#),
+        "the payload on stdin: {logs_now}"
+    );
+    assert!(
+        logs_now.contains("the target's token has 15 characters"),
+        "{logs_now}"
+    );
+    assert!(!logs_now.contains("s3cret-token-99"), "{logs_now}");
+    let log = standalone.log();
+    let ops = log
+        .split("ops on http://")
+        .nth(1)
+        .and_then(|rest| rest.split([',', ' ', '\n']).next())
+        .unwrap()
+        .replacen("0.0.0.0:", "127.0.0.1:", 1);
+    let served = Command::new("curl")
+        .args(["-s", &format!("http://{ops}/metrics")])
+        .output()
+        .unwrap();
+    let served = String::from_utf8_lossy(&served.stdout);
+    assert!(
+        served.contains(
+            "schedr_extension_backup_files_copied_total{kind=\"full\",extension_version=\"1.0\"} 3"
+        ),
+        "{served}"
+    );
+
+    a_shell_plugin_fails_and_stops_and_a_command_task_reports(&standalone);
+}
+
+/// A failing script fails the attempt; a cancel reaches it, and it asks why; a command task
+/// reports a status and a link, and is refused a metric.
+fn a_shell_plugin_fails_and_stops_and_a_command_task_reports(standalone: &Standalone) {
+    let failing = standalone.trigger("failing_backups");
+    standalone.wait_for_state(&failing, "failed");
+    let attempts = standalone
+        .get(&format!("/api/v1/runs/{failing}/tasks/nightly/attempts"))
+        .unwrap();
+    assert_eq!(
+        attempts["attempts"][0]["error_summary"]["message"], "the script exited with 3",
+        "{attempts}"
+    );
+
+    let slow = standalone.trigger("slow_backups");
+    standalone.wait("the slow backup to copy", || {
+        standalone
+            .get(&format!("/api/v1/runs/{slow}/tasks/nightly/attempts"))
+            .is_some_and(|a| a.to_string().contains("\"copying\""))
+    });
+    let (code, _, err) = standalone.cli(&["runs", "cancel", &slow]);
+    assert_eq!(code, 0, "{err}");
+    standalone.wait_for_state(&slow, "cancelled");
+    standalone.wait("the script to say why it stopped", || {
+        logs(standalone.dir.path()).contains("stopped: cancel")
+    });
+
+    let command = standalone.trigger("reporting_command");
+    standalone.wait_for_state(&command, "success");
+    let attempts = standalone
+        .get(&format!("/api/v1/runs/{command}/tasks/report/attempts"))
+        .unwrap();
+    let attempt = &attempts["attempts"][0];
+    assert_eq!(attempt["statuses"][0]["phase"], "working", "{attempt}");
+    assert_eq!(attempt["statuses"][0]["progress"], 0.5, "{attempt}");
+    assert_eq!(attempt["links"][0]["label"], "Docs", "{attempt}");
+    assert!(
+        logs(standalone.dir.path()).contains("a metric is an extension's"),
+        "the refusal printed"
+    );
+}

@@ -24,6 +24,7 @@ fn info() -> CtxInfo {
         resource: None,
         api: None,
         max_connections: MAX_CONNECTIONS,
+        reports: None,
     }
 }
 
@@ -460,4 +461,65 @@ fn an_api_answer_too_large_for_the_context_is_a_bad_gateway() {
             note: Some("masked".to_owned()),
         }
     );
+}
+
+#[tokio::test]
+async fn a_command_task_reports_a_status_and_a_link_and_is_refused_the_rest() {
+    // Decision 519: a command task's status and links, kept as a plugin's; a metric, the stop
+    // reason and an output set are a shell plugin's only.
+    let mask = Arc::new(crate::mask::MaskSet::new(4));
+    mask.add("token", "s3cret-value");
+    let reports = Arc::new(crate::reports::AttemptReports::new(mask));
+    let info = CtxInfo {
+        reports: Some(Arc::clone(&reports)),
+        ..info()
+    };
+    let got = conversation_with(
+        &[
+            json!({"type": "hello", "protocol": 1, "schedr_version": "1.2.3"}),
+            json!({"type": "status_set", "phase": "copying", "message": "s3cret-value",
+                   "progress": 0.5}),
+            json!({"type": "link_set", "label": "Docs", "url": "https://docs.example/x"}),
+            json!({"type": "link_set", "label": "Bad", "url": "ftp://x"}),
+            json!({"type": "metric_add", "name": "x", "value": 1.0}),
+            json!({"type": "output_set", "value": 1}),
+            json!({"type": "stop_reason_get"}),
+        ],
+        &info,
+    )
+    .await;
+    let kinds: Vec<&str> = got.iter().map(|a| a["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "welcome",
+            "reported",
+            "reported",
+            "report_refused",
+            "report_refused",
+            "report_refused",
+            "error"
+        ]
+    );
+    let statuses = reports.statuses();
+    assert_eq!(
+        (statuses[0].phase.as_str(), statuses[0].progress),
+        ("copying", Some(0.5))
+    );
+    assert!(
+        !statuses[0]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("s3cret"),
+        "masked"
+    );
+    assert_eq!(reports.links()[0].label, "Docs");
+    // Without reports, said so.
+    let got = conversation(&[
+        json!({"type": "hello", "protocol": 1, "schedr_version": "1.2.3"}),
+        json!({"type": "status_set", "phase": "x"}),
+    ])
+    .await;
+    assert_eq!(got[1]["type"], "report_refused");
 }

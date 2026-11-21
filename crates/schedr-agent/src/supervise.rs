@@ -206,14 +206,15 @@ pub async fn supervise<P: Process>(
         process.signal(Signal::Kill)?;
         return Ok(ended(process.wait().await?, Some(reason), true));
     }
-    process.signal(Signal::Term)?;
     let grace = if reason == StopReason::Interrupted {
         limits.interrupt_grace
     } else {
         limits.grace
     };
     let mut kill_at = tokio::time::Instant::now() + grace;
+    // Noted before the signal: a plugin asking why at once is told (agy's review of M5.2i6).
     stops.note(reason, kill_at);
+    process.signal(Signal::Term)?;
     // Until it ends or the grace is over, a later reason can only hurry the SIGKILL: a
     // drain's interrupt to at most `interrupt_grace` from now (B9), the memory watchdog to
     // now. The status stays the first reason's.

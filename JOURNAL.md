@@ -2887,3 +2887,20 @@ Before building M5.2i6, four points: command tasks and the new `task-ctx` comman
 user's "I don't think we have to give every \"native\" capability to an extension", and a
 command task having no declarations or page: `status` and `link`, not `metric`); declarations in
 config; configured only; `schedr task-ctx stop-reason`. The user: "all recommended".
+
+### <a id="DN25"></a>2026-11-21: A service's memory 256 MiB by default (decision note 25; corrects D518)
+
+A side agent's note: a service holds its memory on every worker all the time, up to 512 MiB by
+default, inside the worker's budget. The user: "yes, maybe a lower default... 256?"
+
+### 2026-11-22: M5.2i6 done, shell plugins (decision 519)
+
+`schedr extension shell -- <script>` speaks the plugin protocol and runs the script, its
+context channel served by passing each `task-ctx` request on to the worker; the context protocol
+gains status, link, metric, stop reason and output (additions within protocol 1); command tasks
+report a status and links. agy's review: 12 findings, all real and fixed. Among them: a call
+queued behind one in flight still reached the worker after the script ended; a payload over
+64 KiB, written before the wait, could hold the plugin for as long as a process the script left
+held stdin; a command task's last held status was never sent; the stop's reason was noted only
+after the signal. Not tested directly: the early `SIGTERM` passed on and the reason noted first
+(timing).
