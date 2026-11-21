@@ -1,0 +1,21 @@
+title = "Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED"
+date = 2026-11-21
+by = "user"
+status = "active"
+topic = "notifications"
+also = ["task-processes", "protocol"]
+section = "Notifications"
+summary = '''
+An extension declares its own notification events in its plugin's `hello`, as it declares its
+metrics (a name and a help, config winning), and sends one with `notify` (an event, a text, its
+data; no answer) while it runs; a DAG subscribes to them by `<extension>.<event>`, or to all of an
+extension's with `<extension>.*`, in the channels' events of its `notify=`, and the body is filled
+as the run events' are (the DAG, the run, the task, the extension and its version). An event not
+declared is dropped with one warning. Helpers in the Python helper and the Rust crate. Beside it,
+three events for every DAG: `RUN_STARTED` (a run started: by its schedule, a trigger or a
+person), `TRIGGER_FIRED` (a trigger fired: its event and the run it started) and `EVENT_POSTED`
+(an `EventNamed` event posted: its name, key and who posted it). Not chosen: only helpers for
+today's plain `MESSAGE` to a named channel; a later step. A task's own `notify=` not chosen now.
+'''
+history = "JOURNAL.md#D515"
+step = "M5.2i8"

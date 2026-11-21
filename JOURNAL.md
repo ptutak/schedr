@@ -2740,3 +2740,13 @@ The user: "user should be able to choose colors from a list of let's say 20, whi
 which look good on both light and dark mode". Read as: an extension's panel, or its series by
 a label's value, names one of 20 colours (`blue`, `teal`, ...), each with a light and a dark
 variant schedr picks; any other colour is refused; no other style.
+
+### 2026-11-21: notifications for extensions, and three new events (decision 515)
+
+The user asked what is notified today: run failures, successes, cancels and recoveries, a task
+failing or retrying (through the DAG's `notify=` only), a trigger failing; nothing when a run
+starts, a trigger fires or an event is posted, and no `notify=` on a task. Then: "we have to give
+notifications to extensions as well, probably custom ones". Asked: declared events (as metrics
+are) chosen, not helpers only for today's plain message, nor a later step; and of the gaps,
+`RUN_STARTED`, `TRIGGER_FIRED` and `EVENT_POSTED`, not a task's own `notify=`. Planned as
+M5.2i8, before M5.2i4 (the specification stays last).
