@@ -33,6 +33,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN19 | 2026-11-21 | user | adds to D513 | An events panel shows the worker's events for the extension, its attempts' phases, and its plugin's declared events |
+| DN18 | 2026-11-21 | user | corrects D515 | One RUN_STARTED for every run, with its reason; EVENT_POSTED to the DAGs listening |
 | DN17 | 2026-11-20 | user | adds to D510 | The Rust plugin crate stands on its own: no internal crate published with it |
 | DN16 | 2026-11-20 | user | corrects D512 | Decision 512's exception narrowed: only wait steps share a watcher host |
 | DN15 | 2026-11-20 | user | corrects D510 | Extensions run only as their own process: no watcher-slot form |

@@ -1,0 +1,12 @@
+title = "An events panel shows the worker's events for the extension, its attempts' phases, and its plugin's declared events"
+date = 2026-11-21
+by = "user"
+on = "D513"
+kind = "adds"
+summary = '''
+The worker reports what happened to an extension (discovered, skipped and why, refused) to the
+master, which keeps the recent ones per extension; an events panel lists them with its attempts'
+latest phases, newest first (M5.2i5). The plugin's declared notification events (decision 515)
+are stored and listed there too, beside being notified (M5.2i8).
+'''
+history = "JOURNAL.md#DN19"

@@ -1,0 +1,16 @@
+title = "One RUN_STARTED for every run, with its reason; EVENT_POSTED to the DAGs listening"
+date = 2026-11-21
+by = "user"
+on = "D515"
+kind = "corrects"
+summary = '''
+No event per cause (TRIGGER_FIRED dropped; SCHEDULE_FIRED, MANUAL_FIRED and CHAIN_FIRED weighed and
+dropped): `RUN_STARTED` for every run, however it started, with a `reason`: `schedule` (a `Cron`
+or an interval; its fire time), `backfill` (each run of one, its range), `trigger` (an event
+trigger, `@trigger` or `EventNamed`; the event), `chain` (another DAG started it; `via`
+`triggered` for a `TriggerDagOperator` or `run_of` for a `RunOf`, and the upstream DAG, run and
+task) or `manual` (a person; who). `EVENT_POSTED` goes to the DAGs listening for that event's
+name (an `EventNamed` trigger or a wait step), saying whether it started a run (a key seen
+before starts none).
+'''
+history = "JOURNAL.md#DN18"

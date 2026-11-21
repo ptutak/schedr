@@ -14,11 +14,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- DN19 (2026-11-21): what an events panel lists (adds to D513)
+- DN18 (2026-11-21): one RUN_STARTED with a reason (corrects D515)
 - D514 (2026-11-20): logs through stdout and stderr, one structured format
 - D513 (2026-11-20): plugins observed and controlled as tasks are
 - DN17 (2026-11-20): the Rust plugin crate stands on its own (adds to D510)
-- DN16 (2026-11-20): decision 512's exception narrowed (corrects D512)
-- DN15 (2026-11-20): extensions only as their own process (corrects D510)
 - M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
 - M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker
 - M5.2h6 (2026-11-20): A worker's `db` secret storage by opt-in, warned; a missing default storage refused (decision 511)

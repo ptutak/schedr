@@ -2751,3 +2751,24 @@ notifications to extensions as well, probably custom ones". Asked: declared even
 are) chosen, not helpers only for today's plain message, nor a later step; and of the gaps,
 `RUN_STARTED`, `TRIGGER_FIRED` and `EVENT_POSTED`, not a task's own `notify=`. Planned as
 M5.2i8, before M5.2i4 (the specification stays last).
+
+### <a id="DN18"></a>2026-11-21: one RUN_STARTED with a reason (decision note 18; corrects D515)
+
+Asked "do we send notifications on events? dag runs? dag triggers?", then the names reviewed. The
+user first added a `DAG_CHAINED`, renamed to `CHAIN_FIRED` beside `SCHEDULE_FIRED` (with
+`schedule` and `backfill`), `MANUAL_FIRED` and `TRIGGER_FIRED` (`@trigger` only, as
+`TRIGGER_FAILING` is), with `RUN_STARTED` dropped, then kept "for every run, no matter how
+triggered"; then: "remove other FIRED types, and just keep RUN_STARTED with a reason type
+(trigger, backfill, schedule, chain)". `manual` added for a person's runs (Claude's, said);
+`EVENT_POSTED` kept (not a FIRED type), sent to the DAGs listening for its name, since a posted
+event belongs to no DAG. Not chosen: an event per cause; one backfill message per backfill.
+Noted, not decided: a late run (an SLA miss) and a skipped fire time send nothing.
+
+### <a id="DN19"></a>2026-11-21: what an events panel lists (decision note 19; adds to D513)
+
+A side agent's note: the events panel built in M5.2i5 piece 6 lists only workers and versions.
+Decisions 513 and 514 said: the extension's own events (discovered, skipped, refused, reported by
+the worker) and its attempts' latest phases. Chosen (A): those now, in M5.2i5, and a plugin's
+declared events (decision 515) listed there too in M5.2i8. Not chosen: declared events as
+notifications only (B); the placeholder until M5.2i8 (C). "let's go with A, but wait for the
+review to start".
