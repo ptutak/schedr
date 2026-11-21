@@ -14,11 +14,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D519 (2026-11-21): shell plugins' details
+- D518 (2026-11-21): an extension's service
 - DN24 (2026-11-21): Every line drawn across up to five empty steps, everywhere (adds to D466)
 - DN23 (2026-11-21): Numbered pages without a total or a last page: nothing counted (corrects D517)
 - DN22 (2026-11-21): Twenty series colours: the first eight checked for colour blindness, the twelve of decision 513 not (adds to D466)
-- D517 (2026-11-21): Runs and DAGs in numbered pages
-- D516 (2026-11-21): chart functions
 - M5.2i5 (2026-11-21): Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page
 - M5.2i2 (2026-11-20): A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real
 - M5.2i (2026-11-20): A hole for closed-source extensions: an opaque task kind run by a closed worker

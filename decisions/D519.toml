@@ -1,0 +1,18 @@
+title = "Shell plugins: declarations in config, configured only; status and link for command tasks"
+date = 2026-11-21
+by = "user"
+status = "active"
+topic = "task-processes"
+section = "Extensions"
+summary = '''
+For shell plugins (`schedr extension shell -- <script>`): their metrics and panels declared in
+`[extensions.<name>] metrics` and `panels` (a script sends no hello); configured extensions
+only, no discovery; `schedr task-ctx stop-reason` prints the reason and the seconds left after
+SIGTERM. Command tasks get `schedr task-ctx status` and `link` too (shown on the task panel);
+`metric` only within an extension, a command task told so (no declarations, no page). Not
+chosen: metrics for command tasks; a `--declarations` file; a discoverable shebang
+(`#!/usr/bin/env -S schedr extension shell --name ...`); a reread environment file.
+'''
+history = "JOURNAL.md#D519"
+step = "M5.2i6"
+code = []

@@ -62,6 +62,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D519 | 2026-11-21 | user | planned (M5.2i6) | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
+| D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
 | D516 | 2026-11-21 | user | planned (M5.2i10) | task-processes | Chart functions: point, combine, group_by and limit |
 | D515 | 2026-11-21 | user | planned (M5.2i8) | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
@@ -1005,6 +1007,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-processes
 
+- D519: Shell plugins: declarations in config, configured only; status and link for command tasks
+- D518: An extension's service: one long-running process per worker beside its plugins
 - D516: Chart functions: point, combine, group_by and limit
 - D513: Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page
 - D510: Extensions: a task kind run by a plugin executable the open worker supervises

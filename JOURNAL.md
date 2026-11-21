@@ -2868,3 +2868,22 @@ kubernetes plugin could excersice everything ... maybe we could make it a little
 Claude offered an async client (A), every panel kind (B), notifications (C) and a shell twin
 (D); the user: "I want A and B, but make it after long-running plugins are added, so that we can
 test/use those". Planned as M5.2i11, after M5.2i9.
+
+### <a id="D518"></a>2026-11-21: an extension's service (decision 518)
+
+M5.2i9's idea settled. Claude asked eight points with a recommendation each; the user: "1
+build, 2 accepted, 3 accepted, 4 explain, 5 accepted, 6 accepted, 7 accepted, 8 accepted". On 4,
+how it is configured and written: a `service` key beside `command`; for Python, functions
+rather than decorators ("For some reason I like functions more"; a plugin is a program with a
+`main` wiring it in one place, a DAG file a description schedr reads), `service` the name
+("service = accepted"). Asked how `channel.service` finds the right one: the worker hands each
+plugin only its own extension's end. Walking a service through its life found two gaps, its
+secrets (`service_secrets`) and a blocking `on_call` (a stall warned of); the user: "all
+recommended".
+
+### <a id="D519"></a>2026-11-21: shell plugins' details (decision 519)
+
+Before building M5.2i6, four points: command tasks and the new `task-ctx` commands (after the
+user's "I don't think we have to give every \"native\" capability to an extension", and a
+command task having no declarations or page: `status` and `link`, not `metric`); declarations in
+config; configured only; `schedr task-ctx stop-reason`. The user: "all recommended".
