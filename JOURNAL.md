@@ -2780,3 +2780,21 @@ EXTENSION_EVENT or sth similar". Decision 515 subscribed by `<extension>.<event>
 the `Notify` names. Chosen (A): "one EXTENSION_EVENT, no narrowing"; the body names the
 extension and event, as `RUN_STARTED` carries its reason. Not chosen (B): narrowing by extension
 or event.
+
+### 2026-11-21: an extension's long-running process, an idea (M5.2i9)
+
+A side agent's note answered a sidecar design (a local service in the worker's pod, thin plugins
+calling it on localhost): its points were readiness, routing, scope per pod, memory outside the
+watchdog, an open port any task could call, recovery through handles. The user: "worker could start
+a separate process alongside it, like it's done for separate long-running async loop. This would
+complete the plugins with long running processes"; then: run "arbitrary extension long running
+process through something similar to CommandOperator, and for Python API we provide a separate
+asyncio.run event loop with Python async API to communicate with the agent. Our watchdog watches
+either option with memory budget and the rest of features that we've already decided for plugins
+is provided"; "the same rules as for our watchers loop. The process might be restarted every time
+it gets an error, we watch the memory and kill it if it goes over budget, we just don't require the
+await within 30 sec"; "We could turn off the extension after it reaches restart limit"; "The restart
+limit resets after some settle-time... say 24h". Written as an idea to discuss (M5.2i9): "let's
+write them". Asked how a plugin and the process talk: C, a connection per attempt, a socket pair
+the worker makes, one end passed to the process; not A, through the agent, nor B, a socket path
+any task of the same user could find. Not M5.2i3's controller (dropped): plugins stay per attempt.

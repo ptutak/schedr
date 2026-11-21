@@ -7,7 +7,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i5, M5.2i6, M5.2i7, M5.2i8, M5.2i4.
+- **Then:** M5.2i5, M5.2i6, M5.2i7, M5.2i8, M5.2i9.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 7; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B270 (low/possible) (`BUGS.md`).

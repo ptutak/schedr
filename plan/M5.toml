@@ -577,6 +577,17 @@ a plugin's declared event reaches a subscribed channel end to end (a webhook on 
 status = "planned"
 
 [[steps]]
+id = "M5.2i9"
+title = "Idea, to discuss: an extension's long-running process, supervised by its worker beside its plugins"
+scope = '''
+(the user, 2026-11-21, after a side agent's note on a local service in the worker's pod and M5.2i3's controller dropped) per-task plugins stay as they are (each attempt its own process, timeout, stop reason, handles and log); beside them a worker may run one long-running process per extension, for what its tasks share (one client, one watch, a rate limiter, a warm session). Two forms: an arbitrary process, started as a `CommandOperator`'s command is and speaking our protocol over its socket; and Python, a separate `asyncio.run` event loop with an async API of ours to the agent. Supervised as the watchers' loop is: restarted after each error, its memory watched under a budget and killed past it, with the rest of a plugin's features (statuses, metrics, events, secrets as declared, logs), Python's through our API, a process's through the socket. Not required: an `await` within 30 s as the watchers' loop is (it only must not break the worker). Past a restart limit the worker turns the extension off (its offers withdrawn, said in its events); the count starts again after a settle time without restarts (24 h, say). Claude's notes, not decided: the worker offers the extension's versions only while its process is ready, so tasks land only where it runs; its memory is the worker's, inside the budget; recovery stays the cleanup handles' (a lost pod's state goes with it); still one per worker, so N workers mean N clients. How they talk (the user, 2026-11-21: option C): a connection per attempt, the worker making a socket pair for each, one end the plugin's (`SCHEDR_SERVICE_FD`), the other passed to the process over its control socket (fd passing) with `attempt_connected {attempt_id, task, version}`; direct (no relay through the agent), private (only that plugin holds that end, where a socket path any task of the same user could find), its life the attempt's (closed when the plugin ends: the process knows the attempt is done); what they say on it the author's, the helpers offering our length-prefixed JSON with a request and answer (Python: `await channel.service.call(...)`, the loop's `async def on_call(attempt, message)`). The control socket stays ours: hello and readiness, attempts connected, stops and their reasons, statuses, metrics, events. Not chosen: through the agent (A: the worker in the data path, 64 MiB a message, no streaming); a socket path (B: not private, tasks running as one user). Open: readiness (a hello from the process, a probe); what its crash does to the attempts using it; its config keys and their defaults (the limit, the settle time).
+'''
+done_when = '''
+discussed with the user; designed, built, or dropped by their word
+'''
+status = "planned"
+
+[[steps]]
 id = "M5.2i4"
 title = "The plugin protocol's specification, and a schema of just its messages"
 scope = '''

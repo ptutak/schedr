@@ -275,6 +275,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i6 | Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx` | planned |  |
 | M5.2i7 | `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard | planned |  |
 | M5.2i8 | Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED | planned | D515 |
+| M5.2i9 | Idea, to discuss: an extension's long-running process, supervised by its worker beside its plugins | planned |  |
 | M5.2i4 | The plugin protocol's specification, and a schema of just its messages | planned |  |
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
 | M5.2j | The bugs found and left before 1.2.0 fixed | planned |  |
