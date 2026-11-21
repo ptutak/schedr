@@ -27,7 +27,11 @@ one of our chart kinds: line, rate, stacked, histogram, quantiles, a number, a t
 and its place in a layout of numbered rows of a fixed height (from 1 at the top), each one cell
 (`full`), two (`left`, `right`) or three (`left`, `center`, `right`); an `events` panel, no
 metric, shows the extension's own events and its attempts' latest phases (no log cells: a log is
-its worker's file); nothing of style; without panels, one per metric, two to a row; below them, its workers, versions and attempts. Metrics
+its worker's file); nothing of style but colour: a panel, or each of its series by a label's value, may name one
+of 20 colours schedr provides, each made for both the light and the dark mode (no other
+colour); every panel's place declared, and a metric no panel shows gets a `full`
+row of its own below them, one under another, as on the Metrics page; an events panel only
+where an author declares one; below them, its workers, versions and attempts. Metrics
 both ways: the worker's Prometheus `/metrics`, and stored per minute and rolled up per kind
 (a counter's growth summed; a gauge's average and peak; a histogram's bucket counts, sum and
 count summed over workers). The page and its API: the header's Extensions → `/extensions` and

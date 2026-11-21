@@ -2729,3 +2729,14 @@ replaces the width and titled sections. Asked "could we show logs in cells?": a 
 worker's file, read through its log server, so a cell could only read the latest attempts';
 the user chose `events` panels instead (the extension's own events and its attempts' latest
 phases, from the database), not log cells.
+
+The user, on the layout: "Everything in the extension panel has to be defined. If metrics are
+not defined where they should be shown (without layout) we just show them one under another
+full row like we do in our metrics"; and an events panel only "if someone wants it".
+
+### 2026-11-21: colours from schedr's list (decision 513)
+
+The user: "user should be able to choose colors from a list of let's say 20, which we provide
+which look good on both light and dark mode". Read as: an extension's panel, or its series by
+a label's value, names one of 20 colours (`blue`, `teal`, ...), each with a light and a dark
+variant schedr picks; any other colour is refused; no other style.
