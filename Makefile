@@ -395,7 +395,9 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 # masters' address, +71/+72 the masters' gRPC, +80 the API, +82 the UI, +90.. ops; worker i's
 # log endpoint +60+i, its ops +40+i): beside `make standalone` and `standalone-separate-ui`.
 # Ctrl-C, or the shell ending, stops them all; killing one master shows the standby take over.
-# Runs the released wheel (DIST_VERSION), not this checkout's code.
+# Runs the released wheel (DIST_VERSION), not this checkout's code. The workers' secrets are a
+# Vault in a container (VAULT_IMAGE, dev mode, its root token `root`, on DIST_PORT+20), given
+# STANDALONE_SECRETS at its start and gone with it: what the DAGs read with `secrets[...]`.
 DIST_WORKERS ?= 4
 DIST_SLOTS ?= 4
 DIST_PORT ?= 8300
@@ -421,6 +423,19 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 	d="$(abspath $(STANDALONE_DIR))/distributed"; prepare "$$d" || exit 1; \
 	python="$(DIST_ENV)/bin/python"; bin="$(DIST_ENV)/bin/schedr"; \
 	b=$(DIST_PORT); \
+	vault=schedr-dist-vault-$$$$; vault_port=$$((b + 20)); \
+	trap 'kill $$(jobs -p) 2>/dev/null; wait; $(CONTAINER) rm -f '$$vault' >/dev/null 2>&1' EXIT INT TERM; \
+	$(CONTAINER) run -d --rm --name $$vault --network host -e VAULT_DEV_ROOT_TOKEN_ID=root \
+		-e VAULT_DEV_LISTEN_ADDRESS=127.0.0.1:$$vault_port -e SKIP_SETCAP=1 $(VAULT_IMAGE) >/dev/null; \
+	until curl -sf -o /dev/null http://127.0.0.1:$$vault_port/v1/sys/health; do sleep 0.5; done; \
+	for entry in $(STANDALONE_SECRETS); do \
+		$(CONTAINER) exec -e VAULT_ADDR=http://127.0.0.1:$$vault_port -e VAULT_TOKEN=root $$vault \
+			vault kv put "secret/$${entry%% *}" "$${entry#* }" >/dev/null; \
+	done; \
+	{ cat "$(STANDALONE_CONFIG)"; \
+	  printf '\n[secret_storage.vault]\ntype = "vault"\naddress = "http://127.0.0.1:%s"\nauth = { method = "token" }\n' \
+		$$vault_port; } > "$$d/worker.toml"; \
+	echo "distributed: Vault on http://127.0.0.1:$$vault_port (token root)"; \
 	role() { \
 		SCHEDR_SECRET_KEY="$$(cat "$$d/secret.key")" \
 		SCHEDR_CONFIG__DATABASE__URL="sqlite://$$d/schedr.db" \
@@ -428,7 +443,6 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 		SCHEDR_CONFIG__TLS__MODE=mesh \
 		exec env "$$@"; \
 	}; \
-	trap 'kill $$(jobs -p) 2>/dev/null; wait' EXIT INT TERM; \
 	( role SCHEDR_CONFIG__MASTER__GRPC_PORT=$$((b + 72)) SCHEDR_CONFIG__OPS__PORT=$$((b + 90)) \
 		"$$bin" master --migrate ) & \
 	python3 scripts/master_proxy.py --listen $$((b + 70)) \
@@ -445,6 +459,7 @@ distributed:     ## Run 2 masters, a webserver, DIST_WORKERS (4) workers of DIST
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH="$$python" \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER=$(FORK_SERVER) \
 			SCHEDR_CONFIG__INTERPRETERS__PYTHON__PRELOAD='$(PRELOAD)' \
+			SCHEDR_CONFIG_FILE="$$d/worker.toml" SCHEDR_CONFIG__SECRET_STORAGE__VAULT__TOKEN=root \
 			PATH="$(DIST_ENV)/bin:$$PATH" "$$bin" worker ) & \
 	done; \
 	printf '[ui]\nbind = "%s"\nport = %s\ndocs_dir = "%s"\n\n[ops]\nbind = "127.0.0.1"\nport = %s\n\n[[ui.deployments]]\nname = "distributed"\nurl = "http://127.0.0.1:%s"\n' \
