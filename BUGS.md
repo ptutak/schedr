@@ -57,9 +57,28 @@ step touches their code or the user schedules them.
 | 2 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
 | 3 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
 | 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 5 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 6 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 7 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 5 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 6 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 7 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 8 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 9 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B277: the metrics page's colour test checks whichever line the browser finds first
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): `test_the_metrics_page_charts_each_process_with_its_tasks` reads the stroke of the page's first `svg.chart path.line` and expects series 1's dark-mode blue (`rgb(57, 135, 229)`); in a full `make test-ui` it once got another series' orange (`rgb(217, 89, 38)`), passing alone and on the next full run: which line comes first follows the standalone's own processes and when they started.
+- **Found:** 2026-11-21, by Claude, running `make test-ui` for M5.2i5 (2 failed, 30 passed; the
+  other failure was the new `log_levels` DAG's count, fixed). The test passed twice alone and in
+  the next full run.
+- **A fix:** pick the line by its series (its `s1` class, or the legend's first key) and check
+  that one's stroke, not the page's first path.
+
+## B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]`
+
+- **Rating:** severity **low**, probability **possible**, correctness (score 2): `schedr.runner.protocol.Channel` sends and receives `dict[str, Any]`, and `schedr.extension` (M5.2i, M5.2i5) builds and reads its messages the same way, against the rule to avoid `Any`: a message field of the wrong type passes the type checkers. `schedr.types.Json` doesn't fit as it is (it allows dates and dataclasses): replacing `Any` with it gave 78 mypy errors.
+- **Found:** 2026-11-21, by Claude in M5.2i5 piece 3, adding `ExtensionChannel.metric`.
+- **A fix:** a wire JSON type (`str | int | float | bool | None | list[...] | dict[str, ...]`)
+  for `Channel.send`/`receive`, and typed messages (TypedDicts) for each message the helper and
+  the runner build, narrowed where they are read.
 
 ## B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk
 

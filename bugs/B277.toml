@@ -1,0 +1,14 @@
+title = "the metrics page's colour test checks whichever line the browser finds first"
+severity = "low"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "tests"  # security, data, correctness, reliability, performance, usability, tests
+summary = "`test_the_metrics_page_charts_each_process_with_its_tasks` reads the stroke of the page's first `svg.chart path.line` and expects series 1's dark-mode blue (`rgb(57, 135, 229)`); in a full `make test-ui` it once got another series' orange (`rgb(217, 89, 38)`), passing alone and on the next full run: which line comes first follows the standalone's own processes and when they started"
+found = 2026-11-21
+suspected = false
+details = '''
+- **Found:** 2026-11-21, by Claude, running `make test-ui` for M5.2i5 (2 failed, 30 passed; the
+  other failure was the new `log_levels` DAG's count, fixed). The test passed twice alone and in
+  the next full run.
+- **A fix:** pick the line by its series (its `s1` class, or the legend's first key) and check
+  that one's stroke, not the page's first path.
+'''
