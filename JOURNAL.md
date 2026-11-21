@@ -2772,3 +2772,11 @@ the worker) and its attempts' latest phases. Chosen (A): those now, in M5.2i5, a
 declared events (decision 515) listed there too in M5.2i8. Not chosen: declared events as
 notifications only (B); the placeholder until M5.2i8 (C). "let's go with A, but wait for the
 review to start".
+
+### <a id="DN20"></a>2026-11-21: one EXTENSION_EVENT (decision note 20; corrects D515)
+
+The user: "how do we specify extension notifications? we should have one general type for them
+EXTENSION_EVENT or sth similar". Decision 515 subscribed by `<extension>.<event>` strings beside
+the `Notify` names. Chosen (A): "one EXTENSION_EVENT, no narrowing"; the body names the
+extension and event, as `RUN_STARTED` carries its reason. Not chosen (B): narrowing by extension
+or event.

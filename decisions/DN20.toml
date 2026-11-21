@@ -1,0 +1,14 @@
+title = "One EXTENSION_EVENT for every plugin's declared events, no narrowing"
+date = 2026-11-21
+by = "user"
+on = "D515"
+kind = "corrects"
+summary = '''
+A DAG subscribes to its extensions' declared events with one `Notify.EXTENSION_EVENT`, not by
+`<extension>.<event>` or `<extension>.*`: every declared event the plugin of one of its extension
+tasks sends while it runs, the body carrying `extension`, `version`, `event` (the declared name),
+the plugin's `text` and `data`, and the DAG, run and task; a receiver filters on them. No
+narrowing to one extension or event. The worker's own events (discovered, skipped, refused) are
+of no DAG: on the extension's page only.
+'''
+history = "JOURNAL.md#DN20"

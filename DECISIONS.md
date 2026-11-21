@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN20 | 2026-11-21 | user | corrects D515 | One EXTENSION_EVENT for every plugin's declared events, no narrowing |
 | DN19 | 2026-11-21 | user | adds to D513 | An events panel shows the worker's events for the extension, its attempts' phases, and its plugin's declared events |
 | DN18 | 2026-11-21 | user | corrects D515 | One RUN_STARTED for every run, with its reason; EVENT_POSTED to the DAGs listening |
 | DN17 | 2026-11-20 | user | adds to D510 | The Rust plugin crate stands on its own: no internal crate published with it |
