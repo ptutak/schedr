@@ -55,6 +55,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D515 | 2026-11-21 | user | planned (M5.2i8) | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
 | D514 | 2026-11-20 | user | planned (M5.2i5) | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
 | D513 | 2026-11-20 | user | planned (M5.2i5) | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |
@@ -839,6 +840,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### outcomes
 
+- D515: Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED
 - D429: `[notifications] ca_file`: extra CAs for notifications
 - D428: A webhook's 4xx drops the notification at once
 - D427: The user's email service is reached as a webhook

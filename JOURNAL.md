@@ -2741,6 +2741,7 @@ which look good on both light and dark mode". Read as: an extension's panel, or 
 a label's value, names one of 20 colours (`blue`, `teal`, ...), each with a light and a dark
 variant schedr picks; any other colour is refused; no other style.
 
+<a id="D515"></a>
 ### 2026-11-21: notifications for extensions, and three new events (decision 515)
 
 The user asked what is notified today: run failures, successes, cancels and recoveries, a task
