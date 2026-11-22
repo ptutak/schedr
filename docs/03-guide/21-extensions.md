@@ -174,6 +174,33 @@ attempt), its `row`
 or `left`, `center` and `right`. A metric no panel draws gets a `full` row of its own below them.
 Nothing of style is declared: the page draws in schedr's.
 
+**How a panel draws its metric** (decision 516) is four optional keys; most panels name none:
+
+| Key | Says | Default |
+|---|---|---|
+| `point` | how a bucket's point is worked out: a counter's `increase` or `rate` (per second); a gauge's `mean`, `last`, `max` or `min`; a histogram's `count`, `mean` or `quantiles` | a counter's `increase` (`rate` on a `rate` chart), a gauge's `mean` (DN26), a histogram's `count` |
+| `combine` | how values are combined: the workers' on **All workers**, and the series `group_by` leaves together: `sum`, `max`, `mean` or `min` (a histogram's only `sum`) | `sum` |
+| `group_by` | the labels that get a line each: a list, or `[]` for one line | every label |
+| `limit` | how many lines are shown, the largest by their peak over the range; the rest are drawn as one `other` | all, up to `max_series` |
+
+Values are combined at each moment first (a minute's readings over the workers), then the
+bucket's point is taken over its moments: with `sum` and `max` a panel shows the total's peak.
+A value every worker reads from one place, a cluster's pending pods, takes `combine: max`, so
+three workers reading 10 show 10, not 30:
+
+```python
+{"title": "Pending pods", "metric": "pods_pending", "chart": "line", "row": 1, "cell": "full",
+ "point": "max", "combine": "max", "group_by": ["namespace"], "limit": 5}
+```
+
+A function the metric's kind doesn't have, a `group_by` label it doesn't declare, a `limit` of 0,
+any function on an `events` panel, or `point: quantiles` on another chart than `quantiles` is
+refused when the declarations are loaded. Lines past `limit`, or past `max_series`, are drawn as
+one `other` with any series a worker folded already. Past a day the master keeps 15-minute windows
+across workers; each window keeps its points under every `combine`, so the 7- and 30-day views
+draw the same functions (a `mean` over the series of a group is then their means' average).
+`GET /api/v1/extensions/<name>/metrics` gives each panel's lines, worked out so, under `panels`.
+
 A chart's lines (`line`, `rate`, `quantiles`, and `stacked` areas) run from one reading to the
 next across up to five empty buckets, so a job every few minutes reads as a line; past that the
 line breaks, nothing having been sent. A counter's line so reads at its busy minutes' level. To

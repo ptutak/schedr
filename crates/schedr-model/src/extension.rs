@@ -251,6 +251,78 @@ pub struct Panel {
     /// Its series' colours by a label's value (`{"Running": "green", "Failed": "red"}`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub colors: BTreeMap<String, Color>,
+    /// How one point is worked out from its bucket (decision 516); none: its kind's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<Point>,
+    /// How values are combined: the workers' on the "All workers" tab, and the series
+    /// `group_by` leaves together (decision 516); none: `sum`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combine: Option<Combine>,
+    /// The labels that get a line each (decision 516); none: all, `[]`: one line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<Vec<String>>,
+    /// How many lines are shown, the largest by their peak over the range; the rest go into
+    /// `other` (decision 516). None: all, up to the metric's series cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// How a panel's point is worked out from its bucket (decision 516).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Point {
+    /// A counter's growth in the bucket (a counter's default).
+    Increase,
+    /// A counter's growth per second.
+    Rate,
+    /// A gauge's last value in the bucket.
+    Last,
+    /// A gauge's average (its default, DN26), or a histogram's observations' average.
+    Mean,
+    /// A gauge's highest value in the bucket.
+    Max,
+    /// A gauge's lowest value in the bucket.
+    Min,
+    /// A histogram's observations in the bucket (a histogram's default).
+    Count,
+    /// A histogram's quantiles (a `quantiles` chart's).
+    Quantiles,
+}
+
+impl Point {
+    /// Whether a metric of `kind` has it.
+    #[must_use]
+    pub const fn fits(self, kind: MetricKind) -> bool {
+        match kind {
+            MetricKind::Counter => matches!(self, Self::Increase | Self::Rate),
+            MetricKind::Gauge => matches!(self, Self::Last | Self::Mean | Self::Max | Self::Min),
+            MetricKind::Histogram => matches!(self, Self::Count | Self::Mean | Self::Quantiles),
+        }
+    }
+
+    /// A `kind`'s default.
+    #[must_use]
+    pub const fn default_for(kind: MetricKind) -> Self {
+        match kind {
+            MetricKind::Counter => Self::Increase,
+            MetricKind::Gauge => Self::Mean,
+            MetricKind::Histogram => Self::Count,
+        }
+    }
+}
+
+/// How a panel's values are combined (decision 516).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Combine {
+    /// Added up (the default).
+    Sum,
+    /// The highest: a value every worker reads from one place (a cluster's pending pods).
+    Max,
+    /// Their average.
+    Mean,
+    /// The lowest.
+    Min,
 }
 
 /// How many cells a row whose panels take `cells` has: 1, 2 or 3.
@@ -414,6 +486,9 @@ pub fn check_declarations(declarations: &Declarations) -> Result<(), String> {
         }
     }
     for panel in &declarations.panels {
+        check_functions(panel, &declarations.metrics)?;
+    }
+    for panel in &declarations.panels {
         check_text("a panel's title", &panel.title)?;
         if panel.row == 0 || panel.row > MAX_ROWS {
             return Err(format!(
@@ -467,6 +542,62 @@ pub fn check_declarations(declarations: &Declarations) -> Result<(), String> {
     Ok(())
 }
 
+/// A panel's functions (decision 516) checked against its metric: a `point` or `combine` its
+/// kind doesn't have, a `group_by` label it doesn't declare, a `limit` of 0 refused.
+fn check_functions(panel: &Panel, metrics: &[MetricDeclaration]) -> Result<(), String> {
+    let named = panel.point.is_some()
+        || panel.combine.is_some()
+        || panel.group_by.is_some()
+        || panel.limit.is_some();
+    let refused = |what: String| Err(format!("panel `{}`: {what}", panel.title));
+    if !named {
+        return Ok(());
+    }
+    // agy's review of M5.2i10: an events panel draws no metric, a quantile only on its chart.
+    if panel.chart == ChartKind::Events {
+        return refused(
+            "an events panel draws no metric: no `point`, `combine`, `group_by` or `limit`"
+                .to_owned(),
+        );
+    }
+    if (panel.point == Some(Point::Quantiles)) != (panel.chart == ChartKind::Quantiles)
+        && panel.point.is_some()
+    {
+        return refused("`point: quantiles` is a `quantiles` chart's, and only its".to_owned());
+    }
+    let Some(metric) = panel
+        .metric
+        .as_deref()
+        .and_then(|name| metrics.iter().find(|m| m.name == name))
+    else {
+        // A missing metric is said by the panel's own check.
+        return Ok(());
+    };
+    if let Some(point) = panel.point
+        && !point.fits(metric.kind)
+    {
+        return refused(format!(
+            "a {:?} `{}` has no point `{point:?}`",
+            metric.kind, metric.name
+        ));
+    }
+    if metric.kind == MetricKind::Histogram && panel.combine.is_some_and(|c| c != Combine::Sum) {
+        return refused("a histogram's observations are only added up (`combine: sum`)".to_owned());
+    }
+    for label in panel.group_by.iter().flatten() {
+        if !metric.labels.iter().any(|l| &l.name == label) {
+            return refused(format!(
+                "`group_by` names `{label}`, not a label of `{}`",
+                metric.name
+            ));
+        }
+    }
+    if panel.limit == Some(0) {
+        return refused("its `limit` is at least 1".to_owned());
+    }
+    Ok(())
+}
+
 /// An extension's page: its declared panels, then each metric no panel shows in a `full` row
 /// of its own, one under another below them (as the Metrics page lays out its charts), with the
 /// chart its kind suggests.
@@ -497,6 +628,10 @@ pub fn page_panels(declarations: &Declarations) -> Vec<Panel> {
             quantiles: Vec::new(),
             color: None,
             colors: BTreeMap::new(),
+            point: None,
+            combine: None,
+            group_by: None,
+            limit: None,
         });
     }
     panels

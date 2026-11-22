@@ -1236,6 +1236,31 @@
         }
       ]
     },
+    "Combine": {
+      "description": "How a panel's values are combined (decision 516).",
+      "oneOf": [
+        {
+          "const": "sum",
+          "description": "Added up (the default).",
+          "type": "string"
+        },
+        {
+          "const": "max",
+          "description": "The highest: a value every worker reads from one place (a cluster's pending pods).",
+          "type": "string"
+        },
+        {
+          "const": "mean",
+          "description": "Their average.",
+          "type": "string"
+        },
+        {
+          "const": "min",
+          "description": "The lowest.",
+          "type": "string"
+        }
+      ]
+    },
     "CommandLine": {
       "description": "What a `command` task runs.",
       "oneOf": [
@@ -2065,12 +2090,53 @@
           "description": "Its series' colours by a label's value (`{\"Running\": \"green\", \"Failed\": \"red\"}`).",
           "type": "object"
         },
+        "combine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Combine"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How values are combined: the workers' on the \"All workers\" tab, and the series\n`group_by` leaves together (decision 516); none: `sum`."
+        },
+        "group_by": {
+          "description": "The labels that get a line each (decision 516); none: all, `[]`: one line.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "How many lines are shown, the largest by their peak over the range; the rest go into\n`other` (decision 516). None: all, up to the metric's series cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "metric": {
           "description": "The metric it draws; none for an `events` panel.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "point": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How one point is worked out from its bucket (decision 516); none: its kind's default."
         },
         "quantiles": {
           "description": "A `quantiles` chart's quantiles, each between 0 and 1 (default 0.5, 0.95, 0.99).",
@@ -2251,6 +2317,51 @@
         {
           "const": "data",
           "description": "A task's own `send`: its `data`; null in event notifications.",
+          "type": "string"
+        }
+      ]
+    },
+    "Point": {
+      "description": "How a panel's point is worked out from its bucket (decision 516).",
+      "oneOf": [
+        {
+          "const": "increase",
+          "description": "A counter's growth in the bucket (a counter's default).",
+          "type": "string"
+        },
+        {
+          "const": "rate",
+          "description": "A counter's growth per second.",
+          "type": "string"
+        },
+        {
+          "const": "last",
+          "description": "A gauge's last value in the bucket.",
+          "type": "string"
+        },
+        {
+          "const": "mean",
+          "description": "A gauge's average (its default, DN26), or a histogram's observations' average.",
+          "type": "string"
+        },
+        {
+          "const": "max",
+          "description": "A gauge's highest value in the bucket.",
+          "type": "string"
+        },
+        {
+          "const": "min",
+          "description": "A gauge's lowest value in the bucket.",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "A histogram's observations in the bucket (a histogram's default).",
+          "type": "string"
+        },
+        {
+          "const": "quantiles",
+          "description": "A histogram's quantiles (a `quantiles` chart's).",
           "type": "string"
         }
       ]

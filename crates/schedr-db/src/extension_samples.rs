@@ -37,17 +37,25 @@ pub struct ExtensionVersion {
 pub enum SampleData {
     /// A counter: how much it grew.
     Counter {
-        /// Its growth.
+        /// Its growth (over workers, their sum).
         growth: f64,
+        /// A rollup's growth combined over workers otherwise (decision 516); none in a
+        /// minute's sample, one worker's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        across: Option<CounterAcross>,
     },
     /// A gauge: its average and highest value over the minutes it covers.
     Gauge {
-        /// The average.
+        /// The average (over workers, of their sum).
         avg: f64,
         /// The highest.
         peak: f64,
         /// The minutes it covers.
         minutes: u32,
+        /// A rollup's points of its minutes, each combined over workers (decision 516); none
+        /// in a minute's sample, one worker's reading.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        across: Option<Box<GaugeAcross>>,
     },
     /// A histogram: its new observations per bucket and their sum.
     Histogram {
@@ -58,7 +66,65 @@ pub enum SampleData {
     },
 }
 
+/// A rollup's counter growth combined over workers each minute, summed over its minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CounterAcross {
+    /// The highest worker's.
+    pub max: f64,
+    /// The lowest worker's.
+    pub min: f64,
+    /// The workers' average.
+    pub mean: f64,
+}
+
+/// A gauge's points over a rollup's minutes: its last, average, highest and lowest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct GaugePoints {
+    /// The last minute's.
+    pub last: f64,
+    /// The minutes' average.
+    pub mean: f64,
+    /// The highest minute's.
+    pub max: f64,
+    /// The lowest minute's.
+    pub min: f64,
+}
+
+/// A rollup's gauge: each minute's readings combined over workers four ways, then its points
+/// over the window's minutes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct GaugeAcross {
+    /// Each minute's sum.
+    pub sum: GaugePoints,
+    /// Each minute's highest.
+    pub max: GaugePoints,
+    /// Each minute's lowest.
+    pub min: GaugePoints,
+    /// Each minute's average.
+    pub mean: GaugePoints,
+}
+
 impl SampleData {
+    /// A minute's counter sample: one worker's growth.
+    #[must_use]
+    pub const fn counter(growth: f64) -> Self {
+        Self::Counter {
+            growth,
+            across: None,
+        }
+    }
+
+    /// A minute's gauge sample: one worker's reading.
+    #[must_use]
+    pub const fn gauge(value: f64) -> Self {
+        Self::Gauge {
+            avg: value,
+            peak: value,
+            minutes: 1,
+            across: None,
+        }
+    }
+
     /// `self` and `other`, two series folded into one in the same minute, as one: everything
     /// added, a gauge's value and peak too (Codex's second review of M5.2i5: two folded gauges
     /// kept the later's value, not their sum). Of different kinds (or bucket counts), `other`.
@@ -69,11 +135,14 @@ impl SampleData {
                 Self::Gauge {
                     avg: a, peak: p, ..
                 },
-                Self::Gauge { avg, peak, minutes },
+                Self::Gauge {
+                    avg, peak, minutes, ..
+                },
             ) => Self::Gauge {
                 avg: a + avg,
                 peak: p + peak,
                 minutes,
+                across: None,
             },
             (earlier, other) => earlier.merged(other),
         }
@@ -85,13 +154,19 @@ impl SampleData {
     #[must_use]
     pub fn merged(self, later: Self) -> Self {
         match (self, later) {
-            (Self::Counter { growth: a }, Self::Counter { growth: b }) => {
-                Self::Counter { growth: a + b }
+            (Self::Counter { growth: a, .. }, Self::Counter { growth: b, .. }) => {
+                Self::counter(a + b)
             }
-            (Self::Gauge { peak: a, .. }, Self::Gauge { avg, peak, minutes }) => Self::Gauge {
+            (
+                Self::Gauge { peak: a, .. },
+                Self::Gauge {
+                    avg, peak, minutes, ..
+                },
+            ) => Self::Gauge {
                 avg,
                 peak: peak.max(a),
                 minutes,
+                across: None,
             },
             (Self::Histogram { counts: a, sum: x }, Self::Histogram { counts: b, sum: y })
                 if a.len() == b.len() =>

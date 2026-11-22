@@ -13,12 +13,15 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use jiff::tz::TimeZone;
+use schedr_api::extensions::panels::{per_second, point_of};
 use schedr_api::extensions::{
     ExtensionMetricView, ExtensionMetrics, ExtensionPointView, ExtensionSeriesView, ExtensionView,
 };
 use schedr_api::series::Range;
 use schedr_client::{Transport, path_segment};
-use schedr_model::extension::{Cell, ChartKind, MetricUnit, Panel, row_cells};
+use schedr_model::extension::{
+    Cell, ChartKind, Combine, MetricKind, MetricUnit, Panel, Point, row_cells,
+};
 
 use crate::Ui;
 use crate::chart::{self, Bar, Bars, Line, Spec, Unit};
@@ -396,10 +399,13 @@ pub fn rows(
     zone: &TimeZone,
     runs_href: &str,
 ) -> Vec<RowView> {
-    let panels: Vec<Panel> = extension
+    // Numbered before one that can't be read is left out, as the API numbers them (agy's
+    // review of M5.2i10: the next took its lines).
+    let panels: Vec<(usize, Panel)> = extension
         .panels
         .iter()
-        .filter_map(|p| serde_json::from_value(p.clone()).ok())
+        .enumerate()
+        .filter_map(|(index, p)| Some((index, serde_json::from_value(p.clone()).ok()?)))
         .collect();
     let units: BTreeMap<String, MetricUnit> = extension
         .metrics
@@ -412,26 +418,30 @@ pub fn rows(
             ))
         })
         .collect();
-    let mut by_row: BTreeMap<u32, Vec<&Panel>> = BTreeMap::new();
-    for panel in &panels {
-        by_row.entry(panel.row).or_default().push(panel);
+    let mut by_row: BTreeMap<u32, Vec<(usize, &Panel)>> = BTreeMap::new();
+    for (index, panel) in &panels {
+        by_row.entry(panel.row).or_default().push((*index, panel));
     }
     by_row
         .into_values()
         .map(|mut panels| {
-            panels.sort_by_key(|p| p.cell);
-            let cells: Vec<Cell> = panels.iter().map(|p| p.cell).collect();
+            panels.sort_by_key(|(_, p)| p.cell);
+            let cells: Vec<Cell> = panels.iter().map(|(_, p)| p.cell).collect();
             let cells_in_row = row_cells(&cells).unwrap_or(1);
             let width = cell_width(cells_in_row);
             RowView {
                 cells_in_row,
                 cells: panels
                     .into_iter()
-                    .map(|panel| {
+                    .map(|(index, panel)| {
                         let metric = panel
                             .metric
                             .as_deref()
                             .and_then(|m| metrics.metrics.iter().find(|v| v.name == m));
+                        // Its own lines, as its functions say (decision 516).
+                        let own = metric.and_then(|metric| panel_lines(metrics, index, metric));
+                        let worked_out = own.is_some();
+                        let metric = own.as_ref().or(metric);
                         let unit = panel
                             .metric
                             .as_deref()
@@ -439,7 +449,7 @@ pub fn rows(
                             .copied()
                             .unwrap_or_default();
                         let (html, legend) = drawn(
-                            panel,
+                            (panel, worked_out),
                             metric,
                             unit,
                             metrics,
@@ -462,6 +472,23 @@ pub fn rows(
             }
         })
         .collect()
+}
+
+/// The panel at `index`'s lines as the API worked them out, in its metric's view.
+fn panel_lines(
+    metrics: &ExtensionMetrics,
+    index: usize,
+    metric: &ExtensionMetricView,
+) -> Option<ExtensionMetricView> {
+    let panel = metrics
+        .panels
+        .iter()
+        .find(|p| usize::try_from(p.index).ok() == Some(index) && p.metric == metric.name)?;
+    Some(ExtensionMetricView {
+        series: panel.series.clone(),
+        folded: panel.folded,
+        ..metric.clone()
+    })
 }
 
 /// A series' name: its labels' values, or the metric's when it has none.
@@ -539,6 +566,8 @@ pub fn quantile(counts: &[u64], bounds: &[f64], q: f64) -> Option<f64> {
 /// What every chart kind of a panel draws from.
 struct Drawing<'a> {
     panel: &'a Panel,
+    /// Whether its points are the panel's own (decision 516), else its metric's summed.
+    worked_out: bool,
     metric: &'a ExtensionMetricView,
     metrics: &'a ExtensionMetrics,
     width: f64,
@@ -569,10 +598,22 @@ impl Drawing<'_> {
     }
 
     fn lines(&self, value: &dyn Fn(&ExtensionPointView) -> Option<f64>) -> Vec<Line> {
-        self.metric
-            .series
-            .iter()
-            .take(chart::SERIES)
+        // Past the chart's lines, a folded `other` (the API's last) still drawn (agy's review of
+        // M5.2i10: a `limit` of 8 hid it).
+        let series = &self.metric.series;
+        let mut shown: Vec<&ExtensionSeriesView> = series.iter().take(chart::SERIES).collect();
+        if series.len() > chart::SERIES
+            && let Some(other) = series.last().filter(|s| {
+                !s.labels.is_empty()
+                    && s.labels
+                        .values()
+                        .all(|v| v == schedr_model::extension::OTHER)
+            })
+        {
+            shown[chart::SERIES - 1] = other;
+        }
+        shown
+            .into_iter()
             .enumerate()
             .map(|(i, s)| Line {
                 label: series_label(s, &self.metric.name),
@@ -601,18 +642,8 @@ impl Drawing<'_> {
     fn bars(&self) -> Drawn {
         // A histogram's bars count observations; a counter's and a gauge's are in its unit (agy's
         // review of M5.2i5: a bytes counter drew raw numbers).
-        let counts = self.metric.kind == "histogram";
-        let scale = if counts { 1.0 } else { self.scale };
-        let lines = self.lines(&|p| {
-            #[expect(clippy::cast_precision_loss, reason = "a chart's value")]
-            let value = if p.counts.is_empty() {
-                p.value
-            } else {
-                p.counts.iter().sum::<u64>() as f64
-            };
-            Some(value * scale)
-        });
-        let unit = if counts { Unit::Number } else { self.unit };
+        let (scale, unit) = (self.scale, self.unit);
+        let lines = self.lines(&|p| Some(self.counted(p) * scale));
         let legend = lines.iter().map(|l| (l.slot, l.label.clone())).collect();
         let mut spec = self.spec(Vec::new(), lines, unit);
         spec.bars = true;
@@ -621,17 +652,53 @@ impl Drawing<'_> {
 
     /// A counter's growth, or a histogram's observations, per second.
     fn rate(&self) -> Drawn {
-        let seconds = f64::from(self.metrics.bucket_s.max(1));
-        let lines = self.lines(&|p| {
-            #[expect(clippy::cast_precision_loss, reason = "a chart's value")]
-            let grown = if p.counts.is_empty() {
-                p.value
-            } else {
-                p.counts.iter().sum::<u64>() as f64
-            };
-            Some(grown / seconds)
-        });
+        let seconds = if self.worked_out {
+            // Per second already (decision 516), unless the panel asked for its increase.
+            1.0
+        } else {
+            f64::from(self.metrics.bucket_s.max(1))
+        };
+        let lines = self.lines(&|p| Some(self.counted(p) / seconds));
         self.charted(lines, false, Unit::Number)
+    }
+
+    /// A line's figure over the whole range: its increase or count; per second, over the range's
+    /// seconds; a histogram's mean, its observations' (agy's review of M5.2i10: a rate and a
+    /// mean were added up over the buckets).
+    fn over_range(&self, points: &[ExtensionPointView]) -> f64 {
+        let kind = if self.metric.kind == "histogram" {
+            MetricKind::Histogram
+        } else {
+            MetricKind::Counter
+        };
+        if !self.worked_out {
+            return points.iter().map(|p| self.counted(p)).sum();
+        }
+        if point_of(self.panel, kind) == Point::Mean {
+            #[expect(clippy::cast_precision_loss, reason = "a chart's value")]
+            let count = points.iter().flat_map(|p| &p.counts).sum::<u64>() as f64;
+            let sum: f64 = points.iter().map(|p| p.sum).sum();
+            return if count > 0.0 { sum / count } else { 0.0 };
+        }
+        let total: f64 = points.iter().map(|p| p.value).sum();
+        if per_second(self.panel, kind) {
+            #[expect(clippy::cast_precision_loss, reason = "a range's seconds")]
+            let range = (self.metrics.to.as_second() - self.metrics.from.as_second()).max(1) as f64;
+            total * f64::from(self.metrics.bucket_s.max(1)) / range
+        } else {
+            total
+        }
+    }
+
+    /// A point's value: the panel's own; summed, a histogram's count of observations.
+    fn counted(&self, p: &ExtensionPointView) -> f64 {
+        if self.worked_out || p.counts.is_empty() {
+            p.value
+        } else {
+            #[expect(clippy::cast_precision_loss, reason = "a chart's value")]
+            let count = p.counts.iter().sum::<u64>() as f64;
+            count
+        }
     }
 
     /// Each quantile over every series together, per bucket.
@@ -725,7 +792,7 @@ impl Drawing<'_> {
     /// A gauge's latest, or a counter's growth over the range, every series together.
     fn number(&self) -> Drawn {
         let gauge = self.metric.kind == "gauge";
-        let total: f64 = self
+        let values: Vec<f64> = self
             .metric
             .series
             .iter()
@@ -733,10 +800,18 @@ impl Drawing<'_> {
                 if gauge {
                     s.points.last().map_or(0.0, |p| p.value)
                 } else {
-                    s.points.iter().map(|p| p.value).sum()
+                    self.over_range(&s.points)
                 }
             })
-            .sum();
+            .collect();
+        // The lines combined as the panel's points were (decision 516).
+        #[expect(clippy::cast_precision_loss, reason = "a few lines")]
+        let total = match self.panel.combine.unwrap_or(Combine::Sum) {
+            Combine::Sum => values.iter().sum(),
+            Combine::Max => values.iter().copied().fold(f64::MIN, f64::max),
+            Combine::Min => values.iter().copied().fold(f64::MAX, f64::min),
+            Combine::Mean => values.iter().sum::<f64>() / values.len().max(1) as f64,
+        };
         let shown = html_escape(&self.unit.show(total * self.scale));
         (format!("<p class=\"big-number\">{shown}</p>"), Vec::new())
     }
@@ -760,7 +835,7 @@ impl Drawing<'_> {
 
 /// A panel's chart and legend.
 fn drawn(
-    panel: &Panel,
+    (panel, worked_out): (&Panel, bool),
     metric: Option<&ExtensionMetricView>,
     unit: MetricUnit,
     metrics: &ExtensionMetrics,
@@ -782,9 +857,18 @@ fn drawn(
             Vec::new(),
         );
     }
-    let (unit, scale) = chart_unit(unit);
+    // A histogram's count is a number of observations, its mean in its unit (agy's review of
+    // M5.2i10: 4 observations showed as 4 s).
+    let counting =
+        metric.kind == "histogram" && point_of(panel, MetricKind::Histogram) != Point::Mean;
+    let (unit, scale) = if counting {
+        (Unit::Number, 1.0)
+    } else {
+        chart_unit(unit)
+    };
     let drawing = Drawing {
         panel,
+        worked_out,
         metric,
         metrics,
         width,

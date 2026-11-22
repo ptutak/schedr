@@ -56,7 +56,10 @@ async fn an_extensions_declarations_are_kept_by_worker_and_renewed() {
 #[tokio::test]
 async fn samples_are_stored_once_read_by_step_and_window_and_deleted_when_old() {
     let db = db().await;
-    let growth = SampleData::Counter { growth: 2.0 };
+    let growth = SampleData::Counter {
+        growth: 2.0,
+        across: None,
+    };
     let rows = [
         sample("w1", "2026-11-21T10:00:00Z", growth.clone()),
         sample("w2", "2026-11-21T10:00:00Z", growth.clone()),
@@ -172,6 +175,7 @@ async fn a_minutes_samples_sent_twice_add_up() {
         avg,
         peak: avg,
         minutes: 1,
+        across: None,
     };
     let histogram = |counts: Vec<u64>, sum: f64| SampleData::Histogram { counts, sum };
     let mut queue = sample("w1", at, histogram(vec![1, 0], 0.5));
@@ -179,7 +183,14 @@ async fn a_minutes_samples_sent_twice_add_up() {
     let mut running = sample("w1", at, gauge(5.0));
     running.metric = "running".to_owned();
     db.add_extension_minutes(&[
-        sample("w1", at, SampleData::Counter { growth: 2.0 }),
+        sample(
+            "w1",
+            at,
+            SampleData::Counter {
+                growth: 2.0,
+                across: None,
+            },
+        ),
         queue.clone(),
         running.clone(),
     ])
@@ -189,8 +200,22 @@ async fn a_minutes_samples_sent_twice_add_up() {
     queue.data = histogram(vec![0, 2], 4.0);
     running.data = gauge(3.0);
     db.add_extension_minutes(&[
-        sample("w1", at, SampleData::Counter { growth: 1.0 }),
-        sample("w1", at, SampleData::Counter { growth: 0.5 }),
+        sample(
+            "w1",
+            at,
+            SampleData::Counter {
+                growth: 1.0,
+                across: None,
+            },
+        ),
+        sample(
+            "w1",
+            at,
+            SampleData::Counter {
+                growth: 0.5,
+                across: None,
+            },
+        ),
         queue,
         running,
     ])
@@ -207,14 +232,21 @@ async fn a_minutes_samples_sent_twice_add_up() {
     assert_eq!(
         by_metric,
         BTreeMap::from([
-            ("pods_started", SampleData::Counter { growth: 3.5 }),
+            (
+                "pods_started",
+                SampleData::Counter {
+                    growth: 3.5,
+                    across: None
+                }
+            ),
             ("queue", histogram(vec![1, 2], 4.5)),
             (
                 "running",
                 SampleData::Gauge {
                     avg: 3.0,
                     peak: 5.0,
-                    minutes: 1
+                    minutes: 1,
+                    across: None,
                 }
             ),
         ])
@@ -230,6 +262,7 @@ async fn gauges_folded_together_add_up_and_a_later_send_replaces_them() {
         avg: v,
         peak: v,
         minutes: 1,
+        across: None,
     };
     db.add_extension_minutes(&[sample("w1", at, gauge(2.0)), sample("w1", at, gauge(3.0))])
         .await
@@ -251,7 +284,8 @@ async fn gauges_folded_together_add_up_and_a_later_send_replaces_them() {
         SampleData::Gauge {
             avg: 1.0,
             peak: 5.0,
-            minutes: 1
+            minutes: 1,
+            across: None,
         }
     );
 }
@@ -259,7 +293,10 @@ async fn gauges_folded_together_add_up_and_a_later_send_replaces_them() {
 #[tokio::test]
 async fn the_hours_series_of_a_metric_are_read_back() {
     let db = db().await;
-    let counter = SampleData::Counter { growth: 1.0 };
+    let counter = SampleData::Counter {
+        growth: 1.0,
+        across: None,
+    };
     let mut b = sample("w2", "2026-11-21T10:30:00Z", counter.clone());
     b.labels = [("namespace".to_owned(), "b".to_owned())].into();
     db.add_extension_minutes(&[

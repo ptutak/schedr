@@ -25,7 +25,7 @@ One line per decision; the file `decisions/D<n>.toml` has its summary, and its `
 
 ## Unverified claims
 
-Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303, D408, D425.
+Active decisions with a claim nobody found in the code yet (`unverified`): D57, D65, D66, D129, D192, D221, D222, D242, D243, D245, D262, D294, D303, D408, D425, D516.
 
 ## Decision notes
 
@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN26 | 2026-11-22 | user | corrects D516 | A gauge's default point is its mean |
 | DN25 | 2026-11-21 | user | corrects D518 | A service's memory 256 MiB by default |
 | DN24 | 2026-11-21 | user | adds to D466 | Every line drawn across up to five empty steps, everywhere |
 | DN23 | 2026-11-21 | user | corrects D517 | Numbered pages without a total or a last page: nothing counted |
@@ -66,7 +67,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
 | D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
-| D516 | 2026-11-21 | user | planned (M5.2i10) | task-processes | Chart functions: point, combine, group_by and limit |
+| D516 | 2026-11-21 | user | built M5.2i10 | task-processes | Chart functions: point, combine, group_by and limit |
 | D515 | 2026-11-21 | user | planned (M5.2i8) | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
 | D514 | 2026-11-20 | user | built M5.2i5 | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
 | D513 | 2026-11-20 | user | built M5.2i5 | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |

@@ -48,6 +48,15 @@ fn figures(started: f64, running: f64, queue: [u64; 2]) -> ExtensionFigures {
     }
 }
 
+const fn points(last: f64, mean: f64, max: f64, min: f64) -> GaugePoints {
+    GaugePoints {
+        last,
+        mean,
+        max,
+        min,
+    }
+}
+
 fn data(samples: &[ExtensionSample]) -> Vec<(&str, SampleData)> {
     samples
         .iter()
@@ -64,13 +73,20 @@ fn a_minute_is_what_the_worker_says_grew_with_no_earlier_figures_needed() {
     assert_eq!(
         data(&first),
         [
-            ("started", SampleData::Counter { growth: 3.0 }),
+            (
+                "started",
+                SampleData::Counter {
+                    growth: 3.0,
+                    across: None
+                }
+            ),
             (
                 "running",
                 SampleData::Gauge {
                     avg: 2.0,
                     peak: 2.0,
-                    minutes: 1
+                    minutes: 1,
+                    across: None,
                 }
             ),
             (
@@ -98,7 +114,10 @@ fn past_a_metrics_cap_across_workers_new_series_are_other_until_the_hour_ends() 
         labels: [("pod".to_owned(), value.to_owned())].into(),
         step_s: 60,
         at: ts(at),
-        data: SampleData::Counter { growth: 1.0 },
+        data: SampleData::Counter {
+            growth: 1.0,
+            across: None,
+        },
     };
     let mut seen = SeriesSeen::default();
     let at = "2026-11-21T10:01:00Z";
@@ -140,6 +159,7 @@ fn a_window_rolls_up_across_workers() {
         avg: v,
         peak: v,
         minutes: 1,
+        across: None,
     };
     let minutes = [
         minute("w1", "2026-11-21T10:00:00Z", "running", gauge(2.0)),
@@ -149,13 +169,19 @@ fn a_window_rolls_up_across_workers() {
             "w1",
             "2026-11-21T10:00:00Z",
             "started",
-            SampleData::Counter { growth: 2.0 },
+            SampleData::Counter {
+                growth: 2.0,
+                across: None,
+            },
         ),
         minute(
             "w2",
             "2026-11-21T10:01:00Z",
             "started",
-            SampleData::Counter { growth: 3.0 },
+            SampleData::Counter {
+                growth: 3.0,
+                across: None,
+            },
         ),
     ];
     let rolled = rolled_up(&minutes, ts("2026-11-21T10:00:00Z"));
@@ -167,10 +193,28 @@ fn a_window_rolls_up_across_workers() {
                 SampleData::Gauge {
                     avg: 3.0,
                     peak: 5.0,
-                    minutes: 2
+                    minutes: 2,
+                    // Decision 516: 10:00 read 2 and 3, 10:01 read 1; combined, then pointed.
+                    across: Some(Box::new(GaugeAcross {
+                        sum: points(1.0, 3.0, 5.0, 1.0),
+                        max: points(1.0, 2.0, 3.0, 1.0),
+                        min: points(1.0, 1.5, 2.0, 1.0),
+                        mean: points(1.0, 1.75, 2.5, 1.0),
+                    })),
                 }
             ),
-            ("started", SampleData::Counter { growth: 5.0 }),
+            (
+                "started",
+                SampleData::Counter {
+                    growth: 5.0,
+                    // One worker a minute: each combine its growth.
+                    across: Some(CounterAcross {
+                        max: 5.0,
+                        min: 5.0,
+                        mean: 5.0
+                    })
+                }
+            ),
         ]
     );
     assert!(
@@ -258,6 +302,7 @@ fn a_rollup_keeps_a_minutes_peak() {
             avg,
             peak,
             minutes: 1,
+            across: None,
         },
     };
     let rolled = rolled_up(
@@ -269,7 +314,14 @@ fn a_rollup_keeps_a_minutes_peak() {
         SampleData::Gauge {
             avg: 4.0,
             peak: 7.0,
-            minutes: 1
+            minutes: 1,
+            // agy's review of M5.2i10: each combine's highest from the minute's peaks, 5 and 2.
+            across: Some(Box::new(GaugeAcross {
+                sum: points(4.0, 4.0, 7.0, 4.0),
+                max: points(3.0, 3.0, 5.0, 3.0),
+                min: points(1.0, 1.0, 2.0, 1.0),
+                mean: points(2.0, 2.0, 3.5, 2.0),
+            })),
         }
     );
 }
@@ -287,7 +339,10 @@ fn invented_label_names_dont_pass_the_cap_and_a_takeover_keeps_the_hours_series(
             .collect(),
         step_s: 60,
         at: ts("2026-11-21T10:05:00Z"),
-        data: SampleData::Counter { growth: 1.0 },
+        data: SampleData::Counter {
+            growth: 1.0,
+            across: None,
+        },
     };
     let at = ts("2026-11-21T10:05:00Z");
     // Codex's second review: other label names each made another `other`.

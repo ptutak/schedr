@@ -23,8 +23,11 @@ use crate::routes::ApiResult;
 use crate::series::range_of;
 use crate::state::ApiState;
 
+pub mod panels;
 #[cfg(test)]
 mod tests;
+
+pub use panels::ExtensionPanelView;
 
 /// An extension, in the list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -178,8 +181,12 @@ pub struct ExtensionMetrics {
     pub from: Timestamp,
     /// Its end.
     pub to: Timestamp,
-    /// Each declared metric.
+    /// Each declared metric, its series summed.
     pub metrics: Vec<ExtensionMetricView>,
+    /// Each page panel drawing a metric, its lines worked out as its functions say (decision
+    /// 516).
+    #[serde(default)]
+    pub panels: Vec<ExtensionPanelView>,
 }
 
 /// Whose events and attempts.
@@ -433,12 +440,20 @@ pub async fn extension_metrics(
     }
     let samples = of_compatible_versions(samples, &versions);
     // Known only by its events: no metrics.
-    let metrics = versions.first().map_or_else(Vec::new, |newest| {
-        metrics_of(
-            &newest.declarations,
-            newest.max_series,
-            &samples,
-            range.bucket_s(),
+    let (metrics, panels) = versions.first().map_or_else(Default::default, |newest| {
+        (
+            metrics_of(
+                &newest.declarations,
+                newest.max_series,
+                &samples,
+                range.bucket_s(),
+            ),
+            panels_of(
+                &newest.declarations,
+                newest.max_series,
+                &samples,
+                range.bucket_s(),
+            ),
         )
     });
     Ok(Json(ExtensionMetrics {
@@ -447,6 +462,7 @@ pub async fn extension_metrics(
         from,
         to,
         metrics,
+        panels,
     }))
 }
 
@@ -532,13 +548,53 @@ pub fn metrics_of(
         .collect()
 }
 
+/// Each of `declarations`' page panels that draws a metric, its lines from `samples`
+/// (decision 516).
+#[must_use]
+pub fn panels_of(
+    declarations: &Declarations,
+    max_series: u32,
+    samples: &[ExtensionSample],
+    bucket_s: u32,
+) -> Vec<ExtensionPanelView> {
+    // Split by metric once (agy's review of M5.2i10: each panel scanned every sample).
+    let mut by_metric: BTreeMap<&str, Vec<&ExtensionSample>> = BTreeMap::new();
+    for sample in samples {
+        by_metric
+            .entry(sample.metric.as_str())
+            .or_default()
+            .push(sample);
+    }
+    page_panels(declarations)
+        .iter()
+        .enumerate()
+        .filter_map(|(index, panel)| {
+            let declared = declarations
+                .metrics
+                .iter()
+                .find(|m| Some(&m.name) == panel.metric.as_ref())?;
+            let mine = by_metric
+                .get(declared.name.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            Some(panels::panel_view(
+                u32::try_from(index).ok()?,
+                panel,
+                declared,
+                mine,
+                max_series,
+                bucket_s,
+            ))
+        })
+        .collect()
+}
+
 type Labels = BTreeMap<String, String>;
 
 /// A sample's weight, to keep the largest series: a counter's growth, a gauge's peak, a
 /// histogram's observations.
 fn weight(sample: &ExtensionSample) -> f64 {
     match &sample.data {
-        SampleData::Counter { growth } => *growth,
+        SampleData::Counter { growth, .. } => *growth,
         SampleData::Gauge { peak, .. } => peak.abs(),
         #[expect(clippy::cast_precision_loss, reason = "a weight, not a figure")]
         SampleData::Histogram { counts, .. } => counts.iter().sum::<u64>() as f64,
@@ -614,7 +670,9 @@ fn points(samples: &[ExtensionSample], bucket_s: u32) -> Vec<ExtensionPointView>
     for sample in samples {
         let bucket = bucket_of(sample.at);
         match &sample.data {
-            SampleData::Gauge { avg, peak, minutes } => {
+            SampleData::Gauge {
+                avg, peak, minutes, ..
+            } => {
                 let at = gauges
                     .entry(bucket)
                     .or_default()
@@ -624,7 +682,7 @@ fn points(samples: &[ExtensionSample], bucket_s: u32) -> Vec<ExtensionPointView>
                 at.1 += peak;
                 at.2 = at.2.max(*minutes);
             }
-            SampleData::Counter { growth } => {
+            SampleData::Counter { growth, .. } => {
                 others.entry(bucket).or_insert_with(|| empty(bucket)).value += growth;
             }
             SampleData::Histogram { counts, sum } => {

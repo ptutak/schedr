@@ -349,8 +349,9 @@ def main(
         metrics: Its metrics' declarations (name, kind, help, unit, labels, buckets), sent in
             its hello; a worker's ``[extensions.<name>] metrics`` wins over them.
         panels: Its page's panels (title, metric, chart, row from 1 at the top, cell: ``full``,
-            ``left``, ``center`` or ``right``), sent in its hello; a metric none shows gets a
-            ``full`` row of its own below them.
+            ``left``, ``center`` or ``right``; how it is drawn: ``point``, ``combine``,
+            ``group_by``, ``limit``), sent in its hello; a metric none shows gets a ``full``
+            row of its own below them.
         argv: The arguments (``sys.argv[1:]`` by default).
         environ: The environment (``os.environ`` by default).
 

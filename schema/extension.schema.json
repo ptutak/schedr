@@ -123,7 +123,7 @@
               "type": "string"
             },
             "panels": {
-              "description": "Its page's panels, raw JSON (title, metric, chart, width, section).",
+              "description": "Its page's panels, raw JSON (title, metric, chart, row, cell; `point`, `combine`,\n`group_by`, `limit`: decision 516).",
               "items": true,
               "type": "array"
             },

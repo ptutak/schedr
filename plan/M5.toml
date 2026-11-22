@@ -565,7 +565,8 @@ scope = '''
 done_when = '''
 each function and its default tested on the API's read (minutes and rollups) and on the page; a gauge read by two workers from one place shows once with `combine: max`; `limit` keeps the largest lines and folds the rest into `other`; the schema and the plugin protocol page agree
 '''
-status = "planned"
+status = "done"
+done = 2026-11-22
 
 [[steps]]
 id = "M5.2i7"

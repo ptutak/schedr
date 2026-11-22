@@ -273,7 +273,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i2 | A Kubernetes plugin, open-source: each task a pod, the extension hole shown on something real | done 2026-11-20 |  |
 | M5.2i5 | Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page | done 2026-11-21 | D513, D514 |
 | M5.2i6 | Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx` | done 2026-11-22 | D519 |
-| M5.2i10 | Chart functions: a panel's point, combine, group_by and limit (decision 516) | planned | D516 |
+| M5.2i10 | Chart functions: a panel's point, combine, group_by and limit (decision 516) | done 2026-11-22 | D516 |
 | M5.2i7 | `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard | planned |  |
 | M5.2i8 | Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED | planned | D515 |
 | M5.2i9 | An extension's service: a long-running process per worker beside its plugins (decision 518) | planned | D518 |

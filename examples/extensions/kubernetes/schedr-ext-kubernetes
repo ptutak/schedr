@@ -293,12 +293,14 @@ METRICS = [
     },
 ]
 PANELS = [
+    # Every worker counts the namespace's pods (decision 516): the highest, not their sum.
     {
         "title": "Pods running",
         "metric": "pods_running",
         "chart": "number",
         "row": 1,
         "cell": "left",
+        "combine": "max",
     },
     {
         "title": "Jobs started",

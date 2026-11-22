@@ -1139,9 +1139,16 @@
             "type": "string"
           },
           "metrics": {
-            "description": "Each declared metric.",
+            "description": "Each declared metric, its series summed.",
             "items": {
               "$ref": "#/components/schemas/ExtensionMetricView"
+            },
+            "type": "array"
+          },
+          "panels": {
+            "description": "Each page panel drawing a metric, its lines worked out as its functions say (decision\n516).",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionPanelView"
             },
             "type": "array"
           },
@@ -1161,6 +1168,39 @@
           "from",
           "to",
           "metrics"
+        ],
+        "type": "object"
+      },
+      "ExtensionPanelView": {
+        "description": "One panel's lines, worked out as its functions say.",
+        "properties": {
+          "folded": {
+            "description": "Whether lines past the metric's series cap or the panel's `limit` were folded into\n`other`.",
+            "type": "boolean"
+          },
+          "index": {
+            "description": "Its place among the extension's page panels (`panels` of the extension's view).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metric": {
+            "description": "The metric it draws.",
+            "type": "string"
+          },
+          "series": {
+            "description": "Its lines: each point's `value` the panel's point (a counter's increase or rate, a\ngauge's last, mean, highest or lowest, a histogram's count or mean); a histogram's\n`counts` and `sum` kept for its quantiles and distribution.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionSeriesView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "index",
+          "metric",
+          "series",
+          "folded"
         ],
         "type": "object"
       },

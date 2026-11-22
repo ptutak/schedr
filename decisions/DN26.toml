@@ -1,0 +1,14 @@
+title = "A gauge's default point is its mean"
+date = 2026-11-22
+by = "user"
+on = "D516"
+kind = "corrects"
+summary = '''
+A gauge's `point` defaults to `mean`, not `last`: over a bucket of many minutes (the 24-hour,
+7-day and 30-day views) a chart keeps showing the minutes' average, as before, and a spike
+between two buckets' ends isn't lost (a side agent's note: `last` showed one reading out of
+each bucket's). A panel still names `last`, `max` or `min`. Values are combined over workers at
+each moment first, then the point taken over the bucket (Claude's, accepted); rollups keep what
+`combine` needs in their sample's data, no new column (Claude's, accepted).
+'''
+history = "JOURNAL.md#DN26"

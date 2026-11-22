@@ -31,7 +31,8 @@ pub enum PluginMessage {
         /// worker keeps them per extension and version, its config's winning.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         metrics: Vec<Value>,
-        /// Its page's panels, raw JSON (title, metric, chart, width, section).
+        /// Its page's panels, raw JSON (title, metric, chart, row, cell; `point`, `combine`,
+        /// `group_by`, `limit`: decision 516).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panels: Vec<Value>,
     },

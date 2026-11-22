@@ -2904,3 +2904,25 @@ queued behind one in flight still reached the worker after the script ended; a p
 held stdin; a command task's last held status was never sent; the stop's reason was noted only
 after the signal. Not tested directly: the early `SIGTERM` passed on and the reason noted first
 (timing).
+
+### <a id="DN26"></a>2026-11-22: A gauge's default point is its mean (decision note 26; corrects D516)
+
+A side agent noted that D516's default `last` would change the longer views: each
+bucket of many minutes showing its last reading, not their average, a spike between bucket ends
+lost. Asked, the user took `mean` (1 B), and accepted the order (values combined at each moment,
+then the point over the bucket) and the rollups' extra values in their data, not new columns.
+
+### 2026-11-22: M5.2i10 done, chart functions (decision 516, DN26)
+
+A panel's `point`, `combine`, `group_by` and `limit`, worked out by the API's metrics read for
+each page panel and drawn by the page; the rollups keep each window's points under every
+combine. The user answered its four open choices (a gauge's default `mean`, DN26; values
+combined at each moment, then the point; the rollups' values in their data; the smaller
+defaults). agy's review: 13 findings. Fixed: an `other` ranked among the named lines (two
+`other`s), the series cap before grouping, rollup means added unweighted, a rollup's highest
+read from values not peaks, an `increase` named on a `rate` chart divided per second, a number
+summing rates and means, a histogram's count shown in its unit, panels renumbered past one left
+out, `other` hidden past the chart's 8 lines, functions accepted on events panels and misplaced
+quantiles, each panel scanning every sample. Left: a counter's `min` and `mean` over workers
+count only those that grew that minute (a minute with no growth isn't sent), the limit the user
+accepted.

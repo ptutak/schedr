@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
-use schedr_db::extension_samples::{ExtensionSample, SampleData};
+use schedr_db::extension_samples::{
+    CounterAcross, ExtensionSample, GaugeAcross, GaugePoints, SampleData,
+};
 use schedr_model::extension::{
     ExtensionEvent, ExtensionFigures, MAX_BUCKETS, MAX_LABEL_VALUE, MAX_METRICS, MAX_TEXT,
     MetricKind, OTHER, check_declarations,
@@ -113,14 +115,10 @@ pub fn minute_samples(
     for metric in &figures.metrics {
         for series in &metric.series {
             let data = match metric.kind {
-                MetricKind::Gauge => Some(SampleData::Gauge {
-                    avg: series.value,
-                    peak: series.value,
-                    minutes: 1,
-                }),
-                MetricKind::Counter => (series.value > 0.0).then_some(SampleData::Counter {
-                    growth: series.value,
-                }),
+                MetricKind::Gauge => Some(SampleData::gauge(series.value)),
+                MetricKind::Counter => {
+                    (series.value > 0.0).then_some(SampleData::counter(series.value))
+                }
                 MetricKind::Histogram => {
                     series
                         .counts
@@ -295,18 +293,58 @@ pub fn rolled_up(minutes: &[ExtensionSample], at: Timestamp) -> Vec<ExtensionSam
         .collect()
 }
 
+/// Each minute's values of `samples`, oldest first: one per worker.
+fn per_minute(
+    samples: &[&ExtensionSample],
+    value: impl Fn(&SampleData) -> Option<f64>,
+) -> BTreeMap<Timestamp, Vec<f64>> {
+    let mut by_minute: BTreeMap<Timestamp, Vec<f64>> = BTreeMap::new();
+    for sample in samples {
+        if let Some(v) = value(&sample.data) {
+            by_minute.entry(sample.at).or_default().push(v);
+        }
+    }
+    by_minute
+}
+
+fn sum(values: &[f64]) -> f64 {
+    values.iter().sum()
+}
+
+fn highest(values: &[f64]) -> f64 {
+    values.iter().copied().reduce(f64::max).unwrap_or_default()
+}
+
+fn lowest(values: &[f64]) -> f64 {
+    values.iter().copied().reduce(f64::min).unwrap_or_default()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    #[expect(clippy::cast_precision_loss, reason = "a few workers or minutes")]
+    let n = values.len().max(1) as f64;
+    sum(values) / n
+}
+
 /// One series' samples, of one kind, as one.
 fn roll(samples: &[&ExtensionSample]) -> Option<SampleData> {
     match &samples.first()?.data {
-        SampleData::Counter { .. } => Some(SampleData::Counter {
-            growth: samples
-                .iter()
-                .filter_map(|s| match s.data {
-                    SampleData::Counter { growth } => Some(growth),
-                    _ => None,
-                })
-                .sum(),
-        }),
+        SampleData::Counter { .. } => {
+            // Each minute's growth over workers, combined four ways, summed over the window
+            // (decision 516: `combine` on the 7- and 30-day views).
+            let by_minute = per_minute(samples, |data| match data {
+                SampleData::Counter { growth, .. } => Some(*growth),
+                _ => None,
+            });
+            let over = |combine: fn(&[f64]) -> f64| by_minute.values().map(|v| combine(v)).sum();
+            Some(SampleData::Counter {
+                growth: over(sum),
+                across: Some(CounterAcross {
+                    max: over(highest),
+                    min: over(lowest),
+                    mean: over(mean),
+                }),
+            })
+        }
         SampleData::Gauge { .. } => {
             // Each minute's average and peak summed over workers; the window's peak the highest
             // of the minutes' peaks (Codex's second review: read from the averages, a minute's
@@ -323,7 +361,39 @@ fn roll(samples: &[&ExtensionSample]) -> Option<SampleData> {
             #[expect(clippy::cast_precision_loss, reason = "at most 15 minutes")]
             let avg = by_minute.values().map(|m| m.0).sum::<f64>() / by_minute.len().max(1) as f64;
             let peak = by_minute.values().map(|m| m.1).fold(f64::MIN, f64::max);
-            Some(SampleData::Gauge { avg, peak, minutes })
+            // And each minute's readings combined four ways, each with its points over the
+            // window (decision 516).
+            let readings = per_minute(samples, |data| match data {
+                SampleData::Gauge { avg, .. } => Some(*avg),
+                _ => None,
+            });
+            // The highest from the minutes' peaks, as `peak` is (agy's review of M5.2i10: read
+            // from their values, a 7-day `max` fell below the day's).
+            let peaks = per_minute(samples, |data| match data {
+                SampleData::Gauge { peak, .. } => Some(*peak),
+                _ => None,
+            });
+            let points = |combine: fn(&[f64]) -> f64| {
+                let values: Vec<f64> = readings.values().map(|v| combine(v)).collect();
+                let tops: Vec<f64> = peaks.values().map(|v| combine(v)).collect();
+                GaugePoints {
+                    last: values.last().copied().unwrap_or_default(),
+                    mean: mean(&values),
+                    max: highest(&tops),
+                    min: lowest(&values),
+                }
+            };
+            Some(SampleData::Gauge {
+                avg,
+                peak,
+                minutes,
+                across: Some(Box::new(GaugeAcross {
+                    sum: points(sum),
+                    max: points(highest),
+                    min: points(lowest),
+                    mean: points(mean),
+                })),
+            })
         }
         SampleData::Histogram { counts, .. } => {
             let mut total = vec![0_u64; counts.len()];

@@ -3487,6 +3487,7 @@ async fn extension_versions_and_samples_are_kept_and_read_back() {
             avg: 1.5,
             peak: 2.0,
             minutes: 1,
+            across: None,
         },
     };
     db.insert_extension_samples(&[sample.clone(), sample.clone()])
