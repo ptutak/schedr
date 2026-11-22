@@ -216,7 +216,52 @@ pub struct Group {
     pub parent: Option<String>,
 }
 
+/// How a DAG's code listens for an event's name (DN18, M5.2i8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listens {
+    /// Its trigger: `EventNamed`, or `@trigger(wait_for=EventNamed(...))`.
+    Trigger,
+    /// A wait step of its graph: `wait_for(EventNamed(...))` or `@sensor(wait_for=...)`.
+    WaitStep,
+}
+
+/// The event an `@sensor`/`@trigger(wait_for=EventNamed(...))` task waits for, if any.
+fn sensor_event(task: &Task) -> Option<&str> {
+    match &task.kind {
+        crate::task::TaskKind::Sensor {
+            wait_for: Some(wait_for),
+            ..
+        } => match wait_for.source() {
+            Some(crate::task::WaitSource::Event(event)) => Some(event.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 impl Dag {
+    /// Whether, and how, its code listens for events named `name` (DN18): its trigger first,
+    /// then any wait step; whatever its runs are doing now.
+    #[must_use]
+    pub fn listens_for(&self, name: &str) -> Option<Listens> {
+        let trigger = match &self.trigger {
+            Trigger::EventNamed { event } => event.name.as_str() == name,
+            Trigger::Event { task, .. } => sensor_event(task) == Some(name),
+            _ => false,
+        };
+        if trigger {
+            return Some(Listens::Trigger);
+        }
+        self.tasks
+            .iter()
+            .any(|task| {
+                sensor_event(task) == Some(name)
+                    || matches!(&task.kind, crate::task::TaskKind::WaitForEvent { event, .. }
+                        if event.name.as_str() == name)
+            })
+            .then_some(Listens::WaitStep)
+    }
+
     /// The task with the given ID.
     #[must_use]
     pub fn task(&self, id: &TaskId) -> Option<&Task> {

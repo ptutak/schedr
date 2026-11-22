@@ -125,16 +125,25 @@ impl From<schedr_db::DbError> for Unsent {
     }
 }
 
-/// The body of a task's own notification.
+/// Where a notification goes: a channel a task names, or the DAG's channels subscribed to
+/// `EXTENSION_EVENT` for a plugin's declared event (M5.2i8).
+#[derive(Debug)]
+enum NotifyTo {
+    Channel(String),
+    ExtensionEvent(String),
+}
+
+/// The body of a task's own notification, or of its plugin's event.
 #[derive(Debug)]
 struct NotifyRequest {
-    channel: String,
+    to: NotifyTo,
     text: Option<String>,
     data: serde_json::Value,
 }
 
 impl NotifyRequest {
-    /// `{"channel": "...", "text": "..." | null, "data": ...}`, nothing else.
+    /// `{"channel": "...", "text": "..." | null, "data": ...}`, or `extension_event` in place of
+    /// `channel` (its worker's form of a plugin's `notify`), nothing else.
     fn read(body: &[u8]) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
         let serde_json::Value::Object(mut map) = value else {
@@ -142,12 +151,14 @@ impl NotifyRequest {
         };
         if let Some(key) = map
             .keys()
-            .find(|k| !matches!(k.as_str(), "channel" | "text" | "data"))
+            .find(|k| !matches!(k.as_str(), "channel" | "extension_event" | "text" | "data"))
         {
             return Err(format!("unknown field `{key}`"));
         }
-        let Some(serde_json::Value::String(channel)) = map.remove("channel") else {
-            return Err("`channel` is a channel's name".to_owned());
+        let to = match (map.remove("channel"), map.remove("extension_event")) {
+            (Some(serde_json::Value::String(channel)), None) => NotifyTo::Channel(channel),
+            (None, Some(serde_json::Value::String(event))) => NotifyTo::ExtensionEvent(event),
+            _ => return Err("`channel` is a channel's name".to_owned()),
         };
         let text = match map.remove("text") {
             None | Some(serde_json::Value::Null) => None,
@@ -155,11 +166,7 @@ impl NotifyRequest {
             Some(_) => return Err("`text` is a string".to_owned()),
         };
         let data = map.remove("data").unwrap_or(serde_json::Value::Null);
-        Ok(Self {
-            channel,
-            text,
-            data,
-        })
+        Ok(Self { to, text, data })
     }
 }
 
@@ -168,6 +175,38 @@ fn refusal(why: &str) -> Vec<u8> {
 }
 
 impl MasterCore {
+    /// What a plugin's event (M5.2i8) queues: to each channel of `event`'s DAG subscribed to
+    /// `EXTENSION_EVENT` (DN20), its extension, version and `name` in its details. Only an
+    /// extension task's plugin, through its worker (which checked the event is declared), tells
+    /// of one: none for another task.
+    fn extension_event(
+        &self,
+        event: &mut crate::notifications::Event<'_>,
+        task_id: &schedr_model::TaskId,
+        name: &str,
+    ) -> Option<Vec<schedr_db::notifications::NewNotification>> {
+        let (extension, version) =
+            event
+                .dag
+                .tasks
+                .iter()
+                .find(|t| &t.id == task_id)
+                .and_then(|t| match &t.kind {
+                    schedr_model::TaskKind::Extension { name, version, .. } => {
+                        Some((name.clone(), version.clone()))
+                    }
+                    _ => None,
+                })?;
+        event.details = serde_json::json!({
+            "extension": extension, "version": version, "event": name,
+        });
+        Some(self.notifications.queued(
+            event,
+            schedr_model::notify::NotifyEvent::ExtensionEvent,
+            &self.metrics,
+        ))
+    }
+
     /// A task's request through its worker, run here (the core's callers that hold no lock
     /// across it; the hub runs [`Self::plan_api_call`]'s job outside its lock).
     pub(crate) async fn api_call(
@@ -304,9 +343,22 @@ impl MasterCore {
             .run_record(&attempt.run_id)
             .await?
             .map(|r| r.planned_for);
-        let queued = match self.notifications.message(&event, &request.channel) {
-            Ok(queued) => queued,
-            Err(why) => return Ok((400, refusal(&why))),
+        let queued = match &request.to {
+            NotifyTo::Channel(channel) => match self.notifications.message(&event, channel) {
+                Ok(queued) => vec![queued],
+                Err(why) => return Ok((400, refusal(&why))),
+            },
+            NotifyTo::ExtensionEvent(name) => {
+                match self.extension_event(&mut event, &attempt.task_id, name) {
+                    Some(queued) => queued,
+                    None => {
+                        return Ok((
+                            403,
+                            refusal("only an extension's plugin tells of an extension's event"),
+                        ));
+                    }
+                }
+            }
         };
         let max = self.notifications.max_per_attempt;
         let db = &self.db;
@@ -321,8 +373,7 @@ impl MasterCore {
             if !db.count_attempt_notification(&attempt.id, max).await? {
                 return Err(Unsent::OverQuota);
             }
-            db.queue_notifications(std::slice::from_ref(&queued), now)
-                .await?;
+            db.queue_notifications(&queued, now).await?;
             Ok(())
         }))
         .await;

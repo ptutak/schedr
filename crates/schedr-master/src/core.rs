@@ -33,6 +33,7 @@ use crate::parse_jobs::{PARSE_JOB_TIMEOUT, ParseAssignment, ParseJobs, ParseKey}
 use crate::quiet::{QuietSettings, Wakes};
 use crate::scheduler::{Scheduler, SchedulerError};
 
+pub mod announce;
 pub mod round;
 pub mod task_api;
 pub(crate) mod triggers;
@@ -2083,7 +2084,10 @@ impl MasterCore {
             self.forget(in_round, &worker_id, WorkerState::Lost, now, outgoing)
                 .await?;
         }
-        Ok(())
+        // The runs started and the events posted since, announced (RUN_STARTED, EVENT_POSTED,
+        // M5.2i8).
+        self.announce_runs(now).await?;
+        self.announce_events(now).await
     }
 
     /// A worker uploads a parse result (unary call).

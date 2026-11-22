@@ -12,4 +12,4 @@ A trigger's next call waits for a failed call's threads to stop, within the canc
 history = "archive/PROJECT.md#D337"
 step = "M4.11a2"
 code = ["crates/schedr-model/src/runner.rs", "python/schedr/runner/waiting.py", "python/schedr/runner/watchers.py::_ThreadCall"]
-checked = 2026-11-21
+checked = 2026-11-22

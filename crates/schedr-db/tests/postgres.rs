@@ -3508,3 +3508,101 @@ async fn extension_versions_and_samples_are_kept_and_read_back() {
     assert_eq!(all.len(), 1);
     assert_eq!(db.delete_old_extension_samples(60, later).await.unwrap(), 1);
 }
+
+/// M5.2i8: what the round announces, on Postgres: a run started (`RUN_STARTED`) once, an event
+/// posted (`EVENT_POSTED`) once, a repeated key too; a queued run cancelled before it started
+/// never.
+#[tokio::test]
+async fn started_runs_and_posted_events_are_announced_once() {
+    let db = fresh().await;
+    let files = files();
+    let parse_id = db
+        .insert_parse(&NewParse {
+            root: "etl",
+            content_hash: "sha256:h1",
+            schedr_version: "1.0.0",
+            worker_id: "w1",
+            parsed_at: ts(NOW),
+            files: &files,
+        })
+        .await
+        .unwrap();
+    let mut listening = dag();
+    listening.trigger =
+        serde_json::from_value(json!({"kind": "event_named", "event": {"name": "paid"}})).unwrap();
+    db.apply_dag_changes(
+        &[DagChange::Define {
+            dag: Box::new(listening),
+            parse_id,
+            pause: false,
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    // A new trigger starts paused: live from now on.
+    assert!(db.set_paused_at(&sync(), false, ts(NOW)).await.unwrap());
+    let run_id = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Running,
+            "2026-10-21T01:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    db.insert_run(&run(
+        &version,
+        RunKind::Manual,
+        RunState::Queued,
+        "2026-10-21T02:00:00Z",
+    ))
+    .await
+    .unwrap();
+    // Cancelled while queued, it never started: never announced (agy's review of M5.2i8).
+    let cancelled = db
+        .insert_run(&run(
+            &version,
+            RunKind::Manual,
+            RunState::Queued,
+            "2026-10-21T03:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    db.finish_run(&cancelled, RunState::Cancelled, ts(NOW))
+        .await
+        .unwrap();
+    let started = db.unannounced_runs(10).await.unwrap();
+    assert_eq!(started.len(), 1, "a queued run waits: {started:?}");
+    assert_eq!(
+        (started[0].id.as_str(), started[0].kind),
+        (run_id.as_str(), RunKind::Manual)
+    );
+    db.mark_announced(&[run_id]).await.unwrap();
+    assert_eq!(db.unannounced_runs(10).await.unwrap().len(), 0);
+
+    let later = ts(NOW)
+        .checked_add(jiff::SignedDuration::from_secs(60))
+        .unwrap();
+    // A second apart: posts in one moment are ordered by ID, as the trigger's pass orders them.
+    for seconds in [0, 1] {
+        let at = later
+            .checked_add(jiff::SignedDuration::from_secs(seconds))
+            .unwrap();
+        let event = schedr_db::named_events::NewNamedEvent {
+            name: "paid",
+            key: "o-1",
+            data: &json!({}),
+            at,
+        };
+        db.post_named_event(&event, "anna", None, at).await.unwrap();
+    }
+    let posted = db.unannounced_named_events(10).await.unwrap();
+    assert_eq!(posted.len(), 2);
+    let ids: Vec<String> = posted.into_iter().map(|e| e.id).collect();
+    db.mark_events_announced(&ids).await.unwrap();
+    assert_eq!(db.unannounced_named_events(10).await.unwrap().len(), 0);
+}

@@ -474,6 +474,7 @@ impl Notifications {
             (Placeholder::Time, Value::String(event.time.to_string())),
             (Placeholder::Zone, Value::String(zone(event.dag).to_owned())),
             (Placeholder::Data, event.data.clone()),
+            (Placeholder::Details, event.details.clone()),
         ])
     }
 }
@@ -499,8 +500,11 @@ pub struct Event<'a> {
     pub error: Option<String>,
     /// A task's own text (`send`); none: schedr's summary.
     pub text: Option<String>,
-    /// A task's own data (`send`); null otherwise.
+    /// A task's own data (`send`), a plugin's (an extension event); null otherwise.
     pub data: Value,
+    /// The event's own facts (DN28): a run's reason, a posted event, an extension's event; null
+    /// otherwise.
+    pub details: Value,
     /// When it happened.
     pub time: Timestamp,
 }
@@ -520,6 +524,7 @@ impl<'a> Event<'a> {
             error: None,
             text: None,
             data: Value::Null,
+            details: Value::Null,
             time,
         }
     }
@@ -629,6 +634,40 @@ fn summary(event: &Event<'_>, name: &str) -> String {
             "DAG `{dag}`: a cleanup of task `{task}` failed after run {run} succeeded; handles \
              may be left behind{error}"
         ),
+        Some(NotifyEvent::RunStarted) => {
+            let reason = event
+                .details
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            format!("DAG `{dag}`: run {run} started ({reason})")
+        }
+        Some(NotifyEvent::EventPosted) => {
+            let posted = event
+                .details
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let key = event
+                .details
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            format!("DAG `{dag}`: event `{posted}` ({key}) was posted")
+        }
+        Some(NotifyEvent::ExtensionEvent) => {
+            let extension = event
+                .details
+                .get("extension")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let name = event
+                .details
+                .get("event")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            format!("DAG `{dag}`: extension `{extension}` told of `{name}` in task `{task}`")
+        }
         None => format!("DAG `{dag}`: a message from task `{task}`"),
     }
 }
@@ -641,11 +680,12 @@ fn first_line(text: &str) -> &str {
     }
 }
 
-/// schedr's fixed JSON (decision 412): every value, `data` only when set.
+/// schedr's fixed JSON (decision 412): every value, `data` and `details` only when set (an
+/// earlier event's body unchanged, DN28).
 fn fixed(vars: &Vars) -> Value {
     let mut out = Map::new();
     for (placeholder, value) in vars {
-        if *placeholder == Placeholder::Data && value.is_null() {
+        if matches!(placeholder, Placeholder::Data | Placeholder::Details) && value.is_null() {
             continue;
         }
         out.insert(placeholder.name().to_owned(), value.clone());
@@ -905,6 +945,11 @@ fn email_json(happened: &Event<'_>, event: &str, vars: &Vars) -> Value {
                     .map_or("(no error recorded)", first_line)
             );
         }
+    }
+    // The event's own facts (DN28): an email has no template to place them (agy's review).
+    if !happened.details.is_null() {
+        let details = serde_json::to_string_pretty(&happened.details).unwrap_or_default();
+        let _ = write!(text, "\nDetails:\n{details}\n");
     }
     if !happened.data.is_null() {
         let data = serde_json::to_string_pretty(&happened.data).unwrap_or_default();

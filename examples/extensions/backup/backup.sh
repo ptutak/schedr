@@ -9,6 +9,7 @@
 #   versions = ["1.0"]
 #   metrics  = [{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]
 #   panels   = [{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]
+#   notifications = [{name = "backup_done", help = "A backup's snapshot was taken"}]
 #
 # and use it in a DAG:
 #
@@ -60,4 +61,7 @@ case "$payload" in
 esac
 
 schedr task-ctx status "done" --progress 1
+# Told to the DAG's channels subscribed to EXTENSION_EVENT (M5.2i8).
+schedr task-ctx extension notify backup_done --text "snapshot $snapshot taken" \
+    --data "{\"snapshot\": \"$snapshot\"}"
 schedr task-ctx extension output set "{\"snapshot\": \"$snapshot\", \"files\": 3}"

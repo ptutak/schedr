@@ -33,13 +33,14 @@ to = ["oncall@example.com", "ops@example.com"]
 
 `ui_url` supplies links; without it they are null. `default_events` applies when a DAG
 lists a channel without events. `give_up_after` limits retries, `timeout` limits one delivery,
-and `max_per_attempt` limits a task's own sends. `ca_file` adds PEM CAs to the system's
+and `max_per_attempt` limits a task's own sends, its extension plugin's events counted with them. `ca_file` adds PEM CAs to the system's
 trust roots for webhooks and the mail server. The defaults are `RUN_FAILED`, 24 h, 10 s
 and 100 sends per attempt. `ui_url` and `ca_file` are unset, `dag_urls` and the channel
 list are empty, and no SMTP host is configured. All server channels are available by
 name to every DAG.
 
-A server webhook posts the fixed JSON if `body` is absent. In a configured body, strings
+A server webhook posts the fixed JSON if `body` is absent: every placeholder's value, `data` and
+`details` only when set. In a configured body, strings
 may contain `"{name}"` placeholders from the [table](../02-dags/24-notifications.md#bodies);
 `{{` writes a literal opening brace. A bare placeholder preserves its JSON type. The body is
 parsed at startup. Header values come only from the environment variables named in

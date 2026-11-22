@@ -27,6 +27,24 @@ A dict chooses events for each channel. This example also defines webhooks in th
 | `TASK_RETRY` | An attempt fails and will be retried. |
 | `TRIGGER_FAILING` | A trigger has `[triggers] failing_after` errors in a row, or its generator returns. |
 | `LATE_CLEANUP_FAILED` | Cleanup after the run ended fails. |
+| `RUN_STARTED` | A run starts, however it was started; `notify.details["reason"]` says how. |
+| `EVENT_POSTED` | An event the DAG's code listens for is posted: its `EventNamed` trigger or `@trigger(wait_for=...)`, or any wait step (`wait_for(EventNamed(...))`, `@sensor(wait_for=...)`), whether or not a run waits now. |
+| `EXTENSION_EVENT` | A plugin of one of the DAG's extension tasks sends one of its declared events. |
+
+The last three carry their own facts in `notify.details`, an object (null for the other events
+and a task's own sends):
+
+| Event | `notify.details` |
+|---|---|
+| `RUN_STARTED` | `reason`: `schedule`; `manual` with `by`, who; `backfill` with its `backfill`, `from` and `to`; `trigger` with the event's `key`; or `chain` with `via` (`triggered` for a `TriggerDagOperator`, `run_of` for a `RunOf`) and the upstream `dag` and `run` (`task` is null: the run doesn't keep it). |
+| `EVENT_POSTED` | the event's `name` and `key`, `posted_by` and `listens` (`trigger` or `wait_step`): that it occurred, a repeated key too. Whether it starts a run isn't said: that run's `RUN_STARTED` says so. The event's data isn't included. |
+| `EXTENSION_EVENT` | the `extension`, its `version` and the declared `event`; the plugin's text and data are `notify.text` and `notify.data`. |
+
+A run is told of once when it starts running, and a queued run when it leaves the queue.
+`EVENT_POSTED` comes once per post, a paused DAG's trigger told too; `RUN_STARTED` follows when
+the post starts a run. The master
+announces both within a second, a restart included. `EXTENSION_EVENT` counts toward
+`[notifications] max_per_attempt` with the task's own sends.
 
 A `WebhookChannel` posts JSON to its URL, which must be within the operator's
 `[notifications] dag_urls`. Keep secrets out of the URL: it is in the DAG file and its
@@ -82,7 +100,8 @@ or seeing task secrets.
 | `notify.attempt` | Attempt number for task events and sends, or null. |
 | `notify.time` | Event time in UTC (RFC 3339). |
 | `notify.zone` | DAG's time zone. |
-| `notify.data` | Task send's JSON data, or null for events. |
+| `notify.data` | Task send's or plugin event's JSON data, or null for other events. |
+| `notify.details` | The event's own facts (above) for `RUN_STARTED`, `EVENT_POSTED` and `EXTENSION_EVENT`, or null. |
 
 Without a body, `schedr` posts an object with all these fields by name, except `data` is
 omitted when null. Its top-level `text` works with Slack and Mattermost incoming webhooks.

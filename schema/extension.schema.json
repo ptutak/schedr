@@ -122,6 +122,11 @@
               "description": "Always `extension`.",
               "type": "string"
             },
+            "notifications": {
+              "description": "Its notification events, raw JSON (name, help: M5.2i8).",
+              "items": true,
+              "type": "array"
+            },
             "panels": {
               "description": "Its page's panels, raw JSON (title, metric, chart, row, cell; `point`, `combine`,\n`group_by`, `limit`: decision 516).",
               "items": true,
@@ -346,6 +351,34 @@
           "required": [
             "type",
             "points"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One of its declared notification events (M5.2i8), told to the channels of the attempt's\nDAG subscribed to `EXTENSION_EVENT`. No answer: an undeclared one is dropped by the\nworker with a warning.",
+          "properties": {
+            "data": {
+              "description": "More about it, JSON."
+            },
+            "event": {
+              "description": "The declared event's name.",
+              "type": "string"
+            },
+            "text": {
+              "description": "What happened, one line; none: schedr's summary.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "notify",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event"
           ],
           "type": "object"
         },

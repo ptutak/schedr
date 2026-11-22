@@ -564,6 +564,21 @@
           "const": "LATE_CLEANUP_FAILED",
           "description": "A cleanup that ran after its run had ended failed (decision 309).",
           "type": "string"
+        },
+        {
+          "const": "RUN_STARTED",
+          "description": "A run started, however: its `reason` in `details` (DN18).",
+          "type": "string"
+        },
+        {
+          "const": "EVENT_POSTED",
+          "description": "An event the DAG listens for was posted: its name and key in `details`, not its data\n(DN18, DN28).",
+          "type": "string"
+        },
+        {
+          "const": "EXTENSION_EVENT",
+          "description": "A plugin of one of the DAG's extension tasks sent one of its declared events: the\nextension, version and event in `details`, the plugin's text and data (decision 515,\nDN20).",
+          "type": "string"
         }
       ]
     },
@@ -740,7 +755,12 @@
         },
         {
           "const": "data",
-          "description": "A task's own `send`: its `data`; null in event notifications.",
+          "description": "A task's own `send`: its `data`; a plugin's event: its `data`; null in the other event\nnotifications.",
+          "type": "string"
+        },
+        {
+          "const": "details",
+          "description": "The event's own facts (DN28): `RUN_STARTED`'s reason, `EVENT_POSTED`'s posted event,\n`EXTENSION_EVENT`'s extension; null for the other events and a task's `send`.",
           "type": "string"
         }
       ]

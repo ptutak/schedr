@@ -743,6 +743,18 @@ pub enum ExtensionCtxCommand {
         #[arg(long = "label", value_name = "NAME=VALUE")]
         labels: Vec<String>,
     },
+    /// One of the extension's declared notification events (M5.2i8): only in a shell plugin;
+    /// told to the channels of the attempt's DAG subscribed to `EXTENSION_EVENT`.
+    Notify {
+        /// The declared event (`[extensions.<name>] notifications`).
+        event: String,
+        /// What happened (the `text` placeholder; schedr's summary otherwise).
+        #[arg(long)]
+        text: Option<String>,
+        /// More about it (the `data` placeholder): JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON")]
+        data: Option<String>,
+    },
     /// Why the task is being stopped, after `SIGTERM`: only in a shell plugin (decision 519, DN27).
     /// Prints `{"reason": ..., "seconds_left": ...}`; the reason is `cancel`, `timeout`,
     /// `drain`, `master_lost`, or null while it isn't stopped.

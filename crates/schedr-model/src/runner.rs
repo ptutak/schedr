@@ -247,6 +247,9 @@ pub enum RunnerMessage {
         /// A plugin's page's panels (`extension` mode).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panels: Vec<crate::extension::Panel>,
+        /// A plugin's notification events (`extension` mode, M5.2i8).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notifications: Vec<crate::extension::NotificationDeclaration>,
     },
     /// The runner starts importing a file (the agent times each file).
     FileStarted {
@@ -350,6 +353,19 @@ pub enum RunnerMessage {
     Metrics {
         /// The points.
         points: Vec<crate::extension::MetricPoint>,
+    },
+    /// One of the extension's declared notification events (decision 515, M5.2i8): told to the
+    /// channels of the attempt's DAG subscribed to `EXTENSION_EVENT`. No answer: an undeclared
+    /// one is dropped with a warning.
+    Notify {
+        /// The declared event's name.
+        event: String,
+        /// What happened, one line; none: schedr's summary.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// More about it, JSON.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
     },
     /// The task failed: an exception, or an output that can't be stored.
     TaskFailed {

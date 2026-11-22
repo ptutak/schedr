@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 /// The most metrics one extension declares.
 pub const MAX_METRICS: usize = 50;
+/// The most notification events a plugin declares (M5.2i8).
+pub const MAX_NOTIFICATIONS: usize = 50;
 /// The most panels one extension's page has.
 pub const MAX_PANELS: usize = 150;
 /// The most labels one metric has.
@@ -347,7 +349,18 @@ pub fn row_cells(cells: &[Cell]) -> Result<u8, String> {
     Ok(if seen.contains(&Cell::Center) { 3 } else { 2 })
 }
 
-/// What a plugin declares for its metrics and its page.
+/// A notification event a plugin may send (decision 515, M5.2i8): told to the channels of the
+/// attempt's DAG subscribed to `EXTENSION_EVENT`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeclaration {
+    /// Its name, as `notify` sends it: a lowercase identifier (`image_pull_failed`).
+    pub name: String,
+    /// What it tells of, for the extension's page.
+    pub help: String,
+}
+
+/// What a plugin declares for its metrics, its page and its notifications.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Declarations {
@@ -357,6 +370,9 @@ pub struct Declarations {
     /// Its page's panels; a metric none shows gets a `full` row below them ([`page_panels`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panels: Vec<Panel>,
+    /// The notification events it may send (M5.2i8).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<NotificationDeclaration>,
 }
 
 /// One point a plugin reports.
@@ -477,6 +493,20 @@ pub fn check_declarations(declarations: &Declarations) -> Result<(), String> {
         return Err(format!(
             "at most {MAX_METRICS} metrics and {MAX_PANELS} panels"
         ));
+    }
+    if declarations.notifications.len() > MAX_NOTIFICATIONS {
+        return Err(format!("at most {MAX_NOTIFICATIONS} notifications"));
+    }
+    let mut events = BTreeSet::new();
+    for event in &declarations.notifications {
+        check_name("notification", &event.name)?;
+        check_text(
+            &format!("notification `{}`'s help", event.name),
+            &event.help,
+        )?;
+        if !events.insert(event.name.as_str()) {
+            return Err(format!("notification `{}` declared twice", event.name));
+        }
     }
     let mut kinds = BTreeMap::new();
     for metric in &declarations.metrics {
@@ -701,8 +731,10 @@ pub enum EventKind {
     /// Its plugin's `hello` refused: a protocol the worker doesn't speak.
     Refused,
     /// Something it declared or sent dropped: declarations that can't be used, a metric point
-    /// they don't allow.
+    /// they don't allow, a notification it didn't declare.
     Dropped,
+    /// Its plugin sent one of its declared notifications (DN19, M5.2i8).
+    Notified,
 }
 
 impl EventKind {
@@ -714,6 +746,7 @@ impl EventKind {
             Self::Skipped => "skipped",
             Self::Refused => "refused",
             Self::Dropped => "dropped",
+            Self::Notified => "notified",
         }
     }
 
@@ -725,6 +758,7 @@ impl EventKind {
             "skipped" => Self::Skipped,
             "refused" => Self::Refused,
             "dropped" => Self::Dropped,
+            "notified" => Self::Notified,
             _ => return None,
         })
     }

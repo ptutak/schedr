@@ -62,6 +62,7 @@ fn a_task_asks_the_worker_and_ends_with_its_output() {
             protocol: PROTOCOL,
             metrics: Vec::new(),
             panels: Vec::new(),
+            notifications: Vec::new(),
         }
     );
     write_agent(&mut worker, &WorkerMessage::Welcome);

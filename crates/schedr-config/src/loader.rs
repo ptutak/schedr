@@ -862,6 +862,7 @@ fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), Co
         schedr_model::extension::check_declarations(&schedr_model::extension::Declarations {
             metrics: plugin.metrics.clone(),
             panels: plugin.panels.clone(),
+            notifications: plugin.notifications.clone(),
         })
         .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
         if plugin.max_series == 0 {

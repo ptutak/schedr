@@ -11,5 +11,5 @@ remain constants (the client's became hidden timings with decision 493).
 '''
 history = "archive/PROJECT.md#D241"
 step = "M4.8u"
-checked = 2026-11-21
+checked = 2026-11-22
 code = ["crates/schedr-config/src/config.rs::gauge_refresh", "crates/schedr-config/src/config.rs::loop_stall_timeout"]

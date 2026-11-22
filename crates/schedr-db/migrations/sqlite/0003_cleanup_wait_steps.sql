@@ -77,8 +77,17 @@ CREATE TABLE extension_events (
     name       TEXT NOT NULL,
     worker_id  TEXT NOT NULL,
     version    TEXT NOT NULL,
-    kind       TEXT NOT NULL CHECK (kind IN ('discovered', 'skipped', 'refused', 'dropped')),
+    kind       TEXT NOT NULL CHECK (kind IN ('discovered', 'skipped', 'refused', 'dropped', 'notified')),
     at         TEXT NOT NULL,
     message    TEXT NOT NULL
 );
 CREATE INDEX extension_events_name ON extension_events (name, at);
+-- Whether a run's RUN_STARTED was queued (M5.2i8, DN18): the round announces each run running
+-- and not yet announced. Runs stored before this migration count as announced: an upgrade
+-- tells of no run already going.
+ALTER TABLE runs ADD COLUMN announced INTEGER NOT NULL DEFAULT 1 CHECK (announced IN (0, 1));
+CREATE INDEX runs_unannounced ON runs (started_at, id) WHERE announced = 0 AND started_at IS NOT NULL;
+-- Whether a posted event's EVENT_POSTED was queued (M5.2i8, DN18): the round announces each to
+-- the DAGs listening for its name. Events posted before this migration count as announced.
+ALTER TABLE named_events ADD COLUMN announced INTEGER NOT NULL DEFAULT 1 CHECK (announced IN (0, 1));
+CREATE INDEX named_events_unannounced ON named_events (posted_at, id) WHERE announced = 0;

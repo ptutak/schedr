@@ -1954,6 +1954,25 @@
         }
       ]
     },
+    "NotificationDeclaration": {
+      "additionalProperties": false,
+      "description": "A notification event a plugin may send (decision 515, M5.2i8): told to the channels of the\nattempt's DAG subscribed to `EXTENSION_EVENT`.",
+      "properties": {
+        "help": {
+          "description": "What it tells of, for the extension's page.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name, as `notify` sends it: a lowercase identifier (`image_pull_failed`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "help"
+      ],
+      "type": "object"
+    },
     "NotifyEntry": {
       "additionalProperties": false,
       "description": "One channel a DAG notifies (`notify=[...]` or `notify={channel: [...]}`).",
@@ -2019,6 +2038,21 @@
         {
           "const": "LATE_CLEANUP_FAILED",
           "description": "A cleanup that ran after its run had ended failed (decision 309).",
+          "type": "string"
+        },
+        {
+          "const": "RUN_STARTED",
+          "description": "A run started, however: its `reason` in `details` (DN18).",
+          "type": "string"
+        },
+        {
+          "const": "EVENT_POSTED",
+          "description": "An event the DAG listens for was posted: its name and key in `details`, not its data\n(DN18, DN28).",
+          "type": "string"
+        },
+        {
+          "const": "EXTENSION_EVENT",
+          "description": "A plugin of one of the DAG's extension tasks sent one of its declared events: the\nextension, version and event in `details`, the plugin's text and data (decision 515,\nDN20).",
           "type": "string"
         }
       ]
@@ -2316,7 +2350,12 @@
         },
         {
           "const": "data",
-          "description": "A task's own `send`: its `data`; null in event notifications.",
+          "description": "A task's own `send`: its `data`; a plugin's event: its `data`; null in the other event\nnotifications.",
+          "type": "string"
+        },
+        {
+          "const": "details",
+          "description": "The event's own facts (DN28): `RUN_STARTED`'s reason, `EVENT_POSTED`'s posted event,\n`EXTENSION_EVENT`'s extension; null for the other events and a task's `send`.",
           "type": "string"
         }
       ]
@@ -2855,6 +2894,13 @@
               "$ref": "#/$defs/RunnerMode",
               "description": "The mode the runner was started in."
             },
+            "notifications": {
+              "description": "A plugin's notification events (`extension` mode, M5.2i8).",
+              "items": {
+                "$ref": "#/$defs/NotificationDeclaration"
+              },
+              "type": "array"
+            },
             "panels": {
               "description": "A plugin's page's panels (`extension` mode).",
               "items": {
@@ -3210,6 +3256,35 @@
           "required": [
             "type",
             "points"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One of the extension's declared notification events (decision 515, M5.2i8): told to the\nchannels of the attempt's DAG subscribed to `EXTENSION_EVENT`. No answer: an undeclared\none is dropped with a warning.",
+          "properties": {
+            "data": {
+              "description": "More about it, JSON."
+            },
+            "event": {
+              "description": "The declared event's name.",
+              "type": "string"
+            },
+            "text": {
+              "description": "What happened, one line; none: schedr's summary.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "notify",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event"
           ],
           "type": "object"
         },

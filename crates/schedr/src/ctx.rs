@@ -200,25 +200,16 @@ pub fn run_task_ctx_report(
                     value,
                     labels,
                 },
+        } => report(env, version, &metric_request(name, value, labels)?),
+        TaskCtxCommand::Extension {
+            command: ExtensionCtxCommand::Notify { event, text, data },
         } => {
-            let value = value
-                .parse::<f64>()
-                .ok()
-                .filter(|v| v.is_finite())
-                .ok_or_else(|| format!("the value `{value}` isn't a number"))?;
-            let labels = labels
-                .iter()
-                .map(|label| {
-                    label
-                        .split_once('=')
-                        .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                        .ok_or_else(|| format!("`--label {label}` isn't `name=value`"))
-                })
-                .collect::<Result<_, _>>()?;
-            let request = CtxRequest::MetricAdd {
-                name: name.clone(),
-                value,
-                labels,
+            let data = crate::user::given_event_data(data.as_deref())
+                .map_err(|why| why.replace("--event-data", "--data"))?;
+            let request = CtxRequest::ExtensionNotify {
+                event: event.clone(),
+                text: text.clone(),
+                data,
             };
             report(env, version, &request)
         }
@@ -906,4 +897,28 @@ fn read_answer(stream: &mut impl Read) -> Result<CtxAnswer, String> {
     let mut body = vec![0; size as usize];
     stream.read_exact(&mut body).map_err(|e| lost(&e))?;
     serde_json::from_slice(&body).map_err(|e| format!("the agent's answer doesn't read: {e}"))
+}
+
+/// `schedr task-ctx extension metric`'s request: its value a finite number, each label
+/// `name=value`.
+fn metric_request(name: &str, value: &str, labels: &[String]) -> Result<CtxRequest, String> {
+    let value = value
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| format!("the value `{value}` isn't a number"))?;
+    let labels = labels
+        .iter()
+        .map(|label| {
+            label
+                .split_once('=')
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .ok_or_else(|| format!("`--label {label}` isn't `name=value`"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(CtxRequest::MetricAdd {
+        name: name.to_owned(),
+        value,
+        labels,
+    })
 }

@@ -88,6 +88,7 @@ fn serve(
             // The config's (decision 519): a script declares nothing.
             metrics: Vec::new(),
             panels: Vec::new(),
+            notifications: Vec::new(),
         },
     )?;
     match read(&mut stream)? {
@@ -441,6 +442,7 @@ impl Bridge {
             request @ (CtxRequest::StatusSet { .. }
             | CtxRequest::LinkSet { .. }
             | CtxRequest::MetricAdd { .. }
+            | CtxRequest::ExtensionNotify { .. }
             | CtxRequest::StopReasonGet
             | CtxRequest::OutputSet { .. }) => self.reported(request),
             CtxRequest::Hello { .. } => CtxAnswer::Error {
@@ -468,6 +470,9 @@ impl Bridge {
                     .map(|(k, v)| (k.as_str(), v.as_str()))
                     .collect();
                 self.sent(|channel| channel.metric(&name, value, &labels))
+            }
+            CtxRequest::ExtensionNotify { event, text, data } => {
+                self.sent(|channel| channel.notify(&event, text.as_deref(), data))
             }
             CtxRequest::StopReasonGet => match self.channel().stop_reason() {
                 Ok((reason, left)) => CtxAnswer::StopReason {

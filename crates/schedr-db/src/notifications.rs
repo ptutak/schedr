@@ -323,3 +323,135 @@ pub fn readable(stored: &str) -> String {
             .map_or_else(|| stored.to_owned(), str::to_owned),
     }
 }
+
+/// A run started and not yet announced (M5.2i8, DN18): what its `RUN_STARTED` says of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedRun {
+    /// The run.
+    pub id: String,
+    /// The DAG version it runs.
+    pub dag_version_id: String,
+    /// How it was created.
+    pub kind: schedr_model::states::RunKind,
+    /// Who or what created it.
+    pub triggered_by: String,
+    /// The moment it is for.
+    pub planned_for: Timestamp,
+    /// The key of the event that started it (an event trigger's or a `RunOf`'s run).
+    pub event_key: Option<String>,
+    /// The run that started it, and that run's DAG (a chained or `RunOf` run).
+    pub parent: Option<(String, String)>,
+    /// Its backfill and the backfill's range.
+    pub backfill: Option<(String, Timestamp, Timestamp)>,
+}
+
+impl Database {
+    /// At most `limit` runs that started and weren't announced yet, the earliest started first:
+    /// a run with a `started_at` (a queued run cancelled before it started has none: agy's
+    /// review of M5.2i8).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn unannounced_runs(&self, limit: u32) -> Result<Vec<StartedRun>, DbError> {
+        // Each backend's literal, so its partial index (`runs_unannounced`) applies.
+        const SQLITE: &str = "SELECT r.id{text}, r.dag_version_id{text}, r.kind, r.triggered_by, \
+            {ts<}r.planned_for{>ts}, r.event{text}, r.parent_run_id{text}, p.dag_id, \
+            r.backfill_id{text}, {ts<}b.range_from{>ts}, {ts<}b.range_to{>ts} \
+            FROM runs r LEFT JOIN runs p ON p.id = r.parent_run_id \
+            LEFT JOIN backfills b ON b.id = r.backfill_id \
+            WHERE r.announced = 0 AND r.started_at IS NOT NULL ORDER BY r.started_at, r.id LIMIT $1";
+        const POSTGRES: &str = "SELECT r.id{text}, r.dag_version_id{text}, r.kind, r.triggered_by, \
+            {ts<}r.planned_for{>ts}, r.event{text}, r.parent_run_id{text}, p.dag_id, \
+            r.backfill_id{text}, {ts<}b.range_from{>ts}, {ts<}b.range_to{>ts} \
+            FROM runs r LEFT JOIN runs p ON p.id = r.parent_run_id \
+            LEFT JOIN backfills b ON b.id = r.backfill_id \
+            WHERE NOT r.announced AND r.started_at IS NOT NULL ORDER BY r.started_at, r.id LIMIT $1";
+        type Row = (
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<Row> = on_pool!(self, |pool, backend| {
+            let text = if backend == crate::Backend::Postgres {
+                POSTGRES
+            } else {
+                SQLITE
+            };
+            crate::query::query_as(sql(backend, text))
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    version,
+                    kind,
+                    by,
+                    planned_for,
+                    event,
+                    parent,
+                    parent_dag,
+                    backfill,
+                    from,
+                    to,
+                )| {
+                    let event_key = event
+                        .map(|text| from_json::<schedr_model::RunEvent>("runs.event", &text))
+                        .transpose()?
+                        .map(|event| event.key);
+                    let backfill = match (backfill, from, to) {
+                        (Some(id), Some(from), Some(to)) => Some((
+                            id,
+                            parse_time("backfills.range_from", &from)?,
+                            parse_time("backfills.range_to", &to)?,
+                        )),
+                        _ => None,
+                    };
+                    Ok(StartedRun {
+                        id,
+                        dag_version_id: version,
+                        kind: crate::query::from_name("runs.kind", kind)?,
+                        triggered_by: by,
+                        planned_for: parse_time("runs.planned_for", &planned_for)?,
+                        event_key,
+                        parent: parent.zip(parent_dag),
+                        backfill,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    /// Runs `ids` marked announced: their `RUN_STARTED` queued, or none to queue.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails.
+    pub async fn mark_announced(&self, ids: &[String]) -> Result<(), DbError> {
+        const MARK: &str = "UPDATE runs SET announced = $1 \
+            WHERE id IN (SELECT value{uuid} FROM {json_each}($2{json}))";
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let list = to_json(&ids);
+        in_tx!(self, |tx, backend| {
+            crate::query::query(sql(backend, MARK))
+                .bind(true)
+                .bind(&list)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+}

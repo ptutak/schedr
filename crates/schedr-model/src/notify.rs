@@ -36,11 +36,20 @@ pub enum NotifyEvent {
     TriggerFailing,
     /// A cleanup that ran after its run had ended failed (decision 309).
     LateCleanupFailed,
+    /// A run started, however: its `reason` in `details` (DN18).
+    RunStarted,
+    /// An event the DAG listens for was posted: its name and key in `details`, not its data
+    /// (DN18, DN28).
+    EventPosted,
+    /// A plugin of one of the DAG's extension tasks sent one of its declared events: the
+    /// extension, version and event in `details`, the plugin's text and data (decision 515,
+    /// DN20).
+    ExtensionEvent,
 }
 
 impl NotifyEvent {
     /// Every event, in the order above.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
         Self::RunFailed,
         Self::TaskFailed,
         Self::TaskRetry,
@@ -49,6 +58,9 @@ impl NotifyEvent {
         Self::RunRecovered,
         Self::TriggerFailing,
         Self::LateCleanupFailed,
+        Self::RunStarted,
+        Self::EventPosted,
+        Self::ExtensionEvent,
     ];
 
     /// Its name, as written in Python and in configuration (`RUN_FAILED`).
@@ -63,6 +75,9 @@ impl NotifyEvent {
             Self::RunRecovered => "RUN_RECOVERED",
             Self::TriggerFailing => "TRIGGER_FAILING",
             Self::LateCleanupFailed => "LATE_CLEANUP_FAILED",
+            Self::RunStarted => "RUN_STARTED",
+            Self::EventPosted => "EVENT_POSTED",
+            Self::ExtensionEvent => "EXTENSION_EVENT",
         }
     }
 
@@ -277,13 +292,17 @@ pub enum Placeholder {
     Time,
     /// The DAG's time zone.
     Zone,
-    /// A task's own `send`: its `data`; null in event notifications.
+    /// A task's own `send`: its `data`; a plugin's event: its `data`; null in the other event
+    /// notifications.
     Data,
+    /// The event's own facts (DN28): `RUN_STARTED`'s reason, `EVENT_POSTED`'s posted event,
+    /// `EXTENSION_EVENT`'s extension; null for the other events and a task's `send`.
+    Details,
 }
 
 impl Placeholder {
     /// Every placeholder.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Event,
         Self::Dag,
         Self::Run,
@@ -297,6 +316,7 @@ impl Placeholder {
         Self::Time,
         Self::Zone,
         Self::Data,
+        Self::Details,
     ];
 
     /// Its name, as written in templates.
@@ -316,6 +336,7 @@ impl Placeholder {
             Self::Time => "time",
             Self::Zone => "zone",
             Self::Data => "data",
+            Self::Details => "details",
         }
     }
 

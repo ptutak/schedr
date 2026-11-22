@@ -53,6 +53,7 @@ __all__ = [
     "Handle",
     "LabelDeclaration",
     "MetricDeclaration",
+    "NotificationDeclaration",
     "PanelDeclaration",
     "main",
 ]
@@ -137,6 +138,17 @@ class PanelDeclaration(TypedDict):
     combine: NotRequired[Literal["sum", "max", "mean", "min"]]
     group_by: NotRequired[list[str]]
     limit: NotRequired[int]
+
+
+class NotificationDeclaration(TypedDict):
+    """A notification event the plugin may send, for ``main(notifications=...)``.
+
+    ``channel.notify`` sends it to the channels of the attempt's DAG subscribed to
+    ``Notify.EXTENSION_EVENT``.
+    """
+
+    name: str
+    help: str
 
 
 # The worker's default `max_output_size`.
@@ -351,6 +363,26 @@ class ExtensionChannel:
             point["labels"] = labels
         await self._tell({"type": "metrics", "points": [point]})
 
+    async def notify(self, event: str, text: str | None = None, data: ExtensionJson = None) -> None:
+        """Sends one of its declared notification events (``main(..., notifications=...)``).
+
+        It is told to each channel of the attempt's DAG subscribed to
+        ``Notify.EXTENSION_EVENT``, with the extension, its version and ``event`` in
+        ``notify.details``. One it didn't declare is dropped by the worker with a warning;
+        each counts against ``[notifications] max_per_attempt`` with the task's own sends.
+
+        Args:
+            event: The declared event's name.
+            text: What happened, one line; ``None``: schedr's summary.
+            data: More about it, JSON.
+        """
+        message: dict[str, Any] = {"type": "notify", "event": event}
+        if text is not None:
+            message["text"] = text
+        if data is not None:
+            message["data"] = data
+        await self._tell(message)
+
     async def stop_reason(self) -> tuple[str | None, float]:
         """Why the task is being stopped, asked after SIGTERM: the reason and the seconds left.
 
@@ -428,6 +460,7 @@ def main(
     # literals infers `dict[str, object]`); the worker checks them at the hello either way.
     metrics: Sequence[MetricDeclaration] | Sequence[Mapping[str, object]] = (),
     panels: Sequence[PanelDeclaration] | Sequence[Mapping[str, object]] = (),
+    notifications: Sequence[NotificationDeclaration] | Sequence[Mapping[str, object]] = (),
     argv: Sequence[str] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> int:
@@ -448,6 +481,9 @@ def main(
             ``left``, ``center`` or ``right``; how it is drawn: ``point``, ``combine``,
             ``group_by``, ``limit``), sent in its hello; a metric none shows gets a ``full``
             row of its own below them.
+        notifications: The notification events it may send with ``channel.notify``
+            (:class:`NotificationDeclaration`: name, help), sent in its hello; a worker's
+            ``[extensions.<name>] notifications`` wins over them.
         argv: The arguments (``sys.argv[1:]`` by default).
         environ: The environment (``os.environ`` by default).
 
@@ -472,6 +508,8 @@ def main(
             declared["metrics"] = [dict(m) for m in metrics]
         if panels:
             declared["panels"] = [dict(p) for p in panels]
+        if notifications:
+            declared["notifications"] = [dict(n) for n in notifications]
         # Its `logging` as structured lines (decision 514), unless it configures its own.
         install_structured_logging()
         return _serve(channel, run, cleanup, declared)

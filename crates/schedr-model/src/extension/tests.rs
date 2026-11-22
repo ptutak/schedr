@@ -227,3 +227,30 @@ fn an_events_panel_takes_a_cell_and_no_metric() {
     let error = with(json!({"title": "L", "chart": "line", "row": 1, "cell": "full"}));
     assert!(error.unwrap_err().contains("which metric"));
 }
+
+/// M5.2i8: a plugin's notifications are named identifiers, each once, with a help; at most 50.
+#[test]
+fn a_notification_declaration_breaking_a_rule_is_refused_with_why() {
+    let with = |notifications: serde_json::Value| {
+        check_declarations(&declarations(json!({"notifications": notifications})))
+    };
+    assert_eq!(
+        with(json!([{"name": "image_pull_failed", "help": "An image can't be pulled"}])),
+        Ok(())
+    );
+    for (notifications, why) in [
+        (json!([{"name": "Bad Name", "help": "h"}]), "notification"),
+        (json!([{"name": "done", "help": ""}]), "`done`'s help"),
+        (
+            json!([{"name": "done", "help": "h"}, {"name": "done", "help": "h"}]),
+            "declared twice",
+        ),
+    ] {
+        let error = with(notifications).unwrap_err();
+        assert!(error.contains(why), "{why:?} in {error}");
+    }
+    let many: Vec<_> = (0..=MAX_NOTIFICATIONS)
+        .map(|i| json!({"name": format!("e{i}"), "help": "h"}))
+        .collect();
+    assert!(with(json!(many)).unwrap_err().contains("at most 50"));
+}

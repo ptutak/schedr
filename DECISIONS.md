@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN28 | 2026-11-22 | user | adds to D515 | A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run |
 | DN27 | 2026-11-22 | user | corrects D519 | A shell plugin's own commands sit under `task-ctx extension` |
 | DN26 | 2026-11-22 | user | corrects D516 | A gauge's default point is its mean |
 | DN25 | 2026-11-21 | user | corrects D518 | A service's memory 256 MiB by default |
@@ -69,7 +70,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 | D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
 | D516 | 2026-11-21 | user | built M5.2i10 | task-processes | Chart functions: point, combine, group_by and limit |
-| D515 | 2026-11-21 | user | planned (M5.2i8) | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
+| D515 | 2026-11-21 | user | built M5.2i8 | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
 | D514 | 2026-11-20 | user | built M5.2i5 | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |
 | D513 | 2026-11-20 | user | built M5.2i5 | task-processes | Plugins observed and controlled as tasks are: status, links, declared metrics stored as worker samples, stop reasons, an Extensions page |
 | D512 | 2026-11-20 | user | planned (M5.2i3) | workers | One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them |

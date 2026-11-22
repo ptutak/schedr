@@ -206,3 +206,48 @@ fn a_resource_blocks_and_has_no_timeout_unless_said() {
     assert!(!other.blocking);
     assert_eq!(other.unschedulable_timeout_ms, Some(0));
 }
+
+/// M5.2i8 (agy's review): a DAG listens for a name by its code, its trigger first, then any
+/// wait step: `EventNamed`, `@trigger(wait_for=...)`, `wait_for(...)`, `@sensor(wait_for=...)`.
+#[test]
+fn a_dag_listens_for_an_event_by_its_trigger_or_any_wait_step() {
+    let settings = json!({
+        "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+        "queue": "default", "max_output_size": 1_048_576
+    });
+    let sensor = |id: &str, name: &str| {
+        json!({
+            "id": id, "kind": "sensor", "mode": "loop", "arguments": {},
+            "wait_for": {"event": {"name": name}, "param": "event"},
+            "settings": settings, "output_type": {"type": "none"}
+        })
+    };
+    let with = |trigger: serde_json::Value, tasks: serde_json::Value| -> Dag {
+        let mut value = serde_json::to_value(dag()).unwrap();
+        value["trigger"] = trigger;
+        value["tasks"] = tasks;
+        value["edges"] = json!([]);
+        serde_json::from_value(value).unwrap()
+    };
+    let named = with(
+        json!({"kind": "event_named", "event": {"name": "paid"}}),
+        json!([]),
+    );
+    assert_eq!(named.listens_for("paid"), Some(Listens::Trigger));
+    assert_eq!(named.listens_for("packed"), None);
+    let trigger_waits = with(
+        json!({"kind": "event", "task": sensor("on_paid", "paid")}),
+        json!([]),
+    );
+    assert_eq!(trigger_waits.listens_for("paid"), Some(Listens::Trigger));
+    let waits = with(
+        json!({"kind": "none"}),
+        json!([{
+            "id": "wait", "kind": "wait_for_event", "event": {"name": "packed"},
+            "settings": settings, "output_type": {"type": "any"}
+        }, sensor("sensed", "shipped")]),
+    );
+    assert_eq!(waits.listens_for("packed"), Some(Listens::WaitStep));
+    assert_eq!(waits.listens_for("shipped"), Some(Listens::WaitStep));
+    assert_eq!(waits.listens_for("paid"), None);
+}

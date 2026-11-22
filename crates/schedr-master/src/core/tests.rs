@@ -5438,7 +5438,7 @@ async fn a_poke_trigger_crossing_failing_after_tells_its_channels_once() {
 
 /// M4.13a (decisions 421, 422): a task's own notification is queued once per call, a call sent
 /// again (same key) answered without queueing it twice, and the quota refuses past it, again on
-/// a resend.
+/// a resend; a Python task can't send an extension's event (M5.2i8).
 #[tokio::test]
 async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
     let mut section = schedr_config::config::NotificationsSection {
@@ -5493,6 +5493,14 @@ async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
         ("w1", "c", r#"{"channel": "nope"}"#),
         ("w1", "d", r#"{"channel": "ops", "data": {}}"#),
         ("w1", "e", r#"{"channel": "ops", "extra": 1}"#),
+        // M5.2i8 (agy's review): an extension's event only from an extension task's plugin;
+        // a channel and an event together are neither.
+        ("w1", "g", r#"{"extension_event": "job_done"}"#),
+        (
+            "w1",
+            "h",
+            r#"{"channel": "ops", "extension_event": "job_done"}"#,
+        ),
         ("w2", "f", ok),
     ] {
         let out = core
@@ -5504,8 +5512,13 @@ async fn a_tasks_notification_is_queued_once_per_call_within_its_quota() {
     let codes: Vec<u32> = statuses.iter().map(|(code, _)| *code).collect();
     assert_eq!(
         codes,
-        [202, 202, 429, 429, 400, 400, 400, 403],
+        [202, 202, 429, 429, 400, 400, 400, 403, 400, 403],
         "{statuses:#?}"
+    );
+    assert!(
+        statuses[7].1.contains("only an extension's plugin"),
+        "{}",
+        statuses[7].1
     );
     assert!(
         statuses[4].1.contains("no channel `nope`"),

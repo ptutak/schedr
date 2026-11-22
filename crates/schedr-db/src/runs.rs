@@ -330,9 +330,9 @@ impl Database {
     ) -> Result<Option<String>, DbError> {
         const INSERT: &str = "INSERT INTO runs \
             (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
-             triggered_by, started_at, params, event, parent_run_id, backfill_id) \
+             triggered_by, started_at, params, event, parent_run_id, backfill_id, announced) \
             VALUES ($1{uuid}, $2, $3{uuid}, $4, $5, $6{ts}, $7{ts}, $8{ts}, $9, $10{ts}, \
-             $11{json}, $12{json}, $13{uuid}, $14{uuid}) ON CONFLICT DO NOTHING";
+             $11{json}, $12{json}, $13{uuid}, $14{uuid}, $15) ON CONFLICT DO NOTHING";
         let started_at = (run.state == RunState::Running).then(|| db_time(run.triggered_at));
         let inserted = in_tx!(self, |tx, backend| {
             crate::query::query(sql(backend, INSERT))
@@ -350,6 +350,8 @@ impl Database {
                 .bind(run.event.map(crate::query::to_json))
                 .bind(run.parent_run_id)
                 .bind(run.backfill_id)
+                // Announced by the round once it runs (M5.2i8).
+                .bind(false)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -369,10 +371,10 @@ impl Database {
         for chunk in runs.chunks(RUNS_PER_STATEMENT) {
             let values: Vec<String> = (0..chunk.len())
                 .map(|i| {
-                    let n = i * 14;
+                    let n = i * 15;
                     format!(
                         "(${}{{uuid}}, ${}, ${}{{uuid}}, ${}, ${}, ${}{{ts}}, ${}{{ts}}, ${}{{ts}}, \
-                         ${}, ${}{{ts}}, ${}{{json}}, ${}{{json}}, ${}{{uuid}}, ${}{{uuid}})",
+                         ${}, ${}{{ts}}, ${}{{json}}, ${}{{json}}, ${}{{uuid}}, ${}{{uuid}}, ${})",
                         n + 1,
                         n + 2,
                         n + 3,
@@ -386,14 +388,16 @@ impl Database {
                         n + 11,
                         n + 12,
                         n + 13,
-                        n + 14
+                        n + 14,
+                        n + 15
                     )
                 })
                 .collect();
             let text = format!(
                 "INSERT INTO runs \
                  (id, dag_id, dag_version_id, kind, state, planned_for, since, triggered_at, \
-                  triggered_by, started_at, params, event, parent_run_id, backfill_id) \
+                  triggered_by, started_at, params, event, parent_run_id, backfill_id, \
+                  announced) \
                  VALUES {} ON CONFLICT DO NOTHING",
                 values.join(", ")
             );
@@ -416,7 +420,8 @@ impl Database {
                         .bind(run.params.to_string())
                         .bind(run.event.map(crate::query::to_json))
                         .bind(run.parent_run_id)
-                        .bind(run.backfill_id);
+                        .bind(run.backfill_id)
+                        .bind(false);
                 }
                 insert.execute(&mut *tx).await?.rows_affected()
             });

@@ -589,13 +589,25 @@ scope = '''
 done_when = '''
 a plugin's declared event reaches a subscribed channel end to end (a webhook on a test server), an undeclared one is dropped with one warning; `RUN_STARTED` reaches a subscribed channel with each reason, and `EVENT_POSTED` the DAGs listening for its name; a declared event listed in its extension's events panel; the guide's pages; a review
 '''
+status = "done"
+done = 2026-11-22
+
+[[steps]]
+id = "M5.2i14"
+title = "A worker's identity bound to its certificate, standalone's ports under in-memory mTLS, and the trust model"
+scope = '''
+(the user, 2026-11-22: "if there is some kind of malicious activity on the worker node it can probably access mTLS worker certificate, so probably we have to consider a worker a trusted domain"; "encrypting extension - worker traffic won't help, if someone can already access mTLS"; then "A i14 slimmer") schedr trusts its nodes by design: a compromised node is out of scope, and so is defending it (no encryption of the plugin's local link, no in-memory database, no plugin as its own OS user). Three things: (1) a worker's identity bound to its certificate: verify how the master binds a `Register`'s worker ID to its peer certificate (`[tls] worker_name` is one name for all workers) and, if it doesn't, bind it (the ID in the certificate's name, checked at registration), so one worker's certificate can't act as another worker; every master-side action a worker takes (results, cancels, cleanups, parse uploads, inputs, API calls as a task, notifications) checked to be on its own attempts and roots; (2) standalone's localhost ports (the master's gRPC port, the worker's log endpoint) closed with mTLS made in memory at each start (option A): a CA and the master's, worker's and log endpoint's certificates generated in the process, never written to disk, new at each restart (rotated in the process if long-lived), so another user of the host or a pod's sidecar can't register or read logs; first checked what they can do today, and beside it what they can't read (the user, 2026-11-22: "strengthening ports won't help if someone can access database sqlite or postgres credentials"): the data directory, the SQLite file and the config or password files checked private (0700 / 0600), made so at start where schedr creates them, a warning for one others can read; (3) the trust model written in the guide (the user, 2026-11-22, asking whether extension and runner links need the same: they are inherited socket pairs, no port): schedr's local links are inherited descriptors, never ports (the runner, fork servers, task-ctx, plugins, a shell plugin's script), and the cleanup barrier's socket file (a 0700 folder in `$TMPDIR`, D504) weighed against a socket pair, a shared `/tmp` with a same-UID sidecar its one exposure; the ops port (health and `/metrics`, extension labels included) said to be readable by whoever reaches it; what schedr trusts (its nodes, their keys), what it guarantees (a worker acts only on its own attempts; links mTLS; the UI-webserver link proven), what it won't do by design and why, and how to run a controller for a larger system (its own deployment; standalone with this mTLS; least privilege at the controlled service; certificate rotation through the files' reload). Before M5.2i9, so the service starts under these rules; a Grok security review
+'''
+done_when = '''
+a test proving one worker's certificate can't register as, report for or cancel another worker's attempts; a test proving a client without standalone's in-memory certificate can't reach its gRPC port or log endpoint; the trust model's page in the guide; a Grok security review
+'''
 status = "planned"
 
 [[steps]]
 id = "M5.2i9"
 title = "An extension's service: a long-running process per worker beside its plugins (decision 518)"
 scope = '''
-(the user, 2026-11-21: "all recommended") decision 518: `[extensions.<name>] service`, `service_ready_timeout`, `service_memory`, `service_restarts`, `service_settle` and `service_secrets` (public keys, checked at load); the worker's supervision of it (started at load, hello and ready, its process group and memory budget, restarts backing off, turned off past the limit and its events, a stalled loop warned of, its stop after the last connected attempt), its offers only while ready and only at the versions it serves; a socket pair per attempt passed with `attempt_connected` (fd passing over the control socket), `SCHEDR_SERVICE_FD` in the plugin; the protocol's new messages in its schema and the plugin protocol page; Python: `schedr.extension.serve(on_call, start=, on_closed=, stop=, ...)` and `channel.service.call(...)`, the length-prefixed JSON request and answer; the dummy extension given a small service (a counter its attempts share) as the example; the guide's Extensions page
+(the user, 2026-11-22: "add it") A rule of its design: the service listens on nothing, no port and no socket file; the worker starts it and hands it socket pairs, as it does plugins; a later need to listen gets standalone's in-memory mTLS (M5.2i14). (the user, 2026-11-21: "all recommended") decision 518: `[extensions.<name>] service`, `service_ready_timeout`, `service_memory`, `service_restarts`, `service_settle` and `service_secrets` (public keys, checked at load); the worker's supervision of it (started at load, hello and ready, its process group and memory budget, restarts backing off, turned off past the limit and its events, a stalled loop warned of, its stop after the last connected attempt), its offers only while ready and only at the versions it serves; a socket pair per attempt passed with `attempt_connected` (fd passing over the control socket), `SCHEDR_SERVICE_FD` in the plugin; the protocol's new messages in its schema and the plugin protocol page; Python: `schedr.extension.serve(on_call, start=, on_closed=, stop=, ...)` and `channel.service.call(...)`, the length-prefixed JSON request and answer; the dummy extension given a small service (a counter its attempts share) as the example; the guide's Extensions page
 '''
 done_when = '''
 the dummy's service run end to end in `make standalone`: attempts calling it at once, its crash failing the connected attempts and their retries landing once it is ready again, its turning off past the restart limit, its memory kill, a drain stopping it after the last attempt; the Python helper's tests; the schema and the protocol page agreeing
@@ -610,6 +622,28 @@ scope = '''
 '''
 done_when = '''
 `make demo-kind` runs the widened plugin: its Jobs succeed and fail as before (the existing standalone and kind tests pass), its pod watched, not polled; two workers show a cluster-wide gauge once with `combine: max`; each chart kind drawn with points on its page
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2i12"
+title = "Stress 25: extension tasks under load, comparable with scenario 1"
+scope = '''
+(the user, 2026-11-22: "We'll need a stress test with extensions when it comes to throughput, latencies etc. It should be made so that it's comparable with some other stress test to see performance gap and overall extensions under load. it could be similar to a few of stress tests (01 comes to my mind for example).") `25_extension_throughput`: scenario 1's shape (its DAG counts, widths, task lengths, cluster and profiles) with every task an extension task run by a plugin (the dummy, Python, and a shell plugin through `schedr extension shell`), each reporting a status, a link, metrics and a notification as real plugins do; the same table as scenario 1 (tasks a second, start latencies, round times) beside scenario 1's own run on the same machine, so the gap is read directly; the worker's figures (reports a second, points folded, dropped) and the extension page's reads under load. After M5.2i9/i11, so the service is measured too
+'''
+done_when = '''
+`make stress STRESS=25_extension_throughput` passes quick and full; its results table and scenario 1's from the same run recorded on the stress page, the gap explained
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.2i13"
+title = "Stress 21b: seeded random chaos aimed at extensions"
+scope = '''
+(the user, 2026-11-22: "Also random_chaos targeting extensions aswell - it could be a second random_chaos just targeting extensions.") `21b_random_chaos_extensions`: scenario 21's seeded fault schedule (cuts, slow links, freezes) under scenario 25's extension load, plus faults of the extension's own: plugins killed, hung past their grace, frozen, sending garbage or over-size messages, exiting mid-request, the service process (M5.2i9) killed and restarted; each recovers as designed (the attempt fails or is retried, cleanups run once, no task on two workers, the worker stays), reproducible by its seed
+'''
+done_when = '''
+`SCHEDR_STRESS_SEED=<n> make stress STRESS=21b_random_chaos_extensions` passes quick and full on several seeds; what it checks on the stress page
 '''
 status = "planned"
 

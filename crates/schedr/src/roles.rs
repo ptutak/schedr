@@ -518,6 +518,7 @@ fn configured_plugins(config: &Config) -> schedr_agent::extensions::Plugins {
                 declarations: schedr_model::extension::Declarations {
                     metrics: plugin.metrics.clone(),
                     panels: plugin.panels.clone(),
+                    notifications: plugin.notifications.clone(),
                 },
                 max_series: plugin.max_series,
             };

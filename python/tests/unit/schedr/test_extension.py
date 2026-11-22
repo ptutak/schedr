@@ -319,11 +319,13 @@ def test_a_plugin_reports_status_links_and_metrics_without_waiting() -> None:
         await channel.link("Pod", "https://dash/pods/x")
         await channel.metric("queue_seconds", 4.5)
         await channel.metric("pods_started", 1, phase="Succeeded")
+        await channel.notify("image_pull_failed", "no such image", {"image": "x"})
+        await channel.notify("pod_evicted")
         return "done"
 
     with plugin(run) as (worker, ended):
         welcomed(worker, request(None))
-        reports = [worker.receive() for _ in range(5)]
+        reports = [worker.receive() for _ in range(7)]
         result = worker.receive()
         assert ended() == 0
     assert reports == [
@@ -335,6 +337,14 @@ def test_a_plugin_reports_status_links_and_metrics_without_waiting() -> None:
             "type": "metrics",
             "points": [{"name": "pods_started", "value": 1, "labels": {"phase": "Succeeded"}}],
         },
+        # M5.2i8: a declared notification event, its text and data only when given.
+        {
+            "type": "notify",
+            "event": "image_pull_failed",
+            "text": "no such image",
+            "data": {"image": "x"},
+        },
+        {"type": "notify", "event": "pod_evicted"},
     ]
     assert result["type"] == "task_succeeded"
 
@@ -370,6 +380,7 @@ def test_the_hello_carries_the_declarations_and_describe_doesnt(
             "cell": "full",
         }
     ]
+    notifications = [{"name": "pod_evicted", "help": "A pod was evicted"}]
     assert (
         main(run, name="k", versions=["1"], metrics=metrics, panels=panels, argv=["--describe"])
         == 0
@@ -390,6 +401,7 @@ def test_the_hello_carries_the_declarations_and_describe_doesnt(
             "versions": ["1"],
             "metrics": metrics,
             "panels": panels,
+            "notifications": notifications,
             "argv": [],
             "environ": env,
         },
@@ -403,6 +415,7 @@ def test_the_hello_carries_the_declarations_and_describe_doesnt(
         worker.close()
     assert hello["metrics"] == metrics
     assert hello["panels"] == panels
+    assert hello["notifications"] == notifications
 
 
 _STOPPED_PLUGIN = """

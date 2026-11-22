@@ -3271,6 +3271,101 @@ with Dag("cancelled", notify=[relay, "ops"]):
     assert_eq!(got.lock().unwrap().len(), 4);
 }
 
+/// M5.2i8 (DN18, DN28): `RUN_STARTED` tells of each run with its reason, `EVENT_POSTED` of each
+/// event posted to the DAGs listening for its name, a repeat of a key too; `details` holds
+/// both, a manual run's DAG gets its own once.
+#[test]
+fn a_run_started_and_an_event_posted_are_told_with_their_details() {
+    let (base, got) = webhook_receiver();
+    let dag = r#"
+from schedr import Dag, EventNamed, Notify, dag_ctx, task, wait_for
+
+@task
+def ship(order: str) -> None:
+    print("shipped", order)
+
+# Listens by a wait step only, no run of it going (agy's review of M5.2i8).
+with Dag("packer", notify={"ops": [Notify.EVENT_POSTED]}):
+    wait_for(EventNamed("paid"))
+
+@task
+def hello() -> None:
+    print("hello")
+
+with Dag("ship", trigger=EventNamed("paid"),
+         notify={"ops": [Notify.RUN_STARTED, Notify.EVENT_POSTED]}):
+    ship(dag_ctx.event.key)
+
+with Dag("plain", notify={"ops": [Notify.RUN_STARTED]}):
+    hello()
+"#;
+    let config =
+        format!("\n[notifications.channels.ops]\ntype = \"webhook\"\nurl = \"{base}/ops\"\n");
+    let standalone = Standalone::start_configured(
+        &[("started.py", dag)],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_HIDDEN__MASTER__OUTBOX_POLL", "100ms")],
+    );
+    standalone.wait("the DAGs", || {
+        standalone.dag_ids() == ["packer", "plain", "ship"]
+    });
+    let (code, _, err) = standalone.cli(&["dags", "unpause", "ship"]);
+    assert_eq!(code, 0, "{err}");
+
+    let plain = standalone.trigger("plain");
+    standalone.wait_for_state(&plain, "success");
+    standalone.wait("RUN_STARTED", || got.lock().unwrap().len() == 1);
+    let sent = got.lock().unwrap()[0].1.clone();
+    assert_eq!(sent["event"], "RUN_STARTED", "{sent}");
+    assert_eq!(sent["run"], plain.as_str());
+    assert_eq!(sent["details"]["reason"], "manual", "{sent}");
+
+    let post = |key: &str| {
+        let event = standalone.cli_json(&["events", "post", "paid", "--key", key]);
+        assert_eq!(event["name"], "paid", "{event}");
+    };
+    post("o-1");
+    standalone.wait("a run of ship", || standalone.runs("ship").len() == 1);
+    standalone.wait("EVENT_POSTED twice and RUN_STARTED", || {
+        got.lock().unwrap().len() == 4
+    });
+    // A key seen before starts none: still told of.
+    post("o-1");
+    standalone.wait("the repeat's EVENT_POSTED", || {
+        got.lock().unwrap().len() == 6
+    });
+    let sent: Vec<Value> = got.lock().unwrap()[1..]
+        .iter()
+        .map(|(_, b)| b.clone())
+        .collect();
+    let of = |event: &str| -> Vec<&Value> { sent.iter().filter(|b| b["event"] == event).collect() };
+    let posted = of("EVENT_POSTED");
+    let to =
+        |dag: &str| -> Vec<&Value> { posted.iter().copied().filter(|b| b["dag"] == dag).collect() };
+    let (ship, packer) = (to("ship"), to("packer"));
+    assert_eq!((ship.len(), packer.len()), (2, 2), "{sent:?}");
+    assert_eq!(ship[0]["run"], Value::Null);
+    assert_eq!(
+        ship[0]["details"],
+        json!({"name": "paid", "key": "o-1", "listens": "trigger",
+               "posted_by": ship[0]["details"]["posted_by"]})
+    );
+    assert_eq!(ship[1]["details"], ship[0]["details"], "{sent:?}");
+    assert_eq!(packer[0]["details"]["listens"], "wait_step", "{sent:?}");
+    let started = of("RUN_STARTED");
+    assert_eq!(started.len(), 1, "{sent:?}");
+    assert_eq!(
+        started[0]["details"],
+        json!({"reason": "trigger", "key": "o-1"})
+    );
+    assert_eq!(started[0]["run"], standalone.runs("ship")[0]["run_id"]);
+    // A few sender passes: nothing more.
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(got.lock().unwrap().len(), 6);
+}
+
 /// A mail server on 127.0.0.1 speaking just enough SMTP, keeping each message's DATA.
 fn smtp_receiver() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     use std::io::{BufRead, BufReader, Write};
@@ -3614,6 +3709,97 @@ with Dag("unserved"):
     });
     let job = &standalone.run(&run)["tasks"][0];
     assert_eq!(job["try_number"], 0, "a rejection is no try: {job}");
+}
+
+/// M5.2i8 (decision 515, DN19, DN20): a plugin's declared event reaches a channel subscribed to
+/// `EXTENSION_EVENT`, its extension, version and event in `details`; an undeclared one is
+/// dropped, warned of once; both are on the extension's events panel.
+#[test]
+fn a_plugins_declared_event_is_told_and_an_undeclared_one_dropped_once() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask, Notify
+
+with Dag("extended", notify={"ops": [Notify.EXTENSION_EVENT]}):
+    ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[
+            {"notify": ["job_done", "the job is done", {"rows": 3}]},
+            {"notify": ["made_up", None, None]},
+            {"notify": ["made_up", None, None]},
+            {"return": 1},
+        ],
+    )
+"#;
+    let (base, got) = webhook_receiver();
+    let config = format!(
+        "{}\n[notifications.channels.ops]\ntype = \"webhook\"\nurl = \"{base}/ops\"\n",
+        dummy_plugin()
+    );
+    let standalone = Standalone::start_configured(
+        &[("extended.py", DAG)],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_HIDDEN__MASTER__OUTBOX_POLL", "100ms")],
+    );
+    standalone.wait("the DAG", || standalone.dag_ids() == ["extended"]);
+    let run = standalone.trigger("extended");
+    standalone.wait_for_state(&run, "success");
+    standalone.wait("the extension's event", || got.lock().unwrap().len() == 1);
+    let (path, sent) = got.lock().unwrap()[0].clone();
+    assert_eq!(path, "/ops");
+    assert_eq!(sent["event"], "EXTENSION_EVENT", "{sent}");
+    assert_eq!(sent["run"], run.as_str());
+    assert_eq!(sent["task"], "job");
+    assert_eq!(sent["text"], "the job is done");
+    assert_eq!(sent["data"], json!({"rows": 3}));
+    assert_eq!(
+        sent["details"],
+        json!({"extension": "dummy", "version": "1.0", "event": "job_done"})
+    );
+    let mut seen = Value::Null;
+    standalone.wait("both on the events panel", || {
+        seen = standalone
+            .get("/api/v1/extensions/dummy")
+            .unwrap_or_default();
+        seen["events"].as_array().is_some_and(|e| e.len() >= 2)
+    });
+    let events: Vec<(String, String)> = seen["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap().to_owned(),
+                e["message"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        events.contains(&(
+            "notified".to_owned(),
+            "job_done: the job is done".to_owned()
+        )),
+        "{events:?}"
+    );
+    let dropped: Vec<_> = events
+        .iter()
+        .filter(|(kind, _)| kind == "dropped")
+        .collect();
+    assert_eq!(dropped.len(), 1, "once: {events:?}");
+    assert!(
+        dropped[0]
+            .1
+            .contains("`made_up` isn't one its plugin declared"),
+        "{events:?}"
+    );
+    let log = standalone.log();
+    assert_eq!(log.matches("notification `made_up`").count(), 1, "{log}");
+    // A few sender passes: nothing more.
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(got.lock().unwrap().len(), 1);
 }
 
 /// Decision 514: a Python task's `logging` is structured with no change to its code, as is
@@ -4246,6 +4432,40 @@ with Dag("oversized"):
     assert!(logs.contains("cut off:"), "{logs}");
 }
 
+/// M5.2i8: the backup script's declared event, through `task-ctx extension notify`, delivered
+/// (agy's review: the page alone would pass on a notification never sent) and on its page.
+fn the_scripts_event_is_delivered_and_listed(standalone: &Standalone, got: &Received, run: &str) {
+    standalone.wait("the script's event delivered", || {
+        !got.lock().unwrap().is_empty()
+    });
+    let (_, sent) = got.lock().unwrap()[0].clone();
+    assert_eq!(
+        (
+            sent["event"].clone(),
+            sent["details"].clone(),
+            sent["text"].clone()
+        ),
+        (
+            json!("EXTENSION_EVENT"),
+            json!({"extension": "backup", "version": "1.0", "event": "backup_done"}),
+            json!(format!("snapshot snap-{run} taken"))
+        ),
+        "{sent}"
+    );
+    standalone.wait("the script's event", || {
+        standalone
+            .get("/api/v1/extensions/backup")
+            .is_some_and(|page| {
+                page["events"].as_array().is_some_and(|events| {
+                    events.iter().any(|e| {
+                        e["kind"] == "notified"
+                            && e["message"] == format!("backup_done: snapshot snap-{run} taken")
+                    })
+                })
+            })
+    });
+}
+
 /// M5.2i6 (decision 519): `schedr extension shell` runs a script as an extension's plugin: the
 /// payload on its stdin, a declared secret, a handle and its cleanup, statuses, a link and a
 /// metric point through `schedr task-ctx`, its output set; a failing exit fails the attempt, and
@@ -4254,11 +4474,13 @@ with Dag("oversized"):
 #[test]
 fn a_shell_script_is_an_extensions_plugin_through_task_ctx() {
     const DAG: &str = r#"
-from schedr import CommandOperator, Dag, ExtensionTask
+from schedr import CommandOperator, Dag, ExtensionTask, Notify
 
 for dag_id, payload in [("backups", {"source": "/data"}), ("slow_backups", {"slow": True}),
                         ("failing_backups", {"fail": True})]:
-    with Dag(dag_id):
+    # Told of its plugin's events (M5.2i8): `backups` only.
+    told = {"ops": [Notify.EXTENSION_EVENT]} if dag_id == "backups" else {}
+    with Dag(dag_id, notify=told):
         ExtensionTask("nightly", name="backup", version="1.0", payload=payload,
                       secrets=["backup/target"], cleanup=True)
 
@@ -4267,6 +4489,7 @@ with Dag("reporting_command"):
                                " && {bin} task-ctx link Docs https://docs.example/x"
                                " && ! {bin} task-ctx extension metric x 1 2>&1"])
 "#;
+    let (base, got) = webhook_receiver();
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/extensions/backup/backup.sh")
         .canonicalize()
@@ -4274,12 +4497,19 @@ with Dag("reporting_command"):
     let config = format!(
         "\n[extensions.backup]\ncommand = [\"{BINARY}\", \"extension\", \"shell\", \"--\", \
          \"{}\"]\nversions = [\"1.0\"]\nmetrics = [{{name = \"files_copied\", kind = \
-         \"counter\", help = \"Files copied\", labels = [{{name = \"kind\"}}]}}]\n",
+         \"counter\", help = \"Files copied\", labels = [{{name = \"kind\"}}]}}]\n\
+         notifications = [{{name = \"backup_done\", help = \"A snapshot taken\"}}]\n\
+         \n[notifications.channels.ops]\ntype = \"webhook\"\nurl = \"{base}/ops\"\n",
         script.display()
     );
     let dag = DAG.replace("{bin}", BINARY);
-    let standalone =
-        Standalone::start_configured(&[("backups.py", dag.as_str())], None, &[], &config, &[]);
+    let standalone = Standalone::start_configured(
+        &[("backups.py", dag.as_str())],
+        None,
+        &[],
+        &config,
+        &[("SCHEDR_HIDDEN__MASTER__OUTBOX_POLL", "100ms")],
+    );
     let (code, out, err) =
         standalone.secrets(None, &["set", "backup/target", "token=s3cret-token-99"]);
     assert_eq!(code, 0, "{out}{err}");
@@ -4324,6 +4554,7 @@ with Dag("reporting_command"):
         "{logs_now}"
     );
     assert!(!logs_now.contains("s3cret-token-99"), "{logs_now}");
+    the_scripts_event_is_delivered_and_listed(&standalone, &got, &run);
     let log = standalone.log();
     let ops = log
         .split("ops on http://")

@@ -238,6 +238,14 @@ Under the lock (`assign_round`):
    `lease_timeout` (a `Register` counts only while it waits, B267). Per lost worker **one
    transaction** (`forget`): its state, and each open attempt ended `lost` or its cleanup
    taken back; then its parse jobs and connection jobs moved.
+3. Announcements (`announce_runs`, `announce_events`, core/announce.rs, M5.2i8):
+   `unannounced_runs`, a SELECT of up to 200 runs started (a `started_at`) and not yet announced (the
+   partial index `runs_unannounced`), each DAG's version from the cache; then **one
+   transaction**: their `RUN_STARTED` queued and the runs marked. Then the same for posted
+   events: `unannounced_named_events` (up to 200, `named_events_unannounced`); only if any,
+   `active_dags` (one SELECT, each DAG's version from the cache), whose code says who listens;
+   **one transaction**: their `EVENT_POSTED` queued and the events marked. Nothing to
+   announce: the two SELECTs only.
 
 ## The round's trace
 

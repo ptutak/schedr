@@ -1827,6 +1827,9 @@ pub struct ExtensionPlugin {
     /// Its page's panels; set, they win over its hello's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panels: Vec<schedr_model::extension::Panel>,
+    /// Its notification events (M5.2i8); set, they win over its hello's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<schedr_model::extension::NotificationDeclaration>,
     /// The most series each of its metrics keeps before new ones are folded into `other`.
     #[serde(default = "default_max_series")]
     pub max_series: u32,

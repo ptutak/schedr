@@ -171,6 +171,7 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
         protocol,
         metrics,
         panels,
+        notifications,
     } = message
     else {
         return Err(ChannelError::Unexpected {
@@ -197,7 +198,11 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
     }
     write_message(stream, &AgentMessage::Welcome).await?;
     // A plugin's declarations (decision 513): ones that can't be used are dropped, not its task.
-    let declarations = Declarations { metrics, panels };
+    let declarations = Declarations {
+        metrics,
+        panels,
+        notifications,
+    };
     if let Err(why) = schedr_model::extension::check_declarations(&declarations) {
         tracing::warn!("a plugin's declarations not used: {why}");
         let dropped = Declared {

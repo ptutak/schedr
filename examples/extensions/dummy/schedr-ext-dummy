@@ -10,6 +10,7 @@ The payload is a list of steps, done in order; the output is what the last ``ret
     {"status": ["phase", 0.5]}         report a status (its phase, how far along), shown on the task
     {"link": ["Pod", "https://..."]}   report a link, shown on the task
     {"metric": ["steps", 1, {"step": "log"}]}  report a point of a declared metric (below)
+    {"notify": ["job_done", "text", {...}]}    send a declared notification event (below)
     {"return": {"rows": 3}}            the task's output
     {"fail": "why"}                    fail the attempt
     {"hang": true}                     wait until stopped, then print why (``stop_reason``)
@@ -32,6 +33,7 @@ from schedr.extension import (
     ExtensionJson,
     ExtensionRequest,
     MetricDeclaration,
+    NotificationDeclaration,
     PanelDeclaration,
     main,
 )
@@ -93,6 +95,12 @@ async def _metric(channel: ExtensionChannel, value: ExtensionJson) -> None:
     await channel.metric(_text(name, "metric"), _number(number, "metric"), **named)
 
 
+async def _notify(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    event, text, data = _parts(value, 3, "notify")
+    said = None if text is None else _text(text, "notify")
+    await channel.notify(_text(event, "notify"), said, data)
+
+
 async def _hang(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del value
     try:
@@ -151,6 +159,7 @@ STEPS: dict[str, Callable[[ExtensionChannel, ExtensionJson], Awaitable[None]]] =
     "status": _status,
     "link": _link,
     "metric": _metric,
+    "notify": _notify,
     "fail": _fail,
     "hang": _hang,
     "simulate": _simulate,
@@ -268,7 +277,21 @@ PANELS: list[PanelDeclaration] = [
     {"title": "Events", "chart": "events", "row": 4, "cell": "full"},
 ]
 
+# Its notification events (M5.2i8), declared in its hello: told to the channels of a DAG
+# subscribed to `Notify.EXTENSION_EVENT`.
+NOTIFICATIONS: list[NotificationDeclaration] = [
+    {"name": "job_done", "help": "A made-up job ended"},
+]
+
 if __name__ == "__main__":
     raise SystemExit(
-        main(run, name="dummy", versions=["1.0"], cleanup=cleanup, metrics=METRICS, panels=PANELS)
+        main(
+            run,
+            name="dummy",
+            versions=["1.0"],
+            cleanup=cleanup,
+            metrics=METRICS,
+            panels=PANELS,
+            notifications=NOTIFICATIONS,
+        )
     )

@@ -125,6 +125,18 @@ pub enum CtxRequest {
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         labels: std::collections::BTreeMap<String, String>,
     },
+    /// One of the extension's declared notification events (`schedr task-ctx extension notify`,
+    /// M5.2i8): only within an extension's shell plugin.
+    ExtensionNotify {
+        /// The declared event.
+        event: String,
+        /// What happened.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// More about it, JSON.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
+    },
     /// Why the task is being stopped (`schedr task-ctx extension stop-reason`): only within an
     /// extension's shell plugin (decision 519).
     StopReasonGet,

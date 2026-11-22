@@ -74,7 +74,31 @@ pub enum Refused {
     /// Its links are at their limit and this label is new.
     #[error("an attempt keeps at most {MAX_LINKS} links")]
     TooManyLinks,
+    /// A notification its plugin didn't declare (M5.2i8): said once per name an attempt.
+    #[error("notification `{0}` isn't one its plugin declared: dropped")]
+    Undeclared(String),
+    /// The same undeclared notification again: dropped without a word.
+    #[error("an undeclared notification again")]
+    UndeclaredAgain,
 }
+
+/// A plugin's notification kept as its extension's event once the master accepted it (agy's
+/// review of M5.2i8: kept before, a refused one showed as sent).
+#[derive(Debug)]
+pub struct Notified {
+    figures: crate::figures::Figures,
+    event: ExtensionEvent,
+}
+
+impl Notified {
+    /// Keeps it on its extension's page.
+    pub fn record(self) {
+        self.figures.event(self.event);
+    }
+}
+
+/// The task API's route a plugin's notification goes through (the master's `NOTIFICATIONS`).
+pub const NOTIFICATIONS_PATH: &str = "/api/v1/notifications";
 
 #[derive(Debug, Default)]
 struct Kept {
@@ -88,6 +112,11 @@ struct Kept {
     held: Option<Status>,
     /// Whether a link past the rate was warned of.
     warned: bool,
+    /// The undeclared notifications already warned of.
+    undeclared: std::collections::BTreeSet<String>,
+    /// The sender of the plugin's notifications, once one was sent (M5.2i8): waited for before
+    /// the attempt's end is told, as the master takes them only from an open attempt.
+    notifying: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Reports told on per second, and at most at once (Codex's review of M5.2i5: a plugin
@@ -144,6 +173,9 @@ fn masked_declarations(mask: &MaskSet, declarations: &mut schedr_model::extensio
                 *value = mask.mask_text(value);
             }
         }
+    }
+    for event in &mut declarations.notifications {
+        event.help = mask.mask_text(&event.help);
     }
     for panel in &mut declarations.panels {
         panel.title = mask.mask_text(&panel.title);
@@ -297,6 +329,35 @@ impl AttemptReports {
         (sink.0)(report);
     }
 
+    /// Keeps the task sending the plugin's notifications (M5.2i8), for [`Self::notified_by`].
+    pub fn notifying(&self, sender: tokio::task::JoinHandle<()>) {
+        self.kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .notifying = Some(sender);
+    }
+
+    /// Waits, at most until `limit`, for the plugin's notifications still on their way: the
+    /// master takes one only while its attempt is open, so they go before the attempt's end is
+    /// told (a side note on agy's review of M5.2i8: sent in the background, the last one, sent
+    /// just before the plugin ended, lost the race). Past `limit` they go on, maybe refused.
+    pub async fn notified_by(&self, limit: Duration) {
+        let sender = self
+            .kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .notifying
+            .take();
+        if let Some(sender) = sender
+            && tokio::time::timeout(limit, sender).await.is_err()
+        {
+            tracing::warn!(
+                "a plugin's notifications still on their way after {limit:?}: its attempt's end \
+                 is told; they may be refused"
+            );
+        }
+    }
+
     /// Tells the status held back past the rate, if any: at the attempt's end, so its last
     /// phase is the one shown.
     pub fn flush(&self) {
@@ -309,6 +370,68 @@ impl AttemptReports {
         if let (Some(sink), Some(held)) = (&self.sink, held) {
             (sink.0)(&Report::Status(held));
         }
+    }
+
+    /// What a plugin's `notify` sends the master (M5.2i8): one of its declared events, its text
+    /// masked and bounded; the body of its call to [`NOTIFICATIONS_PATH`] (its data masked by
+    /// the caller with the request), and its record as an event of its extension (DN19), kept
+    /// once the master accepted it.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::Undeclared`] the first time an undeclared event is sent,
+    /// [`Refused::UndeclaredAgain`] after.
+    pub fn notification(
+        &self,
+        event: &str,
+        text: Option<&str>,
+        data: Option<serde_json::Value>,
+    ) -> Result<(serde_json::Value, Option<Notified>), Refused> {
+        let text = text
+            .map(|text| bounded(&self.mask, text))
+            .filter(|t| !t.is_empty());
+        {
+            let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+            if !kept.declared.notifications.iter().any(|n| n.name == event) {
+                // Bounded (agy's review): past MAX_WARNED names, dropped without a word.
+                if kept.undeclared.len() >= crate::figures::MAX_WARNED
+                    || !kept.undeclared.insert(event.to_owned())
+                {
+                    return Err(Refused::UndeclaredAgain);
+                }
+                drop(kept);
+                let why = Refused::Undeclared(bounded(&self.mask, event));
+                if let Some(figured) = &self.figured {
+                    figured.figures.event(ExtensionEvent::now(
+                        &figured.extension,
+                        Some(&figured.version),
+                        EventKind::Dropped,
+                        &why.to_string(),
+                    ));
+                }
+                return Err(why);
+            }
+        }
+        let notified = self.figured.as_ref().map(|figured| {
+            let said = text
+                .as_deref()
+                .map_or_else(|| event.to_owned(), |t| format!("{event}: {t}"));
+            Notified {
+                figures: figured.figures.clone(),
+                event: ExtensionEvent::now(
+                    &figured.extension,
+                    Some(&figured.version),
+                    EventKind::Notified,
+                    &said,
+                ),
+            }
+        });
+        let body = serde_json::json!({
+            "extension_event": event,
+            "text": text,
+            "data": data.unwrap_or(serde_json::Value::Null),
+        });
+        Ok((body, notified))
     }
 
     /// Keeps a status, masked and bounded; a progress outside 0 to 1 is clamped, one not a
@@ -400,6 +523,11 @@ impl AttemptReports {
             }
             if !figured.configured.panels.is_empty() {
                 declarations.panels.clone_from(&figured.configured.panels);
+            }
+            if !figured.configured.notifications.is_empty() {
+                declarations
+                    .notifications
+                    .clone_from(&figured.configured.notifications);
             }
             figured.figures.declare(
                 &figured.extension,

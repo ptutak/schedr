@@ -397,6 +397,8 @@ async fn task_conversation(
     }
     let sent = Instant::now();
     let mut import = None;
+    // A plugin's notifications' sender, made with its first (M5.2i8).
+    let mut notifier = None;
     loop {
         let message: Result<RunnerMessage, ChannelError> = read_message(stream).await;
         match message {
@@ -444,9 +446,8 @@ async fn task_conversation(
                     body,
                     idempotency_key,
                     masked: false,
-                }
-                .masked_by(secrets);
-                let answer = crate::api::runner_answer(api, request).await;
+                };
+                let answer = plugin_call(api, secrets, request).await;
                 if write_message(stream, &answer).await.is_err() {
                     return (None, import);
                 }
@@ -456,6 +457,12 @@ async fn task_conversation(
                 | RunnerMessage::Link { .. }
                 | RunnerMessage::Metrics { .. }),
             ) => keep_report(reports, report),
+            // No answer (M5.2i8): sent on to the master as the task's own notification is, its
+            // refusal (over the attempt's quota, the master away) in the worker's log.
+            Ok(RunnerMessage::Notify { event, text, data }) => {
+                let attempt = (reports, api, secrets);
+                notify(&mut notifier, attempt, &event, text.as_deref(), data);
+            }
             // Answered in turn, as any request (decision 513): what supervision wrote when it
             // sent SIGTERM, and the grace left.
             Ok(RunnerMessage::StopReasonGet) => {
@@ -480,6 +487,108 @@ async fn task_conversation(
                 return (None, import);
             }
         }
+    }
+}
+
+/// A runner's call to the API, masked, answered. An extension's event goes through `notify`,
+/// which checks it is declared (M5.2i8): its form in a call of the runner's own is refused.
+async fn plugin_call(
+    api: Option<&crate::api::ApiCaller>,
+    secrets: Option<&AttemptSecrets>,
+    request: crate::api::ApiRequest,
+) -> AgentMessage {
+    let bare = request
+        .path
+        .split_once('?')
+        .map_or(request.path.as_str(), |(bare, _)| bare);
+    let forged = bare.trim_end_matches('/') == crate::reports::NOTIFICATIONS_PATH
+        && request
+            .body
+            .as_ref()
+            .is_some_and(|body| body.get("extension_event").is_some());
+    if forged {
+        return AgentMessage::ApiAnswer {
+            status: 403,
+            body: serde_json::json!({"error": "an extension's event is sent with `notify`, as \
+                one it declared"}),
+            note: None,
+        };
+    }
+    crate::api::runner_answer(api, request.masked_by(secrets)).await
+}
+
+/// The notifications a conversation may have on their way at once (M5.2i8): the master's
+/// default `[notifications] max_per_attempt`, past which it would refuse them anyway.
+const NOTIFICATIONS_ON_THEIR_WAY: usize = 100;
+
+/// A notification on its way to the master, and what to record once it is accepted.
+type Notifying = (crate::api::ApiRequest, Option<crate::reports::Notified>);
+
+/// A plugin's declared notification (M5.2i8), masked, handed to the conversation's sender, which
+/// sends them on to the master one after another without the conversation waiting (agy's review:
+/// awaited here, a slow master held the plugin's next messages, its result among them). An
+/// undeclared one is dropped, said once in the worker's log and on its extension's page; one past
+/// [`NOTIFICATIONS_ON_THEIR_WAY`] is dropped with a warning.
+fn notify(
+    sender: &mut Option<tokio::sync::mpsc::Sender<Notifying>>,
+    (reports, api, secrets): (
+        Option<&crate::reports::AttemptReports>,
+        Option<&crate::api::ApiCaller>,
+        Option<&AttemptSecrets>,
+    ),
+    event: &str,
+    text: Option<&str>,
+    data: Option<serde_json::Value>,
+) {
+    let Some(reports) = reports else {
+        return;
+    };
+    let (body, notified) = match reports.notification(event, text, data) {
+        Ok(sent) => sent,
+        Err(crate::reports::Refused::UndeclaredAgain) => return,
+        Err(why) => {
+            tracing::warn!("a plugin's notification: {why}");
+            return;
+        }
+    };
+    let request = crate::api::ApiRequest {
+        method: "POST".to_owned(),
+        path: crate::reports::NOTIFICATIONS_PATH.to_owned(),
+        body: Some(body),
+        idempotency_key: None,
+        masked: false,
+    }
+    .masked_by(secrets);
+    let sender = sender.get_or_insert_with(|| {
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::channel::<Notifying>(NOTIFICATIONS_ON_THEIR_WAY);
+        let api = api.cloned();
+        // Ends once the conversation drops its sender and the last one is sent; waited for
+        // before the attempt's end is told.
+        let sending = tokio::spawn(async move {
+            while let Some((request, notified)) = receiver.recv().await {
+                match crate::api::runner_answer(api.as_ref(), request).await {
+                    AgentMessage::ApiAnswer { status, .. } if (200..300).contains(&status) => {
+                        if let Some(notified) = notified {
+                            notified.record();
+                        }
+                    }
+                    AgentMessage::ApiAnswer { status, body, .. } => tracing::warn!(
+                        status,
+                        "a plugin's notification not sent: {}",
+                        String::from_utf8_lossy(&serde_json::to_vec(&body).unwrap_or_default())
+                    ),
+                    _ => {}
+                }
+            }
+        });
+        reports.notifying(sending);
+        sender
+    });
+    if sender.try_send((request, notified)).is_err() {
+        tracing::warn!(
+            "a plugin's notification dropped: {NOTIFICATIONS_ON_THEIR_WAY} on their way already"
+        );
     }
 }
 
@@ -656,6 +765,7 @@ pub async fn run_python(
     let _ = process.finish(output_drain).await;
     if let Some(reports) = &reports {
         reports.flush();
+        reports.notified_by(output_drain).await;
     }
     Ok(Ran {
         supervised,
@@ -908,5 +1018,46 @@ pub(crate) async fn secret_answer(
             kind: error.kind().to_owned(),
             message: error.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::*;
+
+    /// M5.2i8 (agy's review): an extension's event goes through `notify`, which checks it is
+    /// declared; a runner's own call in that form is refused before it reaches the master, and
+    /// another notification call is passed on.
+    #[tokio::test]
+    async fn a_runners_own_call_in_the_extension_event_form_is_refused() {
+        let request = |path: &str, body: serde_json::Value| crate::api::ApiRequest {
+            method: "POST".to_owned(),
+            path: path.to_owned(),
+            body: Some(body),
+            idempotency_key: None,
+            masked: false,
+        };
+        for path in [
+            crate::reports::NOTIFICATIONS_PATH,
+            "/api/v1/notifications/",
+            "/api/v1/notifications?x=1",
+        ] {
+            let forged = request(path, serde_json::json!({"extension_event": "job_done"}));
+            let AgentMessage::ApiAnswer { status, body, .. } =
+                plugin_call(None, None, forged).await
+            else {
+                panic!("an answer");
+            };
+            assert_eq!(status, 403, "{path}: {body}");
+        }
+        // A task's own send goes on (here to no master: 503, not 403).
+        let send = request(
+            crate::reports::NOTIFICATIONS_PATH,
+            serde_json::json!({"channel": "ops"}),
+        );
+        let AgentMessage::ApiAnswer { status, .. } = plugin_call(None, None, send).await else {
+            panic!("an answer");
+        };
+        assert_ne!(status, 403);
     }
 }

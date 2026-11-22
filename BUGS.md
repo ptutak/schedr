@@ -57,11 +57,21 @@ step touches their code or the user schedules them.
 | 2 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
 | 3 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
 | 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 5 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 6 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 7 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 8 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 9 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 5 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 6 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 7 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 8 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 10 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): `a_check_that_passed_is_remembered_and_a_failed_one_is_not` (schedr-api) asserts the remembered check is ten times faster than the first bcrypt check; under `make check`'s coverage build beside the other suites it took 3.1 ms against 24 ms and failed, passing alone five times in five.
+- **Found:** 2026-11-22, by Claude, in M5.2i8's `make check` (which stopped there: the rest of
+  the run didn't happen). The step doesn't touch the test or `auth`.
+- **A fix:** check that the second check was remembered without timing it: a count of bcrypt
+  verifications the cache saved (a test-only counter), or a hash that would fail if verified
+  again, as the failed one's half already does.
 
 ## B277: the metrics page's colour test checks whichever line the browser finds first
 

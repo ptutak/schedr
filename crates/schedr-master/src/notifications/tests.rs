@@ -732,6 +732,21 @@ fn an_email_is_plain_text_with_the_summary_as_its_subject() {
         "{text}"
     );
     assert!(text.contains("Data:\n{\n  \"rows\": 12\n}\n"), "{text}");
+    assert!(!text.contains("Details:"), "none for a task's own: {text}");
+
+    // M5.2i8 (agy's review): an event's details, which an email has no template for.
+    let told = self::dag(&json!([{"channel": {"kind": "server", "name": "oncall"},
+                             "events": ["RUN_STARTED"]}]));
+    let mut started = Event::new(&told, ts("2026-11-09T10:00:00Z"));
+    started.run_id = Some("r2");
+    started.details = json!({"reason": "manual", "by": "ana"});
+    let email = &settings.queued(&started, NotifyEvent::RunStarted, &MasterMetrics::default())[0];
+    let text = email.body["text"].as_str().unwrap();
+    assert!(
+        text.contains("Details:\n{\n  \"by\": \"ana\",\n  \"reason\": \"manual\"\n}\n"),
+        "{text}"
+    );
+    assert_eq!(email.body["subject"], "DAG `etl`: run r2 started (manual)");
 }
 
 /// A mail server on 127.0.0.1 speaking just enough SMTP: answers `RCPT TO` with `rcpt` (250

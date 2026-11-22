@@ -11,6 +11,7 @@ fn hello_is_tagged_by_type() {
         protocol: None,
         metrics: Vec::new(),
         panels: Vec::new(),
+        notifications: Vec::new(),
     };
     let expected = json!({"type": "hello", "schedr_version": "1.0.0", "mode": "parse"});
     assert_eq!(serde_json::to_value(&message).unwrap(), expected);

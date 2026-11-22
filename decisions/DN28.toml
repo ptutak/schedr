@@ -1,0 +1,21 @@
+title = "A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run"
+date = 2026-11-22
+by = "user"
+on = "D515"
+kind = "adds"
+summary = '''
+A notification's own facts reach its body through one new placeholder, `details`
+(`notify.details` in Python, `{details}` in config): an object, null for the earlier events.
+EXTENSION_EVENT: `extension`, `version`, `event` (the plugin's declared name); RUN_STARTED:
+`reason` and, for a chain, `via` and the upstream `dag`, `run` and `task`, for a trigger its
+event, for a backfill its range, for a manual run who; EVENT_POSTED: the posted event's `name`,
+its `key`, who posted it and how the DAG listens, not its data (large, or holding what its poster
+put in, and a channel may be off-site), nor whether it started a run, which DN18 had: it tells
+that an event occurred (the user, 2026-11-22: "We don't care if the EVENT started a run, we just
+notify that an event occured"); a run's start is its `RUN_STARTED`. `notify.event` stays the notification event's name
+(`EXTENSION_EVENT`, ...), `notify.text` and `notify.data` what the task or plugin sent. A
+plugin's `notify` counts with a task's own sends against `[notifications] max_per_attempt`. A
+plugin declares them under `notifications` (in its hello and `[extensions.<name>]`, config
+winning), each a `name` and a `help`.
+'''
+history = "JOURNAL.md#DN28"

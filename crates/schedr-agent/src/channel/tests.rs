@@ -11,6 +11,7 @@ fn hello(version: &str) -> RunnerMessage {
         protocol: None,
         metrics: Vec::new(),
         panels: Vec::new(),
+        notifications: Vec::new(),
     }
 }
 
@@ -171,6 +172,7 @@ async fn a_plugin_is_welcomed_by_its_protocol_whatever_its_version() {
         protocol,
         metrics: Vec::new(),
         panels: Vec::new(),
+        notifications: Vec::new(),
     };
     let (mut agent, mut runner) = duplex(1024);
     write_message(&mut runner, &plugin(Some(EXTENSION_PROTOCOL)))

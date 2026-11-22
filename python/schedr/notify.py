@@ -47,6 +47,7 @@ __all__ = [
     "attempt",
     "dag",
     "data",
+    "details",
     "event",
     "failed_tasks",
     "link",
@@ -79,6 +80,14 @@ class Notify(StrEnum):
     """The DAG's trigger kept failing, or its generator returned."""
     LATE_CLEANUP_FAILED = "LATE_CLEANUP_FAILED"
     """A cleanup that ran after its run had ended failed."""
+    RUN_STARTED = "RUN_STARTED"
+    """A run started, however; its ``reason`` in ``notify.details``."""
+    EVENT_POSTED = "EVENT_POSTED"
+    """An event the DAG listens for was posted; its name and key in ``notify.details``, not its
+    data."""
+    EXTENSION_EVENT = "EXTENSION_EVENT"
+    """A plugin of one of the DAG's extension tasks sent one of its declared events; the
+    extension, version and event in ``notify.details``, its text and data."""
 
 
 class Placeholder:
@@ -159,7 +168,10 @@ time: Final = Placeholder("time")
 zone: Final = Placeholder("zone")
 """The DAG's time zone."""
 data: Final = Placeholder("data")
-"""A task's own ``send``: its ``data``; null in event notifications."""
+"""A task's own ``send``: its ``data``; a plugin's event: its ``data``; null otherwise."""
+details: Final = Placeholder("details")
+"""The event's own facts: ``RUN_STARTED``'s ``reason``, ``EVENT_POSTED``'s posted event,
+``EXTENSION_EVENT``'s extension; null for the other events and a task's ``send``."""
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 

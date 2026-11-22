@@ -544,4 +544,17 @@ async fn a_command_task_is_refused_an_extensions_requests_naming_where_they_are(
         reason.contains("`task-ctx extension stop-reason`"),
         "{reason}"
     );
+    // M5.2i8: a task's own is `task-ctx notify`, named beside.
+    let notify = CtxRequest::ExtensionNotify {
+        event: "job_done".into(),
+        text: None,
+        data: None,
+    };
+    let CtxAnswer::ReportRefused { reason } = answer_to(&info, notify).await else {
+        panic!("an extension's event is refused");
+    };
+    assert!(
+        reason.contains("`task-ctx extension notify`") && reason.contains("`task-ctx notify`"),
+        "{reason}"
+    );
 }

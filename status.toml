@@ -4,8 +4,7 @@
 updated = 2026-11-22
 
 in_progress = [
-    "The user asleep (2026-11-21, ~23:30 CET): M5.2 finished alone, in order M5.2i10, i7, i8, i9, i11, i4, then M5.2j (paging), then M5.2k (all open bugs but B38, B39); answers given ahead in memory (m5-2-night-pre-accepted); each step reviewed by agy, make check, pushed. Every choice made alone recorded \"Claude's, to confirm\" and shown to the user in the morning as an options table.",
-    "M5.2i6 done (shell plugins, D519): agy's review, 12 findings, all fixed. M5.2i10 done (chart functions, D516, DN26: the user answered its four choices 2026-11-22): agy's review, 13 findings, 12 fixed, 1 (a counter's min/mean over workers that grew) the accepted limit. M5.2i7 done (make demo-kind on Headlamp, the user chose it over the archived Dashboard; plugins type-checked, `ExtensionJson`, typed declarations; shellcheck in make lint; DN27): agy's review, 15 findings, all fixed. Next: M5.2i8 (notifications), then i9, i11, i4, j, k.",
+    "M5.2i6, i10, i7 done and pushed; M5.2i8 done (notifications: RUN_STARTED, EVENT_POSTED, EXTENSION_EVENT, DN28; agy's review, 8 findings, all fixed). The night's choices accepted by the user (2026-11-22). Next: M5.2i14 (a worker's identity and the trust model, before the service; its scope under discussion with the user: shrink to the identity binding, standalone's localhost ports and the written trust model, the rest 'won't do by design'?), then i9, i11, i12, i13 (extension stress), i4, j, k.",
 ]
 
 waiting = []

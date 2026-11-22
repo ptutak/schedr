@@ -323,6 +323,26 @@ impl Channel {
         })
     }
 
+    /// Sends one of its declared notification events (M5.2i8): told to the channels of the
+    /// attempt's DAG subscribed to `EXTENSION_EVENT`, with `text` (none: schedr's summary) and
+    /// `data`. No answer; one it didn't declare is dropped by the worker.
+    ///
+    /// # Errors
+    ///
+    /// The channel's.
+    pub fn notify(
+        &mut self,
+        event: &str,
+        text: Option<&str>,
+        data: Option<Value>,
+    ) -> Result<(), Error> {
+        self.send(&PluginMessage::Notify {
+            event: event.to_owned(),
+            text: text.map(str::to_owned),
+            data,
+        })
+    }
+
     /// Why the task is being stopped, asked after SIGTERM (decision 513): the reason
     /// (`None` while it isn't being stopped) and the time left before SIGKILL.
     ///
@@ -492,7 +512,7 @@ pub fn run_main(mut plugin: impl Plugin, args: &[String], fd: Option<&str>) -> u
     }
 }
 
-/// `declarations`' list under `key` (`metrics` or `panels`), for the hello.
+/// `declarations`' list under `key` (`metrics`, `panels` or `notifications`), for the hello.
 fn declared(declarations: &Value, key: &str) -> Vec<Value> {
     declarations
         .get(key)
@@ -516,6 +536,7 @@ pub fn serve(plugin: &mut impl Plugin, mut stream: UnixStream) -> Result<bool, E
             protocol: PROTOCOL,
             metrics: declared(&declarations, "metrics"),
             panels: declared(&declarations, "panels"),
+            notifications: declared(&declarations, "notifications"),
         },
     )?;
     match read(&mut stream)? {

@@ -121,7 +121,7 @@ def request(payload: object, cleanup: list[dict[str, Any]] | None = None) -> dic
 
 
 # What a plugin tells the worker without waiting for an answer.
-REPORTS = {"status", "link", "metrics"}
+REPORTS = {"status", "link", "metrics", "notify"}
 
 
 def serve(
@@ -256,6 +256,27 @@ def test_a_failed_or_stuck_pod_fails_the_attempt_with_its_reason(
     assert sent[-1]["type"] == "task_failed"
     assert sent[-1]["error"]["exception"] == "PodFailedError"
     assert sent[-1]["error"]["message"] == why
+
+
+def test_a_pod_whose_image_cant_be_pulled_is_told_as_its_declared_event(kubectl: Path) -> None:
+    waiting = {"waiting": {"reason": "ImagePullBackOff", "message": "back-off"}}
+    scenario(kubectl, pods=[pod("Pending", waiting)])
+    sent = serve(request({"image": "busybox:9.99"}))
+    told = [m for m in sent if m["type"] == "notify"]
+    assert len(told) == 1, sent
+    assert told[0]["event"] == "image_pull_failed"
+    assert told[0]["data"]["reason"] == "ImagePullBackOff"
+    assert told[0]["text"].endswith("ImagePullBackOff: back-off")
+    assert sent[-1]["type"] == "task_failed"
+    declared = {n["name"] for n in load().NOTIFICATIONS}
+    assert told[0]["event"] in declared
+
+
+def test_a_failed_pod_after_its_start_is_no_event(kubectl: Path) -> None:
+    terminated = {"terminated": {"reason": "Error", "exitCode": 3}}
+    scenario(kubectl, status={"failed": 1}, pods=[pod("Failed", terminated)])
+    sent = serve(request({"image": "busybox:1.36"}))
+    assert [m for m in sent if m["type"] == "notify"] == []
 
 
 def test_a_payload_without_an_image_fails_before_anything_is_created(kubectl: Path) -> None:

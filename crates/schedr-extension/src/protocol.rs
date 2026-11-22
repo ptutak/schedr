@@ -35,6 +35,9 @@ pub enum PluginMessage {
         /// `group_by`, `limit`: decision 516).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panels: Vec<Value>,
+        /// Its notification events, raw JSON (name, help: M5.2i8).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notifications: Vec<Value>,
     },
     /// A secret the task declared; answered [`WorkerMessage::Secret`] or
     /// [`WorkerMessage::SecretFailed`].
@@ -102,6 +105,19 @@ pub enum PluginMessage {
     Metrics {
         /// The points.
         points: Vec<MetricPoint>,
+    },
+    /// One of its declared notification events (M5.2i8), told to the channels of the attempt's
+    /// DAG subscribed to `EXTENSION_EVENT`. No answer: an undeclared one is dropped by the
+    /// worker with a warning.
+    Notify {
+        /// The declared event's name.
+        event: String,
+        /// What happened, one line; none: schedr's summary.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// More about it, JSON.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<Value>,
     },
     /// The task (or cleanup) failed.
     TaskFailed {

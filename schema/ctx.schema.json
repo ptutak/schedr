@@ -692,6 +692,34 @@
           "type": "object"
         },
         {
+          "description": "One of the extension's declared notification events (`schedr task-ctx extension notify`,\nM5.2i8): only within an extension's shell plugin.",
+          "properties": {
+            "data": {
+              "description": "More about it, JSON."
+            },
+            "event": {
+              "description": "The declared event.",
+              "type": "string"
+            },
+            "text": {
+              "description": "What happened.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "extension_notify",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Why the task is being stopped (`schedr task-ctx extension stop-reason`): only within an\nextension's shell plugin (decision 519).",
           "properties": {
             "type": {

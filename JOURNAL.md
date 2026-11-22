@@ -2958,3 +2958,100 @@ check read the cluster named like the context, not the context's own, and took
 fails on the old code); the demo's helpers followed a `SCHEDR_SERVER` set in the shell (the
 showcase target and `kind-extension.sh` too); its traps were set after the port-forward started;
 `down` didn't wait for the namespaces; the dummy, once typed, refused a whole-secret request.
+
+### 2026-11-22: The night's choices accepted
+
+The user, shown the choices made alone overnight (M5.2i6, M5.2i10, M5.2i7: a `limit` within
+`max_series`, a number panel over the range, an increase named on a rate chart drawn as named,
+functions refused on events panels, a script's calls refused once it exited, the run read
+leniently, the demo's cadence, port and token, Headlamp's chart pinned by version only,
+`--dashboard` kept beside `--headlamp`, the new checks in `make lint` and not CI, the review's
+fixes in the shared kind scripts): "all accepted".
+
+### <a id="DN28"></a>2026-11-22: A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run (decision note 28; adds to D515)
+
+Asked before M5.2i8, the user took each recommended answer: one `details` placeholder for the
+new events' facts (not a placeholder each, not inside `data`); EVENT_POSTED without the posted
+event's data; a plugin's notifications counted with a task's sends; `notifications` as the
+declarations' key (not `events`, which means posted events).
+
+Then, told that `started` was worked out from the trigger's rule (a live trigger, a key not seen),
+not from a run created: "We don't care if the EVENT started a run, we just notify that an event
+occured." `started` dropped (DN18 had it): EVENT_POSTED tells of each post to the DAGs listening,
+a paused trigger's and a repeated key's too; a run's start is its RUN_STARTED.
+
+
+### 2026-11-22: Extension stress scenarios planned (M5.2i12, M5.2i13)
+
+The user, during M5.2i8: "We'll need a stress test with extensions when it comes to throughput,
+latencies etc. It should be made so that it's comparable with some other stress test ... (01
+comes to my mind for example)", then "Also random_chaos targeting extensions aswell - it could be
+a second random_chaos just targeting extensions." Planned as M5.2i12 (`25_extension_throughput`,
+scenario 1's shape with extension tasks, compared with scenario 1 on the same run) and M5.2i13
+(`21b_random_chaos_extensions`), after M5.2i9 and M5.2i11 so the service and the reworked plugin
+are measured, before the protocol's specification (M5.2i4).
+
+### 2026-11-22: Extensions as execution controllers (the user's principle)
+
+The user, during M5.2i8, set out the model the extension mechanism serves: schedr is a
+lightweight distributed orchestration and control plane (scheduling, the worker-master protocol
+and its guarantees, high availability, fencing, journaling, failure handling at the
+orchestration layer, one interface through which an extension receives and reports its tasks);
+an extension is a pluggable, possibly long-lived execution controller (running tasks in its
+environment, its external resources and processes, its technology's lifecycle, and recovering or
+reattaching to tasks still running elsewhere if its author implements it). "schedr should not
+implement recovery mechanisms specific to individual execution backends": a controller that
+can't reattach after a restart is that extension's limitation; schedr's part is a protocol
+expressive and well defined enough to make it possible. The Kubernetes extension is the first
+test; the design stays technology-agnostic. "When implementing the extension mechanism, preserve
+this separation of concerns." It guides M5.2i9 (the service), M5.2i11 (the Kubernetes plugin on
+it) and M5.2i4 (the protocol's specification).
+
+### 2026-11-22: A worker is a trust domain (M5.2i14 planned)
+
+The user, on securing a worker that controls a larger system: "if there is some kind of malicious
+activity on the worker node it can probably access mTLS worker certificate, so probably we have
+to consider a worker a trusted domain", then "encrypting extension - worker traffic won't help, if
+someone can already access mTLS... right?" Agreed: the plugin's link is a local socket inherited
+by its FD; whoever can read it can read the key. Planned as M5.2i14 before the service (M5.2i9):
+a worker's identity bound to its certificate and every master-side action checked against it,
+rotation and the trust model documented; hardening against malicious task code beside it.
+
+### 2026-11-22: M5.2i8 done
+
+RUN_STARTED for every run with its reason, EVENT_POSTED to the DAGs whose code listens for a
+posted event's name (trigger or wait step; that it occurred, the user dropping `started`),
+EXTENSION_EVENT for a plugin's declared notifications (`channel.notify`, the Rust crate's
+`notify`, `schedr task-ctx extension notify`), one `details` placeholder (DN28); the round's rest
+announces runs and posted events from `announced` columns (migration 0003). agy's review: 8
+findings, all fixed: a queued run cancelled before it started was announced (now `started_at IS
+NOT NULL`, the index matching), listeners read from instances missed a running sensor, a
+trigger's `wait_for` and a step ended a moment before (now from the DAG's code), `notify` awaited
+the master inside the plugin's conversation (now a sender of its own, waited for before the
+attempt's end is told, as the master takes a notification only from an open attempt: a side
+note's catch), `notified` recorded before the master accepted it, emails without `details`,
+stale schemas, and the tests those gaps let through. D516's summary corrected for DN26.
+
+### 2026-11-22: M5.2i14 slimmed; standalone's ports under in-memory mTLS
+
+Asked whether to drop the security step ("or we just abandon this idea as something schedr won't
+do by design"), the user took the middle: "A i14 slimmer". Out of scope by design: defending a
+compromised node (encrypting the plugin's local link, an in-memory database, plugins as their own
+OS users). M5.2i14 keeps three things: a worker's ID bound to its certificate, standalone's
+localhost ports closed with mTLS made in memory at each start (option A; not chosen: a token per
+start, B; in-process channels with no ports, C), and the trust model written down.
+
+The user then: "strengthening ports won't help if someone can access database sqlite or postgres
+credentials". True for the node's own user or root (out of scope); against another user of the
+host or a pod's sidecar the ports matter only with private files, so M5.2i14's second item also
+checks the data directory, the SQLite file and the config and password files are private.
+Not chosen: standalone's SQLite in memory (the user: "it conquers the whole idea by loosing
+everything": a restart loses the history, the `db` secrets, the event keys seen and the cursors,
+and a controller has nothing kept to take back control from).
+
+The user asked whether extension and runner links need the same as standalone's ports. They
+are inherited socket pairs (launch.rs, fork.rs, ctx.rs, shell_plugin.rs), reachable only by the
+process and its children; the cleanup barrier alone is a socket file, in a 0700 folder. Added
+("add it"): M5.2i14's trust page states the rule (local links are inherited descriptors, never
+ports), weighs the barrier's file against a socket pair, and says the ops port's metrics are
+readable by whoever reaches it; M5.2i9's service listens on nothing.

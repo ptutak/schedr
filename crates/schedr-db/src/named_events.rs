@@ -85,8 +85,8 @@ impl Database {
         now: Timestamp,
     ) -> Result<Posted, DbError> {
         const INSERT: &str = "INSERT INTO named_events \
-            (id, name, key, data, at, posted_at, posted_by, request_key) \
-            VALUES ($1{uuid}, $2, $3, $4{json}, $5{ts}, $6{ts}, $7, $8) \
+            (id, name, key, data, at, posted_at, posted_by, request_key, announced) \
+            VALUES ($1{uuid}, $2, $3, $4{json}, $5{ts}, $6{ts}, $7, $8, $9) \
             ON CONFLICT (posted_by, request_key) WHERE request_key IS NOT NULL DO NOTHING";
         const BY_KEY: &str = "SELECT id{text}, name, key, data{text} FROM named_events \
             WHERE posted_by = $1 AND request_key = $2";
@@ -111,6 +111,8 @@ impl Database {
                 .bind(db_time(now))
                 .bind(posted_by)
                 .bind(request_key)
+                // Announced by the master's round (EVENT_POSTED, M5.2i8).
+                .bind(false)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
@@ -393,3 +395,54 @@ impl Database {
 
 #[cfg(test)]
 mod tests;
+
+impl Database {
+    /// At most `limit` posted events not yet announced, the earliest posted first.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or a row doesn't read.
+    pub async fn unannounced_named_events(&self, limit: u32) -> Result<Vec<NamedEvent>, DbError> {
+        // Each backend's literal, so its partial index (`named_events_unannounced`) applies.
+        const SQLITE: &str = "SELECT id{text}, name, key, data{text}, {ts<}at{>ts}, \
+            {ts<}posted_at{>ts}, posted_by FROM named_events WHERE announced = 0 \
+            ORDER BY posted_at, id LIMIT $1";
+        const POSTGRES: &str = "SELECT id{text}, name, key, data{text}, {ts<}at{>ts}, \
+            {ts<}posted_at{>ts}, posted_by FROM named_events WHERE NOT announced \
+            ORDER BY posted_at, id LIMIT $1";
+        let rows: Vec<Row> = on_pool!(self, |pool, backend| {
+            let text = if backend == crate::Backend::Postgres {
+                POSTGRES
+            } else {
+                SQLITE
+            };
+            crate::query::query_as(sql(backend, text))
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(row).collect()
+    }
+
+    /// Posted events `ids` marked announced: their `EVENT_POSTED` queued, or none to queue.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if a statement fails.
+    pub async fn mark_events_announced(&self, ids: &[String]) -> Result<(), DbError> {
+        const MARK: &str = "UPDATE named_events SET announced = $1 \
+            WHERE id IN (SELECT value{uuid} FROM {json_each}($2{json}))";
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let list = to_json(&ids);
+        in_tx!(self, |tx, backend| {
+            crate::query::query(sql(backend, MARK))
+                .bind(true)
+                .bind(&list)
+                .execute(&mut *tx)
+                .await?;
+        });
+        Ok(())
+    }
+}

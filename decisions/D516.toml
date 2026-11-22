@@ -7,7 +7,7 @@ section = "Extensions"
 summary = '''
 An extension's panel may name four functions saying how its metric is drawn, each with a default,
 so most panels name none. `point`: how one point is worked out from its bucket (a counter
-`increase` by default, or `rate`; a gauge `last` by default, `mean`, `max` or `min`; a histogram
+`increase` by default, or `rate`; a gauge `mean` by default (DN26), `last`, `max` or `min`; a histogram
 its `count` by default, `mean` or `quantiles`). `combine`: how values are combined, the workers'
 on the "All workers" tab and the labels left out of `group_by` (`sum` by default, `max`, `mean`,
 `min`): a value every worker reads from one place (a cluster's pending pods) declares `max`, so 3

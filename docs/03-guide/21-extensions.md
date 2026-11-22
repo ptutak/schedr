@@ -124,6 +124,7 @@ doesn't answer:
 | `status`: a phase (`pulling`, `running`), a message, a progress from 0 to 1 | on the task's attempts, the latest beside it and every one with its time (the first and the latest 100 kept) |
 | `link`: a label and an `http` or `https` URL | on the task's attempts, beside its phase: a pod's page, a console (at most 10, one per label) |
 | `metrics`: points of its declared metrics | on the worker's `/metrics` and the extension's page |
+| `notify`: one of its declared notification events, a text and data | to the channels of the attempt's DAG subscribed to `EXTENSION_EVENT`, and on the extension's events panel |
 
 Each is masked as the attempt's output is: a secret it read doesn't show. An attempt sends at
 most 10 reports a second, 50 at once after a quiet spell: past that its newest status is held
@@ -165,10 +166,36 @@ across a master's takeover: a new label combination past it, or a value outside 
 a quarter of what the master accepts in a message: a version's figures past that are left out
 for the minute, with an event saying so.
 
+**Notifications** (decision 515) are declared the same way, under `notifications` in its
+`hello` or `[extensions.<name>]` (config wins), each a `name` (a lowercase identifier) and a
+`help`; at most 50. `channel.notify(event, text, data)` sends one: the worker masks it, cuts its
+text to 512 characters, and sends it to the master as the task's own `send` goes, counted against
+`[notifications] max_per_attempt`. The master tells each channel of the attempt's DAG
+subscribed to `Notify.EXTENSION_EVENT` (one event for every extension: a receiver filters on
+`notify.details`, which holds the `extension`, `version` and `event`). An event it didn't declare
+is dropped, with one warning per name an attempt. Both are listed on its events panel
+(`notified`, `dropped`). A plugin's own API call can't send one: only `notify`, which the worker
+checks.
+
+```python
+NOTIFICATIONS = [{"name": "image_pull_failed", "help": "A Job's image can't be pulled"}]
+
+async def run(request, channel):
+    ...
+    await channel.notify("image_pull_failed", f"job {job}: {why}", {"job": job})
+
+main(run, name="kubernetes", versions=["1.0"], notifications=NOTIFICATIONS)
+```
+
+```python
+with Dag("pods", notify={"ops": [Notify.EXTENSION_EVENT, Notify.RUN_FAILED]}):
+    ExtensionTask("job", name="kubernetes", version="1.0", payload={"image": "busybox:1.36"})
+```
+
 **Its page** is declared with them (`panels=`): each panel a `title`, the `metric` it draws, a
 `chart` (`line`, `rate`, `stacked`, `bars`, `histogram`, `quantiles`, `number`, `table`, or `events`,
 which draws no metric but the extension's own events (discovered, skipped, refused, a metric
-point or figures dropped), newest first, and its attempts' latest phases, each linking to its
+point, figures or a notification dropped, a notification sent), newest first, and its attempts' latest phases, each linking to its
 attempt), its `row`
 (from 1 at the top, rows of one height) and its `cell` in the row: `full`, or `left` and `right`,
 or `left`, `center` and `right`. A metric no panel draws gets a `full` row of its own below them.
@@ -364,7 +391,8 @@ by side (the dummy and the Rust `hello-plugin`, which those targets build and co
 
 `schedr extension shell -- <script> [args]` makes any script an extension's plugin: it speaks the
 protocol with the worker and runs the script for each attempt. Configure it as the extension's
-command, its metrics and panels beside it (a script sends no `hello`, so they are declared here):
+command, its metrics, panels and notifications beside it (a script sends no `hello`, so they are
+declared here):
 
 ```toml
 [extensions.backup]
@@ -372,6 +400,7 @@ command  = ["schedr", "extension", "shell", "--", "/opt/ops/backup.sh"]
 versions = ["1.0"]
 metrics  = [{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]
 panels   = [{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]
+notifications = [{name = "backup_done", help = "A backup's snapshot was taken"}]
 ```
 
 The script gets:
@@ -393,6 +422,7 @@ on its `PATH`, so the commands are that build's:
 | `cleanup add TYPE FIELD...`, `cleanup list` | A handle, before what it cleans up; the handles, in the cleanup |
 | `status PHASE [--message TEXT] [--progress FRACTION]`, `link LABEL URL` | Its phase and links, on the task |
 | `extension metric NAME VALUE [--label NAME=VALUE]...` | A point of a metric declared in the config |
+| `extension notify EVENT [--text TEXT] [--data JSON]` | One of the notification events declared in the config (`notifications = [{name = ..., help = ...}]`), to the DAG's channels subscribed to `EXTENSION_EVENT` |
 | `extension stop-reason [--field reason]` | After `SIGTERM`: `cancel`, `timeout`, `drain` or `master_lost`, and the seconds left |
 | `api METHOD PATH`, `events post` | schedr's API and events, as the task |
 
@@ -417,7 +447,7 @@ driving `kubectl`. It is short enough to read whole, and shows what a plugin sho
 | While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`); its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and links to its Job and pod in Headlamp (`--headlamp <address>`) or the Kubernetes Dashboard (`--dashboard <address>`) |
 | Its metrics | `jobs_started` by namespace, `jobs_ended` by outcome, `pods_running` (as the cluster counts schedr's), `start_seconds` (to a running pod) and `job_seconds`, with a page of six panels declared in its hello |
 | The output | the ended pod's last log line `SCHEDR_OUTPUT: <json>`, read once the Job succeeded, never from the stream; without it, `null`; a log that can't be read fails the attempt |
-| A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once |
+| A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once, told first as its declared event `image_pull_failed` (`pod_stuck` for another reason it never starts) to channels subscribed to `EXTENSION_EVENT` |
 | Being stopped | SIGTERM: it asks why; on a cancel, a timeout or a drain it deletes its Job, on a lost master it leaves it to the cleanup |
 | The cleanup | deletes each handle's Job in the namespace the handle names, whatever the attempt's end, a lost worker's too |
 
