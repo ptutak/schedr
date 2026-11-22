@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Config
+clusters:
+- name: prod-eks
+  cluster: {server: "https://prod.eks.example:443"}
+- name: kind-demo
+  cluster: {server: "https://127.0.0.1:41234"}
+contexts:
+- name: kind-demo
+  context: {cluster: prod-eks, user: u}
+users:
+- name: u
+  user: {}

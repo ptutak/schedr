@@ -27,36 +27,73 @@ import logging
 import random
 from collections.abc import Awaitable, Callable
 
-from schedr.extension import ExtensionChannel, ExtensionRequest, main
+from schedr.extension import (
+    ExtensionChannel,
+    ExtensionJson,
+    ExtensionRequest,
+    MetricDeclaration,
+    PanelDeclaration,
+    main,
+)
+from schedr.types import Json
 
 
-async def _secret(channel: ExtensionChannel, value: object) -> None:
-    path, key = value
+def _parts(value: ExtensionJson, count: int, step: str) -> list[ExtensionJson]:
+    """A step's value as the list of `count` parts it takes."""
+    if not isinstance(value, list) or len(value) != count:
+        raise ValueError(f"`{step}` takes a list of {count}, got {value!r}")
+    return value
+
+
+def _text(value: ExtensionJson, step: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"`{step}` takes text, got {value!r}")
+    return value
+
+
+def _number(value: ExtensionJson, step: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise ValueError(f"`{step}` takes a number, got {value!r}")
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"`{step}` takes a number, got {value!r}") from None
+
+
+async def _secret(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    path, key = _parts(value, 2, "secret")
+    # A null key reads the whole secret (agy's review of M5.2i7: refused once typed).
+    path, key = _text(path, "secret"), None if key is None else _text(key, "secret")
     secret = await channel.secret(path, key)
     print(f"secret {path}#{key}: {len(str(secret))} characters", flush=True)
 
 
-async def _handle(channel: ExtensionChannel, value: object) -> None:
+async def _handle(channel: ExtensionChannel, value: ExtensionJson) -> None:
     await channel.add_handle("job", value)
     print(f"handle registered: {value}", flush=True)
 
 
-async def _status(channel: ExtensionChannel, value: object) -> None:
-    phase, progress = value
-    await channel.status(phase, progress=progress)
+async def _status(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    phase, progress = _parts(value, 2, "status")
+    # A status without a progress: null.
+    fraction = None if progress is None else _number(progress, "status")
+    await channel.status(_text(phase, "status"), progress=fraction)
 
 
-async def _link(channel: ExtensionChannel, value: object) -> None:
-    label, url = value
-    await channel.link(label, url)
+async def _link(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    label, url = _parts(value, 2, "link")
+    await channel.link(_text(label, "link"), _text(url, "link"))
 
 
-async def _metric(channel: ExtensionChannel, value: object) -> None:
-    name, number, labels = value
-    await channel.metric(name, float(number), **labels)
+async def _metric(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    name, number, labels = _parts(value, 3, "metric")
+    if not isinstance(labels, dict):
+        raise ValueError(f"`metric` takes its labels as an object, got {labels!r}")
+    named = {key: _text(text, "metric") for key, text in labels.items()}
+    await channel.metric(_text(name, "metric"), _number(number, "metric"), **named)
 
 
-async def _hang(channel: ExtensionChannel, value: object) -> None:
+async def _hang(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del value
     try:
         await asyncio.Event().wait()
@@ -67,12 +104,12 @@ async def _hang(channel: ExtensionChannel, value: object) -> None:
         raise
 
 
-async def _sleep(channel: ExtensionChannel, value: object) -> None:
+async def _sleep(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del channel
-    await asyncio.sleep(float(value))
+    await asyncio.sleep(_number(value, "sleep"))
 
 
-async def _log(channel: ExtensionChannel, value: object) -> None:
+async def _log(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del channel
     print(value, flush=True)
 
@@ -81,9 +118,9 @@ REGIONS = ("eu", "us", "asia")
 log = logging.getLogger("schedr-ext-dummy")
 
 
-async def _simulate(channel: ExtensionChannel, value: object) -> None:
+async def _simulate(channel: ExtensionChannel, value: ExtensionJson) -> None:
     """`value` rounds of made-up jobs: each round's queues, a job slept, its outcome."""
-    rounds = int(str(value))
+    rounds = int(_number(value, "simulate"))
     for i in range(rounds):
         await channel.status("simulating", f"round {i + 1} of {rounds}", progress=i / rounds)
         for region in REGIONS:
@@ -101,12 +138,12 @@ async def _simulate(channel: ExtensionChannel, value: object) -> None:
     await channel.status("done", f"{rounds} rounds", progress=1.0)
 
 
-async def _fail(channel: ExtensionChannel, value: object) -> None:
+async def _fail(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del channel
     raise RuntimeError(str(value))
 
 
-STEPS: dict[str, Callable[[ExtensionChannel, object], Awaitable[None]]] = {
+STEPS: dict[str, Callable[[ExtensionChannel, ExtensionJson], Awaitable[None]]] = {
     "sleep": _sleep,
     "log": _log,
     "secret": _secret,
@@ -120,9 +157,9 @@ STEPS: dict[str, Callable[[ExtensionChannel, object], Awaitable[None]]] = {
 }
 
 
-async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+async def run(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
     """Does the payload's steps."""
-    output: object = None
+    output: Json = None
     steps = request.payload if isinstance(request.payload, list) else [request.payload]
     for step in steps:
         if not isinstance(step, dict) or len(step) != 1:
@@ -137,7 +174,7 @@ async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
     return output
 
 
-async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
     """Prints the handles it was given: what a real cleanup would undo."""
     del channel
     for handle in request.handles:
@@ -146,7 +183,7 @@ async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> objec
 
 
 # Its metrics (decision 513), declared in its hello. `simulate` reports all of them.
-METRICS = [
+METRICS: list[MetricDeclaration] = [
     {
         "name": "steps",
         "kind": "counter",
@@ -182,7 +219,7 @@ METRICS = [
     },
 ]
 # Its page: four rows of one, two or three cells, each kind of chart, in colours it names.
-PANELS = [
+PANELS: list[PanelDeclaration] = [
     {"title": "In flight", "metric": "in_flight", "chart": "number", "row": 1, "cell": "left"},
     {"title": "Steps", "metric": "steps", "chart": "rate", "row": 1, "cell": "center"},
     {

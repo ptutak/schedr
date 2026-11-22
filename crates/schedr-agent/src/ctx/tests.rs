@@ -523,3 +523,25 @@ async fn a_command_task_reports_a_status_and_a_link_and_is_refused_the_rest() {
     .await;
     assert_eq!(got[1]["type"], "report_refused");
 }
+
+#[tokio::test]
+async fn a_command_task_is_refused_an_extensions_requests_naming_where_they_are() {
+    // DN27 (agy's review of M5.2i7): the refusals name the commands' place under `extension`.
+    let info = info();
+    let metric = CtxRequest::MetricAdd {
+        name: "m".into(),
+        value: 1.0,
+        labels: std::collections::BTreeMap::new(),
+    };
+    let CtxAnswer::ReportRefused { reason } = answer_to(&info, metric).await else {
+        panic!("a metric is refused");
+    };
+    assert!(reason.contains("`task-ctx extension metric`"), "{reason}");
+    let CtxAnswer::Error { reason } = answer_to(&info, CtxRequest::StopReasonGet).await else {
+        panic!("a stop reason is refused");
+    };
+    assert!(
+        reason.contains("`task-ctx extension stop-reason`"),
+        "{reason}"
+    );
+}

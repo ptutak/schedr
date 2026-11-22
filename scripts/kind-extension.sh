@@ -15,6 +15,8 @@ CLUSTER=${CLUSTER:-schedr-test}
 CONTEXT=kind-$CLUSTER
 NAMESPACE=schedr-ext
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# The standalone it starts, whatever SCHEDR_SERVER the shell has (agy's review of M5.2i7).
+export SCHEDR_SERVER=http://127.0.0.1:8080
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=kind-lib.sh
 source "$ROOT/scripts/kind-lib.sh"

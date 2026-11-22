@@ -2,11 +2,11 @@
 """An extension's plugin that runs each attempt as a Kubernetes Job (M5.2i2), driving `kubectl`.
 
 A model for plugin authors: it registers a cleanup handle before it creates anything, reports
-its phases, links to its Job and pod in the Kubernetes Dashboard (``--dashboard``), declares and
-reports its metrics and page (decision 513), streams the pod's log into the attempt's log, asks
-why when it is stopped and deletes its Job unless the master was lost, and its cleanup deletes
-what a lost worker left behind. Its own lines are ``logging``'s, structured (decision 514). The
-payload:
+its phases, links to its Job and pod in Headlamp (``--headlamp``) or the Kubernetes Dashboard
+(``--dashboard``), declares and reports its metrics and page (decision 513), streams the pod's
+log into the attempt's log, asks why when it is stopped and deletes its Job unless the master was
+lost, and its cleanup deletes what a lost worker left behind. Its own lines are ``logging``'s,
+structured (decision 514). The payload:
 
     {
       "image": "busybox:1.36",                     the container's image (required)
@@ -40,8 +40,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from typing import cast
 
-from schedr.extension import ExtensionChannel, ExtensionRequest, Run, main
+from schedr.extension import (
+    ExtensionChannel,
+    ExtensionJson,
+    ExtensionRequest,
+    MetricDeclaration,
+    PanelDeclaration,
+    Run,
+    main,
+)
 
 OUTPUT_PREFIX = "SCHEDR_OUTPUT: "
 # The pod never starts with these: the attempt fails at once instead of waiting for its timeout.
@@ -49,14 +58,20 @@ STUCK = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContaine
 POLL = 1.0
 
 
-def obj(value: object) -> dict[str, object]:
+def obj(value: ExtensionJson) -> dict[str, ExtensionJson]:
     """`value` if a JSON object, else an empty one: what `kubectl` printed, read defensively."""
-    return {str(k): v for k, v in value.items()} if isinstance(value, dict) else {}
+    return value if isinstance(value, dict) else {}
 
 
-def items(value: object) -> list[object]:
+def items(value: ExtensionJson) -> list[ExtensionJson]:
     """`value` if a JSON array, else an empty one."""
-    return list(value) if isinstance(value, list) else []
+    return value if isinstance(value, list) else []
+
+
+def decoded(text: str) -> ExtensionJson:
+    """`text` read as JSON."""
+    # `json.loads` gives decoded JSON: nothing but these types.
+    return cast("ExtensionJson", json.loads(text))
 
 
 class PodFailedError(Exception):
@@ -68,13 +83,13 @@ class Kubectl:
 
     def __init__(self, namespace: str, context: str | None, kubeconfig: str | None) -> None:
         """`kubectl` with these options on every command."""
-        self.namespace = namespace
+        self.namespace: str = namespace
         self.options: list[str] = []
         if context:
             self.options += ["--context", context]
         if kubeconfig:
             self.options += ["--kubeconfig", kubeconfig]
-        self.base = ["kubectl", "-n", namespace, *self.options]
+        self.base: list[str] = ["kubectl", "-n", namespace, *self.options]
 
     def in_namespace(self, namespace: str) -> Kubectl:
         """The same `kubectl` in another namespace (a handle's)."""
@@ -97,9 +112,9 @@ class Kubectl:
             raise RuntimeError(f"kubectl {' '.join(args)}: {err.decode().strip()}")
         return out.decode()
 
-    async def json(self, *args: str) -> dict[str, object]:
+    async def json(self, *args: str) -> dict[str, ExtensionJson]:
         """A command's JSON output, an object."""
-        return obj(json.loads(await self.run(*args, "-o", "json")))
+        return obj(decoded(await self.run(*args, "-o", "json")))
 
     def delete_now(self, job: str) -> None:
         """Deletes a Job and its pods, synchronously: what a signal handler can do."""
@@ -118,7 +133,7 @@ def job_name(request: ExtensionRequest) -> str:
     return f"schedr-{slug}-{digest[:12]}"
 
 
-def checked(payload: object) -> dict[str, object]:
+def checked(payload: ExtensionJson) -> dict[str, ExtensionJson]:
     """The payload, its fields' types checked before anything is created.
 
     A mistyped field fails the attempt instead of being dropped: a string `command` would run
@@ -143,9 +158,11 @@ def checked(payload: object) -> dict[str, object]:
     return fields
 
 
-def manifest(name: str, payload: Mapping[str, object], env: dict[str, str]) -> dict[str, object]:
+def manifest(
+    name: str, payload: Mapping[str, ExtensionJson], env: dict[str, str]
+) -> dict[str, ExtensionJson]:
     """The Job: one pod, never restarted, never retried (schedr retries)."""
-    container: dict[str, object] = {
+    container: dict[str, ExtensionJson] = {
         "name": "task",
         "image": payload["image"],
         "env": [{"name": k, "value": v} for k, v in env.items()],
@@ -154,7 +171,7 @@ def manifest(name: str, payload: Mapping[str, object], env: dict[str, str]) -> d
         container["command"] = [str(part) for part in items(payload["command"])]
     if "resources" in payload:
         container["resources"] = payload["resources"]
-    pod: dict[str, object] = {
+    pod: dict[str, ExtensionJson] = {
         "restartPolicy": "Never",
         # No API token in the pod: a task's image gets only what the task declared.
         "automountServiceAccountToken": False,
@@ -170,7 +187,9 @@ def manifest(name: str, payload: Mapping[str, object], env: dict[str, str]) -> d
     }
 
 
-async def environment(payload: Mapping[str, object], channel: ExtensionChannel) -> dict[str, str]:
+async def environment(
+    payload: Mapping[str, ExtensionJson], channel: ExtensionChannel
+) -> dict[str, str]:
     """The container's variables: the plain ones, then the declared secrets."""
     env = {k: str(v) for k, v in obj(payload.get("env")).items()}
     for variable, reference in obj(payload.get("secret_env")).items():
@@ -179,7 +198,7 @@ async def environment(payload: Mapping[str, object], channel: ExtensionChannel) 
     return env
 
 
-def stuck(pod: object) -> None:
+def stuck(pod: ExtensionJson) -> None:
     """Raises `PodFailedError` for a pod that will never start (its image can't be pulled)."""
     for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
         waiting = obj(obj(obj(container).get("state")).get("waiting"))
@@ -229,14 +248,14 @@ async def stream_logs(kubectl: Kubectl, pod: str) -> None:
         print(f"kubectl logs stopped: {error}", file=sys.stderr, flush=True)
 
 
-async def output(kubectl: Kubectl, pod: str) -> object:
+async def output(kubectl: Kubectl, pod: str) -> ExtensionJson:
     """The task's output: the ended pod's last log line `SCHEDR_OUTPUT: <json>`, else `None`.
 
     Raises `RuntimeError` when the log can't be read: no output is guessed.
     """
     last = (await kubectl.run("logs", f"pod/{pod}", "--tail=1")).rstrip("\n")
     if last.startswith(OUTPUT_PREFIX):
-        return json.loads(last[len(OUTPUT_PREFIX) :])
+        return decoded(last[len(OUTPUT_PREFIX) :])
     return None
 
 
@@ -252,10 +271,8 @@ async def outcome(kubectl: Kubectl, job: str) -> None:
             for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
                 ended = obj(obj(obj(container).get("state")).get("terminated"))
                 if status.get("failed") and ended:
-                    raise PodFailedError(
-                        f"the pod ended {ended.get('reason', 'Error')} "
-                        f"with exit code {ended.get('exitCode')}"
-                    )
+                    reason, code = ended.get("reason", "Error"), ended.get("exitCode")
+                    raise PodFailedError(f"the pod ended {reason} with exit code {code}")
         if status.get("failed"):
             raise PodFailedError("the Job failed")
         await asyncio.sleep(POLL)
@@ -263,7 +280,7 @@ async def outcome(kubectl: Kubectl, job: str) -> None:
 
 # Its metrics and page (decision 513), declared in its hello: the page shows these panels, a
 # metric no panel shows in a row of its own below them.
-METRICS = [
+METRICS: list[MetricDeclaration] = [
     {
         "name": "jobs_started",
         "kind": "counter",
@@ -292,7 +309,7 @@ METRICS = [
         "buckets": [1, 5, 15, 60, 300, 900, 3600],
     },
 ]
-PANELS = [
+PANELS: list[PanelDeclaration] = [
     # Every worker counts the namespace's pods (decision 516): the highest, not their sum.
     {
         "title": "Pods running",
@@ -351,15 +368,32 @@ async def running_pods(kubectl: Kubectl, channel: ExtensionChannel) -> None:
         await channel.metric("pods_running", float(len(items(pods.get("items")))))
 
 
-def make_run(kubectl: Kubectl, dashboard: str | None) -> Run:
+class Ui:
+    """The cluster's web UI the links go to: Headlamp, or the (archived) Kubernetes Dashboard."""
+
+    def __init__(self, kind: str, address: str, cluster: str = "main") -> None:
+        """`kind` is `headlamp` or `dashboard`; `cluster` the cluster's name in Headlamp."""
+        self.kind: str = kind
+        self.address: str = address.rstrip("/")
+        self.cluster: str = cluster
+
+    def page_url(self, kind: str, namespace: str, name: str) -> str:
+        """The page of a Job or a pod (`kind` is `job` or `pod`)."""
+        if self.kind == "headlamp":
+            # Headlamp's routes: /c/<cluster>/<kind>s/<namespace>/<name>; in a cluster its
+            # own is `main`.
+            return f"{self.address}/c/{self.cluster}/{kind}s/{namespace}/{name}"
+        return f"{self.address}/#/{kind}/{namespace}/{name}?namespace={namespace}"
+
+
+def make_run(kubectl: Kubectl, ui: Ui | None) -> Run:
     """The attempt: a Job created, its log streamed, its end taken as the task's."""
 
     def links_for(kind: str, name: str) -> str | None:
-        # The Kubernetes Dashboard's page of a Job or a pod, when its address is given.
-        if dashboard is None:
+        # The UI's page of a Job or a pod, when its address is given.
+        if ui is None:
             return None
-        ns = kubectl.namespace
-        return f"{dashboard.rstrip('/')}/#/{kind}/{ns}/{name}?namespace={ns}"
+        return ui.page_url(kind, kubectl.namespace, name)
 
     async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
         payload = checked(request.payload)
@@ -414,8 +448,9 @@ def make_run(kubectl: Kubectl, dashboard: str | None) -> Run:
 def make_cleanup(kubectl: Kubectl) -> Run:
     """After each attempt: its Job deleted, whatever its end (a lost worker's too)."""
 
-    async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
-        deleted = []
+    async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
+        del channel
+        deleted: list[ExtensionJson] = []
         for handle in request.handles:
             value = obj(handle.value)
             name, namespace = value.get("name"), value.get("namespace")
@@ -431,23 +466,46 @@ def make_cleanup(kubectl: Kubectl) -> Run:
     return cleanup
 
 
+class Options(argparse.Namespace):
+    """Its options, typed."""
+
+    namespace: str = "default"
+    context: str | None = None
+    kubeconfig: str | None = None
+    headlamp: str | None = None
+    dashboard: str | None = None
+    headlamp_cluster: str = "main"
+
+
+def parsed(argv: list[str]) -> tuple[Kubectl, Ui | None]:
+    """Its options: the `kubectl` it drives and the UI its links go to."""
+    parser = argparse.ArgumentParser(prog="schedr-ext-kubernetes")
+    parser.add_argument("--namespace", default="default")
+    parser.add_argument("--context")
+    parser.add_argument("--kubeconfig")
+    where = parser.add_mutually_exclusive_group()
+    where.add_argument("--headlamp", help="Headlamp's address, for links to Jobs and pods")
+    where.add_argument("--dashboard", help="the Kubernetes Dashboard's address, for links")
+    parser.add_argument("--headlamp-cluster", default="main", help="the cluster's name in Headlamp")
+    options = parser.parse_args(argv, namespace=Options())
+    kubectl = Kubectl(options.namespace, options.context, options.kubeconfig)
+    if options.headlamp is not None:
+        return kubectl, Ui("headlamp", options.headlamp, options.headlamp_cluster)
+    if options.dashboard is not None:
+        return kubectl, Ui("dashboard", options.dashboard)
+    return kubectl, None
+
+
 def entry(argv: list[str]) -> int:
     """Its options, then the helper's loop (`--describe` alone is the helper's)."""
-    dashboard = None
+    ui = None
     if argv == ["--describe"]:
         kubectl = Kubectl("default", None, None)
     else:
-        parser = argparse.ArgumentParser(prog="schedr-ext-kubernetes")
-        parser.add_argument("--namespace", default="default")
-        parser.add_argument("--context")
-        parser.add_argument("--kubeconfig")
-        parser.add_argument("--dashboard", help="the Kubernetes Dashboard's address, for links")
-        options = parser.parse_args(argv)
-        kubectl = Kubectl(options.namespace, options.context, options.kubeconfig)
-        dashboard = options.dashboard
+        kubectl, ui = parsed(argv)
         argv = []
     return main(
-        make_run(kubectl, dashboard),
+        make_run(kubectl, ui),
         name="kubernetes",
         versions=["1.0"],
         cleanup=make_cleanup(kubectl),

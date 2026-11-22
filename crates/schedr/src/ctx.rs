@@ -23,8 +23,8 @@ use schedr_model::SecretName;
 use schedr_model::runner::CleanupHandle;
 
 use crate::cli::{
-    CleanupCommand, ConnectionArgs, DagCtxCommand, GetCommand, ResourceCommand, SecretCommand,
-    TaskCtxCommand, TaskEventsCommand,
+    CleanupCommand, ConnectionArgs, DagCtxCommand, ExtensionCtxCommand, GetCommand,
+    ResourceCommand, SecretCommand, TaskCtxCommand, TaskEventsCommand,
 };
 
 #[cfg(test)]
@@ -121,8 +121,6 @@ pub fn run_task_ctx(
         }
         command @ (TaskCtxCommand::Status { .. }
         | TaskCtxCommand::Link { .. }
-        | TaskCtxCommand::Metric { .. }
-        | TaskCtxCommand::StopReason { .. }
         | TaskCtxCommand::Extension { .. }) => run_task_ctx_report(command, env, version, out),
         TaskCtxCommand::Log {
             message,
@@ -154,8 +152,8 @@ pub fn run_task_ctx(
     }
 }
 
-/// Runs `schedr task-ctx status`, `link`, `metric`, `stop-reason` and `extension output set`
-/// (decision 519).
+/// Runs `schedr task-ctx status`, `link`, and `extension metric`, `extension stop-reason` and
+/// `extension output set` (decision 519, DN27).
 ///
 /// # Errors
 ///
@@ -195,10 +193,13 @@ pub fn run_task_ctx_report(
             };
             report(env, version, &request)
         }
-        TaskCtxCommand::Metric {
-            name,
-            value,
-            labels,
+        TaskCtxCommand::Extension {
+            command:
+                ExtensionCtxCommand::Metric {
+                    name,
+                    value,
+                    labels,
+                },
         } => {
             let value = value
                 .parse::<f64>()
@@ -221,7 +222,9 @@ pub fn run_task_ctx_report(
             };
             report(env, version, &request)
         }
-        TaskCtxCommand::StopReason { field } => {
+        TaskCtxCommand::Extension {
+            command: ExtensionCtxCommand::StopReason { field },
+        } => {
             let mut stream = connect(env, Ctx::Task)?;
             let value = match call(&mut stream, version, &CtxRequest::StopReasonGet)? {
                 CtxAnswer::StopReason {
@@ -237,7 +240,7 @@ pub fn run_task_ctx_report(
         }
         TaskCtxCommand::Extension {
             command:
-                crate::cli::ExtensionCtxCommand::Output {
+                ExtensionCtxCommand::Output {
                     command: crate::cli::OutputCommand::Set { value },
                 },
         } => {

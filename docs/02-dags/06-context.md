@@ -279,9 +279,9 @@ events](22-events.md#posting-from-a-task):
 | `status PHASE [--message TEXT] [--progress FRACTION]` | Says where the task is now: shown on the task with its time, the latest on top. The progress is from 0 to 1. |
 | `link LABEL URL` | A link shown on the task, `http` or `https` (a job's page, a dashboard). |
 
-`metric`, `stop-reason` and `extension output set` belong to an extension's shell plugin
-([Extensions](../03-guide/21-extensions.md#a-shell-script-as-a-plugin)); a command task is told
-so.
+`extension metric`, `extension stop-reason` and `extension output set` belong to an extension's
+shell plugin ([Extensions](../03-guide/21-extensions.md#a-shell-script-as-a-plugin)), so they sit
+under `extension` (DN27); a command task is told so.
 
 ## The running task's own context: `task_ctx`
 

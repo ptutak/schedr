@@ -46,16 +46,16 @@ fail() {
 # The context's server has to be loopback: a kubeconfig that points it elsewhere would make
 # every later kubectl and helm call talk to that cluster.
 require_local_context() {
-    local server
-    server=$(kubectl config view -o jsonpath="{.clusters[?(@.name==\"${CONTEXT}\")].cluster.server}")
-    case "$server" in
-    https://127.0.0.1:* | https://localhost:* | https://\[::1\]:*) ;;
-    *)
+    local context_cluster server
+    # The context's own cluster, not one named like it (agy's review of M5.2i7).
+    context_cluster=$(kubectl config view -o jsonpath="{.contexts[?(@.name==\"${CONTEXT}\")].context.cluster}")
+    server=$(kubectl config view -o jsonpath="{.clusters[?(@.name==\"${context_cluster}\")].cluster.server}")
+    # A bare loopback address and port: no user info (`https://127.0.0.1:1@host`), no path.
+    if ! [[ $server =~ ^https://(127\.0\.0\.1|localhost|\[::1\]):[0-9]+/?$ ]]; then
         # No pod dump: that kubectl would talk to the cluster this refuses.
         echo "FAILED: context $CONTEXT has server ${server:-<none>}; this script only talks to local kind"
         exit 1
-        ;;
-    esac
+    fi
 }
 
 # A listed cluster can still have its node container stopped (podman shows it Created).

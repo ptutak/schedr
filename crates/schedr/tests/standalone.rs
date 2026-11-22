@@ -4265,7 +4265,7 @@ for dag_id, payload in [("backups", {"source": "/data"}), ("slow_backups", {"slo
 with Dag("reporting_command"):
     CommandOperator("report", ["sh", "-c", "{bin} task-ctx status working --progress 0.5"
                                " && {bin} task-ctx link Docs https://docs.example/x"
-                               " && ! {bin} task-ctx metric x 1 2>&1"])
+                               " && ! {bin} task-ctx extension metric x 1 2>&1"])
 "#;
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/extensions/backup/backup.sh")

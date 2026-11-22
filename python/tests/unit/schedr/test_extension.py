@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import threading
+import typing
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,9 @@ from schedr.extension import (
     ExtensionChannel,
     ExtensionError,
     ExtensionRequest,
+    LabelDeclaration,
+    MetricDeclaration,
+    PanelDeclaration,
     Run,
     main,
 )
@@ -446,3 +450,52 @@ def test_sigterm_cancels_the_plugins_coroutine_which_may_ask_why() -> None:
         worker.close()
     assert result["type"] == "task_failed"
     assert "SIGTERM" in json.dumps(result["error"])
+
+
+def test_the_typed_declarations_match_the_workers_schema() -> None:
+    # The TypedDicts a plugin's declarations are checked by, key by key against the Rust
+    # model's schema: a field or value added there and not here fails.
+    schema = json.loads((Path(__file__).parents[4] / "schema" / "runner.schema.json").read_text())
+    defs = schema["$defs"]
+
+    def values(name: str) -> set[object]:
+        return {v.get("const") or v["enum"][0] for v in defs[name]["oneOf"]}
+
+    def literal(hint: object) -> set[object]:
+        if typing.get_origin(hint) is typing.NotRequired:
+            return literal(typing.get_args(hint)[0])
+        if isinstance(hint, typing.TypeAliasType):
+            return literal(hint.__value__)
+        if typing.get_origin(hint) is dict:
+            return literal(typing.get_args(hint)[1])
+        return set(typing.get_args(hint))
+
+    for typed, name in [
+        (LabelDeclaration, "LabelDeclaration"),
+        (MetricDeclaration, "MetricDeclaration"),
+        (PanelDeclaration, "Panel"),
+    ]:
+        assert set(typed.__annotations__) == set(defs[name]["properties"]), name
+        assert set(typed.__required_keys__) == set(defs[name].get("required", [])), name
+    hints = typing.get_type_hints(PanelDeclaration, include_extras=True)
+    assert literal(hints["chart"]) == values("ChartKind")
+    assert literal(hints["cell"]) == values("Cell")
+    assert literal(hints["point"]) == values("Point")
+    assert literal(hints["combine"]) == values("Combine")
+    assert literal(hints["color"]) == values("Color")
+    assert literal(hints["colors"]) == values("Color")
+    metric = typing.get_type_hints(MetricDeclaration, include_extras=True)
+    assert literal(metric["kind"]) == values("MetricKind")
+    assert literal(metric["unit"]) == values("MetricUnit")
+
+
+def test_a_request_built_without_settings_takes_the_default_output_limit() -> None:
+    # agy's review of M5.2i7: a plugin's test building a request by hand hit a KeyError.
+    message: dict[str, Any] = {
+        "dag_id": "d",
+        "task": {"id": "t", "kind": "extension", "name": "x", "version": "1.0"},
+        "run": {},
+    }
+    assert ExtensionRequest.from_message(message).max_output_size == 1024 * 1024
+    message["task"]["settings"] = {"max_output_size": 64}
+    assert ExtensionRequest.from_message(message).max_output_size == 64

@@ -707,27 +707,8 @@ pub enum TaskCtxCommand {
         /// Its address.
         url: String,
     },
-    /// A point of the extension's declared metric: only in a shell plugin (decision 519).
-    Metric {
-        /// The metric.
-        name: String,
-        /// Its value: for a counter what it grew by, for a gauge its value, for a histogram
-        /// one observation.
-        #[arg(allow_negative_numbers = true)]
-        value: String,
-        /// A label, `name=value`. Repeatable.
-        #[arg(long = "label", value_name = "NAME=VALUE")]
-        labels: Vec<String>,
-    },
-    /// Why the task is being stopped, after `SIGTERM`: only in a shell plugin (decision 519).
-    /// Prints `{"reason": ..., "seconds_left": ...}`; the reason is `cancel`, `timeout`,
-    /// `drain`, `master_lost`, or null while it isn't stopped.
-    StopReason {
-        /// How to print it.
-        #[command(flatten)]
-        field: FieldArg,
-    },
-    /// The extension's own: only in a shell plugin (`schedr extension shell`, M5.2i6).
+    /// The extension's own: only in a shell plugin (`schedr extension shell`, M5.2i6); a command
+    /// task has none of them (DN27).
     Extension {
         /// The extension command.
         #[command(subcommand)]
@@ -750,6 +731,26 @@ pub enum TaskCtxCommand {
 /// `schedr task-ctx extension ...`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum ExtensionCtxCommand {
+    /// A point of the extension's declared metric: only in a shell plugin (decision 519, DN27).
+    Metric {
+        /// The metric.
+        name: String,
+        /// Its value: for a counter what it grew by, for a gauge its value, for a histogram
+        /// one observation.
+        #[arg(allow_negative_numbers = true)]
+        value: String,
+        /// A label, `name=value`. Repeatable.
+        #[arg(long = "label", value_name = "NAME=VALUE")]
+        labels: Vec<String>,
+    },
+    /// Why the task is being stopped, after `SIGTERM`: only in a shell plugin (decision 519, DN27).
+    /// Prints `{"reason": ..., "seconds_left": ...}`; the reason is `cancel`, `timeout`,
+    /// `drain`, `master_lost`, or null while it isn't stopped.
+    StopReason {
+        /// How to print it.
+        #[command(flatten)]
+        field: FieldArg,
+    },
     /// The task's output.
     Output {
         /// The output command.

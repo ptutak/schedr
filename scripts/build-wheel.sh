@@ -129,7 +129,7 @@ require_patchelf() {
 python_for_maturin() {
     local py=/opt/python/cp314-cp314/bin/python
     if [[ ! -x $py ]]; then
-        fail "no $py in this image (found: $(ls /opt/python 2>/dev/null | tr '\n' ' ')). maturin is installed with that interpreter"
+        fail "no $py in this image (found: $(find /opt/python -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null)). maturin is installed with that interpreter"
     fi
     echo "$py"
 }

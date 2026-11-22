@@ -402,3 +402,34 @@ def test_a_long_log_line_and_a_noisy_kubectl_dont_fail_or_block_the_attempt(
         pods=[pod("Succeeded")],
     )
     assert serve(request({"image": "x"}))[-1]["output"] == {"rows": 3}
+
+
+def test_links_go_to_headlamps_pages_or_the_dashboards() -> None:
+    # M5.2i7: Headlamp's routes (0.46.0: /c/<cluster>/pods/:namespace/:name), the Dashboard's.
+    plugin = load()
+    headlamp = plugin.Ui("headlamp", "http://127.0.0.1:4466/")
+    assert headlamp.page_url("pod", "batch", "p-1") == "http://127.0.0.1:4466/c/main/pods/batch/p-1"
+    assert headlamp.page_url("job", "batch", "j-1") == "http://127.0.0.1:4466/c/main/jobs/batch/j-1"
+    other = plugin.Ui("headlamp", "https://ui", "prod")
+    assert other.page_url("pod", "a", "b") == "https://ui/c/prod/pods/a/b"
+    dashboard = plugin.Ui("dashboard", "https://dash")
+    assert dashboard.page_url("job", "a", "b") == "https://dash/#/job/a/b?namespace=a"
+
+
+def test_its_options_choose_the_ui_its_links_go_to() -> None:
+    # agy's review of M5.2i7: `--headlamp` and `--dashboard` were tested only as `Ui`s.
+    plugin = load()
+    kubectl, ui = plugin.parsed(["--namespace", "batch", "--headlamp", "http://h:1"])
+    assert (kubectl.namespace, ui.kind, ui.address, ui.cluster) == (
+        "batch",
+        "headlamp",
+        "http://h:1",
+        "main",
+    )
+    _, ui = plugin.parsed(["--headlamp", "http://h", "--headlamp-cluster", "prod"])
+    assert ui.page_url("pod", "a", "p") == "http://h/c/prod/pods/a/p"
+    _, ui = plugin.parsed(["--dashboard", "https://d"])
+    assert ui.kind == "dashboard"
+    assert plugin.parsed([])[1] is None
+    with pytest.raises(SystemExit):
+        plugin.parsed(["--headlamp", "http://h", "--dashboard", "https://d"])

@@ -35,7 +35,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, cast
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from schedr._serialization import CodecError, check_size
 from schedr.log import install as install_structured_logging
@@ -48,14 +48,99 @@ __all__ = [
     "PROTOCOL",
     "ExtensionChannel",
     "ExtensionError",
+    "ExtensionJson",
     "ExtensionRequest",
     "Handle",
+    "LabelDeclaration",
+    "MetricDeclaration",
+    "PanelDeclaration",
     "main",
 ]
 
 PROTOCOL = 1
 """The runner protocol version this module speaks with the worker."""
 
+type ExtensionJson = (
+    bool | int | float | str | list[ExtensionJson] | dict[str, ExtensionJson] | None
+)
+"""Decoded JSON, as the worker sends it: what a plugin is given (its payload, the run, its
+handles, a secret, a connection's values, an API answer).
+
+Precise where :data:`schedr.types.Json` (what a task may return) is lenient: a ``dict``'s values
+narrow to ``ExtensionJson``, not ``object``, so a plugin reads its payload with ``isinstance``
+checks alone.
+"""
+
+
+class LabelDeclaration(TypedDict):
+    """A metric's label: its name, and perhaps the values it may take (others are ``other``)."""
+
+    name: str
+    values: NotRequired[list[str]]
+
+
+class MetricDeclaration(TypedDict):
+    """A metric a plugin reports (decision 513), for ``main(metrics=...)``.
+
+    A list of these, annotated (``METRICS: list[MetricDeclaration] = [...]``), is checked by a
+    type checker key by key; the worker checks it again at its hello.
+    """
+
+    name: str
+    kind: Literal["counter", "gauge", "histogram"]
+    help: str
+    unit: NotRequired[Literal["count", "seconds", "bytes", "ratio"]]
+    labels: NotRequired[list[LabelDeclaration]]
+    buckets: NotRequired[list[float]]
+
+
+type Color = Literal[
+    "blue",
+    "orange",
+    "green",
+    "amber",
+    "pink",
+    "forest",
+    "violet",
+    "red",
+    "teal",
+    "cyan",
+    "indigo",
+    "magenta",
+    "brown",
+    "olive",
+    "slate",
+    "gold",
+    "coral",
+    "sky",
+    "plum",
+    "mint",
+]
+
+
+class PanelDeclaration(TypedDict):
+    """A panel of the extension's page (decisions 513, 516), for ``main(panels=...)``."""
+
+    title: str
+    metric: NotRequired[str]
+    chart: Literal[
+        "line", "rate", "stacked", "histogram", "quantiles", "number", "table", "bars", "events"
+    ]
+    row: int
+    cell: Literal["full", "left", "center", "right"]
+    quantiles: NotRequired[list[float]]
+    color: NotRequired[Color]
+    colors: NotRequired[dict[str, Color]]
+    point: NotRequired[
+        Literal["increase", "rate", "last", "mean", "max", "min", "count", "quantiles"]
+    ]
+    combine: NotRequired[Literal["sum", "max", "mean", "min"]]
+    group_by: NotRequired[list[str]]
+    limit: NotRequired[int]
+
+
+# The worker's default `max_output_size`.
+_DEFAULT_MAX_OUTPUT = 1024 * 1024
 _EXIT_OK = 0
 _EXIT_FAILED = 1
 _EXIT_USAGE = 2
@@ -80,7 +165,7 @@ class Handle:
     """A cleanup handle an attempt registered: its type's name and its value."""
 
     type: str
-    value: Json
+    value: ExtensionJson
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,18 +181,20 @@ class ExtensionRequest:
         run: The run's information, as the worker sends it (``run_id``, ``try_number``, ...).
         handles: For a cleanup, the handles the attempt registered, in order; empty otherwise.
         cleanup: Whether this is a cleanup, not the task.
+        max_output_size: The most bytes its output may take, as JSON.
         raw: The whole request, as sent.
     """
 
     name: str
     version: str
-    payload: Json
+    payload: ExtensionJson
     task_id: str
     dag_id: str
-    run: Mapping[str, Json]
+    run: Mapping[str, ExtensionJson]
     handles: Sequence[Handle] = ()
     cleanup: bool = False
-    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    max_output_size: int = _DEFAULT_MAX_OUTPUT
+    raw: Mapping[str, ExtensionJson] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_message(cls, message: Mapping[str, Any]) -> ExtensionRequest:
@@ -135,7 +222,12 @@ class ExtensionRequest:
             run=message["run"],
             handles=tuple(Handle(h["handle_type"], h["value"]) for h in given or ()),
             cleanup=given is not None,
-            raw=message,
+            # The worker always sends it; a request built by hand (a plugin's test) may not.
+            max_output_size=int(
+                (task.get("settings") or {}).get("max_output_size") or _DEFAULT_MAX_OUTPUT
+            ),
+            # The worker's message, decoded from JSON.
+            raw=cast("Mapping[str, ExtensionJson]", message),
         )
 
 
@@ -163,7 +255,7 @@ class ExtensionChannel:
 
     async def secret(
         self, path: str, key: str | None = None, *, storage: str | None = None
-    ) -> Json:
+    ) -> ExtensionJson:
         """A secret the task declared (``secrets=``): a key's value, or the whole secret.
 
         Args:
@@ -180,7 +272,7 @@ class ExtensionChannel:
         given = self._given.get((storage, path, key))
         if given is not None:
             # The worker's JSON: a key's value or a whole secret's object.
-            return cast("Json", given)
+            return cast("ExtensionJson", given)
         name: dict[str, str] = {"path": path}
         if key is not None:
             name["key"] = key
@@ -190,9 +282,9 @@ class ExtensionChannel:
         if answer["type"] != "secret":
             raise ExtensionError(answer.get("kind", ""), answer.get("message", str(answer)))
         # The worker's `secret` answer: its value is JSON.
-        return cast("Json", answer["value"])
+        return cast("ExtensionJson", answer["value"])
 
-    async def connection(self, name: str) -> dict[str, Json]:
+    async def connection(self, name: str) -> dict[str, ExtensionJson]:
         """A connection the task declared (``connections=``): its values, rendered.
 
         Args:
@@ -208,7 +300,7 @@ class ExtensionChannel:
         if answer["type"] != "connection":
             raise ExtensionError(answer.get("kind", ""), answer.get("message", str(answer)))
         # The worker's `connection` answer: its values by parameter, JSON.
-        return cast("dict[str, Json]", answer["values"])
+        return cast("dict[str, ExtensionJson]", answer["values"])
 
     async def _tell(self, message: dict[str, Any]) -> None:
         await asyncio.to_thread(self._channel.send, message)
@@ -294,7 +386,7 @@ class ExtensionChannel:
 
     async def api(
         self, method: str, path: str, body: Json = None, *, idempotency_key: str | None = None
-    ) -> tuple[int, Json]:
+    ) -> tuple[int, ExtensionJson]:
         """A call to schedr's REST API, made by the master as the task (``schedr.api``'s).
 
         Args:
@@ -332,8 +424,10 @@ def main(
     name: str,
     versions: Sequence[str],
     cleanup: Run | None = None,
-    metrics: Sequence[Mapping[str, Json]] = (),
-    panels: Sequence[Mapping[str, Json]] = (),
+    # Typed, or plain mappings as `Json` takes them (agy's review of M5.2i7: a list of dict
+    # literals infers `dict[str, object]`); the worker checks them at the hello either way.
+    metrics: Sequence[MetricDeclaration] | Sequence[Mapping[str, object]] = (),
+    panels: Sequence[PanelDeclaration] | Sequence[Mapping[str, object]] = (),
     argv: Sequence[str] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> int:
@@ -346,9 +440,11 @@ def main(
         versions: The versions it serves.
         cleanup: The cleanup, called with the handles the attempt registered (``None``: the
             extension has none; a cleanup request then fails).
-        metrics: Its metrics' declarations (name, kind, help, unit, labels, buckets), sent in
-            its hello; a worker's ``[extensions.<name>] metrics`` wins over them.
-        panels: Its page's panels (title, metric, chart, row from 1 at the top, cell: ``full``,
+        metrics: Its metrics' declarations (:class:`MetricDeclaration`: name, kind, help,
+            unit, labels, buckets), sent in its hello; a worker's ``[extensions.<name>]
+            metrics`` wins over them.
+        panels: Its page's panels (:class:`PanelDeclaration`: title, metric, chart, row from 1
+            at the top, cell: ``full``,
             ``left``, ``center`` or ``right``; how it is drawn: ``point``, ``combine``,
             ``group_by``, ``limit``), sent in its hello; a metric none shows gets a ``full``
             row of its own below them.
@@ -430,7 +526,7 @@ def _result(
         return {"type": "task_failed", "error": import_error(e), "kind": None}
     try:
         json.dumps(output, allow_nan=False)
-        check_size(output, int(request.raw["task"]["settings"]["max_output_size"]))
+        check_size(output, request.max_output_size)
     except CodecError as e:
         return {"type": "task_failed", "error": import_error(e), "kind": "output_too_large"}
     except (TypeError, ValueError) as e:

@@ -2926,3 +2926,35 @@ out, `other` hidden past the chart's 8 lines, functions accepted on events panel
 quantiles, each panel scanning every sample. Left: a counter's `min` and `mean` over workers
 count only those that grew that minute (a minute with no growth isn't sent), the limit the user
 accepted.
+
+### <a id="DN27"></a>2026-11-22: A shell plugin's own commands sit under `task-ctx extension` (decision note 27; corrects D519)
+
+The user: "if some "shell" commands are blocked in regular tasks, we should put them under
+"extension" subcommand". `task-ctx metric` and `task-ctx stop-reason`, refused to a command
+task, moved to `task-ctx extension metric` and `task-ctx extension stop-reason`, beside
+`extension output set`; `status` and `link` stay, a command task has them. Unreleased: moved
+without an alias.
+
+### 2026-11-22: M5.2i7's cluster UI is Headlamp
+
+The step named the Kubernetes Dashboard; building it, the Dashboard project turned out archived
+(January 2026), its Helm repository gone (404), its last chart 7.14.0 only a GitHub release
+asset. Asked, the user chose Headlamp, the Kubernetes SIG's maintained web UI ("go with A"):
+pinned at 0.46.0, its pod and Job pages `/c/main/pods/<ns>/<name>` (read from its 0.46.0
+router, checked against the running one's `/config`). The Kubernetes plugin gains
+`--headlamp`; `--dashboard` stays for clusters that run the Dashboard.
+
+### 2026-11-22: M5.2i7 done, the Kubernetes extension's demo on kind
+
+`make demo-kind`: the kind cluster `schedr-demo`, Headlamp 0.46.0 in it, a standalone with the
+Kubernetes plugin, a Job every 2 minutes; within minutes the runs, the pod's log, the phases and
+Headlamp links, and all five panels' points (checked on the running demo). With it, at the
+user's asks: the plugins type-checked (`ExtensionJson`, typed declarations, the core's `Any`
+gone from `ExtensionRequest`), `make lint` checking the extensions' DAGs and plugins with mypy
+and basedpyright and every shell script with shellcheck; DN27. agy's review: 15 findings, all
+fixed. Among them, in `scripts/kind-lib.sh`, shared by every kind script: the local-cluster
+check read the cluster named like the context, not the context's own, and took
+`https://127.0.0.1:1@host` for local (a test now proves both against crafted kubeconfigs, and
+fails on the old code); the demo's helpers followed a `SCHEDR_SERVER` set in the shell (the
+showcase target and `kind-extension.sh` too); its traps were set after the port-forward started;
+`down` didn't wait for the namespaces; the dummy, once typed, refused a whole-secret request.

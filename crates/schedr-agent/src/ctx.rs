@@ -524,14 +524,16 @@ fn report_answer(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
         // An extension's only (decision 519): a command task declares no metrics, its output
         // is its result file's or its stdout's, and it isn't asked why it stops.
         CtxRequest::MetricAdd { .. } => CtxAnswer::ReportRefused {
-            reason: "a metric is an extension's: `task-ctx metric` works only in a shell \
+            reason:
+                "a metric is an extension's: `task-ctx extension metric` works only in a shell \
                      plugin (`schedr extension shell`)"
-                .to_owned(),
+                    .to_owned(),
         },
         CtxRequest::StopReasonGet => CtxAnswer::Error {
-            reason: "`task-ctx stop-reason` works only in a shell plugin (`schedr extension \
+            reason:
+                "`task-ctx extension stop-reason` works only in a shell plugin (`schedr extension \
                      shell`)"
-                .to_owned(),
+                    .to_owned(),
         },
         CtxRequest::OutputSet { .. } => CtxAnswer::ReportRefused {
             reason: "`task-ctx extension output set` works only in a shell plugin (`schedr \

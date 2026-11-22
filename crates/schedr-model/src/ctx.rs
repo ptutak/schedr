@@ -114,7 +114,7 @@ pub enum CtxRequest {
         /// Its address, `http` or `https`.
         url: String,
     },
-    /// A point of an extension's declared metric (`schedr task-ctx metric`): only within an
+    /// A point of an extension's declared metric (`schedr task-ctx extension metric`): only within an
     /// extension's shell plugin (decision 519).
     MetricAdd {
         /// The metric.
@@ -125,7 +125,7 @@ pub enum CtxRequest {
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         labels: std::collections::BTreeMap<String, String>,
     },
-    /// Why the task is being stopped (`schedr task-ctx stop-reason`): only within an
+    /// Why the task is being stopped (`schedr task-ctx extension stop-reason`): only within an
     /// extension's shell plugin (decision 519).
     StopReasonGet,
     /// The task's output (`schedr task-ctx extension output set`): only within an extension's

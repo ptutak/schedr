@@ -10,7 +10,7 @@ endif
 # the integration tests run the binary installed in the environment, rebuilt by the sync.
 unexport UV_NO_SYNC
 
-.PHONY: distributed standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui upgrade-check stressstandalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
+.PHONY: demo-kind demo-kind-down distributed standalone-clean image-slim image-alpine image-slim-alpine server-image-alpine demo demo-image demo-check demo-down demo-clean help setup fmt fmt-check lint schema schema-check bugs bugs-check undone-check records records-check third-party third-party-check docs docs-dist docs-serve test test-rust test-python test-integration test-ui upgrade-check stressstandalone standalone-separate-ui showcase smoke smoke-musl image server-image image-requirements chart-check pin-check check clean target-size
 
 help:            ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n",$$1,$$2}'
@@ -69,20 +69,34 @@ fmt-check:       ## Verify formatting without changing files
 	uv run ruff format --check python examples scripts
 
 # DAG code as authors write it (decision 57): the example DAGs and the typing checks.
-DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py
+DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/docs/test_%,$(wildcard examples/*.py examples/docs/*.py))) python/tests/typing/dag_types.py python/tests/typing/extension_types.py
 # The demo's DAG folder apart: its `connections` module is another than examples/docs/'s.
 DEMO_DAGS = $(wildcard examples/demo/dags/*.py)
 # The greenhouse showcase's DAG folder apart too, for the same reason.
 SHOWCASE_DAGS = $(wildcard examples/showcase/dags/*.py)
+# Extensions' DAGs, and their plugins: programs (`schedr-ext-*`, no `.py`), read by mypy as
+# scripts and by basedpyright as `.py` copies under target/ (it reads `.py` files only).
+EXTENSION_DAGS = $(wildcard examples/extensions/*.py)
+PLUGINS = $(wildcard examples/extensions/*/schedr-ext-*)
+PLUGIN_COPIES = target/plugin-types
 
-lint:            ## Run clippy, ruff, mypy, and mypy and basedpyright over DAG code
+lint:            ## Run clippy, ruff, mypy, mypy and basedpyright over DAG code and extension plugins, shellcheck over the shell scripts
 	cargo clippy --workspace --all-targets -- -D warnings
 	uv run ruff check python examples scripts
 	uv run mypy
 	uv run mypy --strict $(DAG_TYPED)
 	uv run mypy --strict $(DEMO_DAGS)
 	uv run mypy --strict $(SHOWCASE_DAGS)
+	uv run mypy --strict $(EXTENSION_DAGS)
+	uv run mypy --strict --scripts-are-modules $(PLUGINS)
 	uv run basedpyright --project pyproject.toml
+	mkdir -p $(PLUGIN_COPIES)
+	rm -f $(PLUGIN_COPIES)/*.py
+	for plugin in $(PLUGINS); do cp "$$plugin" "$(PLUGIN_COPIES)/$$(basename "$$plugin" | tr - _).py"; done
+	uv run basedpyright --project pyproject.toml $(PLUGIN_COPIES)/*.py
+	uv run ruff check $(PLUGIN_COPIES)
+	# Tracked and new scripts alike (agy's review of M5.2i7: a new one was skipped till staged).
+	shellcheck -x $$(git ls-files --cached --others --exclude-standard '*.sh')
 
 schema:          ## Regenerate the committed files under schema/
 	cargo xtask schema
@@ -491,8 +505,9 @@ showcase:        ## Play the greenhouse showcase against `make standalone DAGS=e
 	@curl -sf -o /dev/null http://localhost:8080/api/v1/dags/readings_ingest || { \
 		echo "no standalone with the showcase's DAGs on localhost:8080: start one first, in another" \
 			"terminal, with \`make standalone DAGS=examples/showcase/dags\`" >&2; exit 1; }
-	for dag in $(SHOWCASE_DAG_IDS); do target/debug/schedr dags unpause $$dag >/dev/null || exit 1; done
-	uv run --no-sync python examples/showcase/simulate.py --schedr target/debug/schedr demo
+	# The standalone it probed, whatever SCHEDR_SERVER the shell has (agy's review of M5.2i7).
+	for dag in $(SHOWCASE_DAG_IDS); do SCHEDR_SERVER=http://localhost:8080 target/debug/schedr dags unpause $$dag >/dev/null || exit 1; done
+	SCHEDR_SERVER=http://localhost:8080 uv run --no-sync python examples/showcase/simulate.py --schedr target/debug/schedr demo
 
 # The connections demo (examples/demo, decisions 202-205): the base image (the latest
 # release's, pulled), the demo image FROM it, every password and key generated into the demo's volumes,
@@ -537,6 +552,13 @@ demo-down:       ## Stop the connections demo
 
 demo-clean: demo-down ## Stop the demo and drop its generated passwords and keys
 	$(CONTAINER) volume rm -f $(DEMO_VOLUMES)
+
+demo-kind:       ## The Kubernetes extension on a local kind cluster (M5.2i7): the cluster, Headlamp, a standalone with the plugin and a Job every 2 minutes
+	cargo build -p schedr
+	CONTAINER=$(CONTAINER) scripts/demo-kind.sh up
+
+demo-kind-down:  ## Remove what demo-kind started but the cluster (DELETE_CLUSTER=1 deletes it too)
+	CONTAINER=$(CONTAINER) scripts/demo-kind.sh down
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): Postgres and a PgBouncer in
 # transaction pooling in front of it (any database name passed through), on a network of their

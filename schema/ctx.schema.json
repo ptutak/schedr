@@ -661,7 +661,7 @@
           "type": "object"
         },
         {
-          "description": "A point of an extension's declared metric (`schedr task-ctx metric`): only within an\nextension's shell plugin (decision 519).",
+          "description": "A point of an extension's declared metric (`schedr task-ctx extension metric`): only within an\nextension's shell plugin (decision 519).",
           "properties": {
             "labels": {
               "additionalProperties": {
@@ -692,7 +692,7 @@
           "type": "object"
         },
         {
-          "description": "Why the task is being stopped (`schedr task-ctx stop-reason`): only within an\nextension's shell plugin (decision 519).",
+          "description": "Why the task is being stopped (`schedr task-ctx extension stop-reason`): only within an\nextension's shell plugin (decision 519).",
           "properties": {
             "type": {
               "const": "stop_reason_get",

@@ -7,26 +7,26 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i7, M5.2i8, M5.2i9, M5.2i11, M5.2i4.
+- **Then:** M5.2i8, M5.2i9, M5.2i11, M5.2i4, M5.2j.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 9; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B277 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN27 (2026-11-22): A shell plugin's own commands sit under `task-ctx extension` (corrects D519)
 - DN26 (2026-11-22): A gauge's default point is its mean (corrects D516)
 - DN25 (2026-11-21): A service's memory 256 MiB by default (corrects D518)
 - D519 (2026-11-21): shell plugins' details
 - D518 (2026-11-21): an extension's service
-- DN24 (2026-11-21): Every line drawn across up to five empty steps, everywhere (adds to D466)
+- M5.2i7 (2026-11-22): `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard
 - M5.2i6 (2026-11-22): Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx`
 - M5.2i10 (2026-11-22): Chart functions: a panel's point, combine, group_by and limit (decision 516)
-- M5.2i5 (2026-11-21): Plugins observed and controlled as tasks are: status, links, metrics, stop reasons, the Extensions page
 
 ## In progress
 
 - The user asleep (2026-11-21, ~23:30 CET): M5.2 finished alone, in order M5.2i10, i7, i8, i9, i11, i4, then M5.2j (paging), then M5.2k (all open bugs but B38, B39); answers given ahead in memory (m5-2-night-pre-accepted); each step reviewed by agy, make check, pushed. Every choice made alone recorded "Claude's, to confirm" and shown to the user in the morning as an options table.
-- M5.2i6 done (shell plugins, D519): agy's review, 12 findings, all fixed. M5.2i10 done (chart functions, D516, DN26: the user answered its four choices 2026-11-22): agy's review, 13 findings, 12 fixed, 1 (a counter's min/mean over workers that grew) the accepted limit. Next: M5.2i7.
+- M5.2i6 done (shell plugins, D519): agy's review, 12 findings, all fixed. M5.2i10 done (chart functions, D516, DN26: the user answered its four choices 2026-11-22): agy's review, 13 findings, 12 fixed, 1 (a counter's min/mean over workers that grew) the accepted limit. M5.2i7 done (make demo-kind on Headlamp, the user chose it over the archived Dashboard; plugins type-checked, `ExtensionJson`, typed declarations; shellcheck in make lint; DN27): agy's review, 15 findings, all fixed. Next: M5.2i8 (notifications), then i9, i11, i4, j, k.
 
 ## Waiting for the user
 

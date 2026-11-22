@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Config
+clusters:
+- name: kind-demo
+  cluster: {server: "https://localhost:6443/../x"}
+
+contexts:
+- name: kind-demo
+  context: {cluster: kind-demo, user: u}
+users:
+- name: u
+  user: {}

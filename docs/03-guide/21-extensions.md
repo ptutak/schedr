@@ -392,8 +392,8 @@ on its `PATH`, so the commands are that build's:
 | `secret get PATH#KEY`, `connection NAME --json` | A declared secret, a connection's values (`--env` isn't served: it writes files in a command task's folder) |
 | `cleanup add TYPE FIELD...`, `cleanup list` | A handle, before what it cleans up; the handles, in the cleanup |
 | `status PHASE [--message TEXT] [--progress FRACTION]`, `link LABEL URL` | Its phase and links, on the task |
-| `metric NAME VALUE [--label NAME=VALUE]...` | A point of a metric declared in the config |
-| `stop-reason [--field reason]` | After `SIGTERM`: `cancel`, `timeout`, `drain` or `master_lost`, and the seconds left |
+| `extension metric NAME VALUE [--label NAME=VALUE]...` | A point of a metric declared in the config |
+| `extension stop-reason [--field reason]` | After `SIGTERM`: `cancel`, `timeout`, `drain` or `master_lost`, and the seconds left |
 | `api METHOD PATH`, `events post` | schedr's API and events, as the task |
 
 A cleanup (`ExtensionTask(..., cleanup=True)`) runs the same script with `SCHEDR_CLEANUP=1`. A
@@ -414,7 +414,7 @@ driving `kubectl`. It is short enough to read whole, and shows what a plugin sho
 | The attempt | a Job named after the task, its run and its try, one pod, never restarted (`backoffLimit: 0`: schedr retries), with no API token (`automountServiceAccountToken: false`) |
 | The payload | each field's type checked before anything is created; an unknown field or a mistyped one fails the attempt |
 | Before creating it | registers the Job's name as a cleanup handle, so a worker lost right after still leaves it findable |
-| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`); its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and, with `--dashboard <address>`, links to its Job and pod in the Kubernetes Dashboard |
+| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`); its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and links to its Job and pod in Headlamp (`--headlamp <address>`) or the Kubernetes Dashboard (`--dashboard <address>`) |
 | Its metrics | `jobs_started` by namespace, `jobs_ended` by outcome, `pods_running` (as the cluster counts schedr's), `start_seconds` (to a running pod) and `job_seconds`, with a page of six panels declared in its hello |
 | The output | the ended pod's last log line `SCHEDR_OUTPUT: <json>`, read once the Job succeeded, never from the stream; without it, `null`; a log that can't be read fails the attempt |
 | A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once |
@@ -458,3 +458,24 @@ versions = ["1.0"]
 `scripts/kind-extension.sh` runs `examples/extensions/kubernetes_extension.py` on a local kind
 cluster: a pod's log while it runs, a success, a failure, a timeout, and a worker lost with its
 plugin, whose Job the cleanup finds by its handle.
+
+### The demo on kind
+
+`make demo-kind` presents the plugin on a local kind cluster, `schedr-demo`, kept between runs.
+It installs Headlamp, the Kubernetes SIG's web UI, in it and prints its address with an admin
+login token. Then it runs a standalone here, in the foreground, whose worker has the plugin
+(`--headlamp`, for its links). Its two DAGs (`examples/extensions/kubernetes_demo.py`) run a
+Job every 2 minutes, one quick and one slower. Within a few minutes the UI shows:
+
+| Where | What |
+|---|---|
+| A run's task | the pod's rows in the attempt's log while it runs, its phases, and links to the Job and pod in Headlamp |
+| The Extensions page | the jobs started and ended (one run in six fails on purpose), the pods running, the time to a running pod and a Job's duration |
+| Headlamp, `http://127.0.0.1:4466` | the Jobs and pods in the `schedr-demo` namespace, deleted once each attempt ends |
+
+Ctrl-C stops the standalone and the port-forward. `make demo-kind-down` removes Headlamp and the
+demo's Jobs and keeps the cluster; `DELETE_CLUSTER=1` deletes the cluster too. It needs `kind`,
+`kubectl`, `helm` and podman (`CONTAINER=docker` for Docker), and port 8080 free.
+
+The plugin links to the Kubernetes Dashboard's pages instead with `--dashboard <address>`; that
+project was archived in January 2026.

@@ -540,7 +540,7 @@ fn kind_of(error: &Error, default: &str) -> (String, String) {
     }
 }
 
-/// A stop reason as `task-ctx stop-reason` prints it.
+/// A stop reason as `task-ctx extension stop-reason` prints it.
 const fn stop_name(kind: StopKind) -> &'static str {
     match kind {
         StopKind::Cancel => "cancel",

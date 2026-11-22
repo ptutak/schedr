@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN27 | 2026-11-22 | user | corrects D519 | A shell plugin's own commands sit under `task-ctx extension` |
 | DN26 | 2026-11-22 | user | corrects D516 | A gauge's default point is its mean |
 | DN25 | 2026-11-21 | user | corrects D518 | A service's memory 256 MiB by default |
 | DN24 | 2026-11-21 | user | adds to D466 | Every line drawn across up to five empty steps, everywhere |

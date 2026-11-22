@@ -33,7 +33,7 @@ payload=$(cat)
 echo "backing up $payload, run $SCHEDR_RUN_ID, try $SCHEDR_TRY_NUMBER"
 
 # A stop (cancel, timeout, drain) reaches the script as SIGTERM; it may ask why.
-trap 'echo "stopped: $(schedr task-ctx stop-reason --field reason)"; exit 143' TERM
+trap 'echo "stopped: $(schedr task-ctx extension stop-reason --field reason)"; exit 143' TERM
 
 schedr task-ctx status preparing --progress 0.1
 token=$(schedr task-ctx secret get "backup/target#token")
@@ -44,7 +44,7 @@ schedr task-ctx cleanup add Snapshot "id=$snapshot"
 schedr task-ctx link Snapshot "https://backups.example/snapshots/$snapshot"
 
 schedr task-ctx status copying --message "3 files" --progress 0.5
-schedr task-ctx metric files_copied 3 --label kind=full
+schedr task-ctx extension metric files_copied 3 --label kind=full
 schedr task-ctx log "files copied" --field count=3
 
 case "$payload" in
@@ -59,5 +59,5 @@ case "$payload" in
     ;;
 esac
 
-schedr task-ctx status done --progress 1
+schedr task-ctx status "done" --progress 1
 schedr task-ctx extension output set "{\"snapshot\": \"$snapshot\", \"files\": 3}"

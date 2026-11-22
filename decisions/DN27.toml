@@ -1,0 +1,12 @@
+title = "A shell plugin's own commands sit under `task-ctx extension`"
+date = 2026-11-22
+by = "user"
+on = "D519"
+kind = "corrects"
+summary = '''
+`schedr task-ctx extension metric` and `schedr task-ctx extension stop-reason`, beside
+`extension output set`: what a command task is refused sits under `extension`, so the commands
+it has are the ones listed at the top. `status` and `link` stay at the top, a command task's
+too. The top-level `metric` and `stop-reason` are gone (never released).
+'''
+history = "JOURNAL.md#DN27"
