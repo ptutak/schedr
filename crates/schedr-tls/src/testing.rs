@@ -102,3 +102,92 @@ impl TestCa {
         files
     }
 }
+
+/// Accepts any server certificate: for probing what a server asks of a client.
+#[derive(Debug)]
+struct AnyServer(std::sync::Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AnyServer {
+    fn verify_server_cert(
+        &self,
+        _: &rustls::pki_types::CertificateDer<'_>,
+        _: &[rustls::pki_types::CertificateDer<'_>],
+        _: &rustls::pki_types::ServerName<'_>,
+        _: &[u8],
+        _: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// Talks TLS to `address` (ALPN `alpn`) trusting any server and presenting no certificate,
+/// sending `request`: `Ok` with what the server answered, `Err` with why it refused (a server
+/// requiring a client certificate refuses with the first read, TLS 1.3).
+///
+/// # Errors
+///
+/// The handshake's or the first read's error, as text: the server's refusal.
+///
+/// # Panics
+///
+/// If the client can't be built or the address isn't reached at all.
+pub async fn without_a_certificate(
+    address: std::net::SocketAddr,
+    alpn: &[u8],
+    request: &[u8],
+) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let provider = crate::material::provider();
+    let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("TLS 1.3")
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(AnyServer(provider)))
+        .with_no_client_auth();
+    config.alpn_protocols = vec![alpn.to_vec()];
+    let tcp = tokio::net::TcpStream::connect(address)
+        .await
+        .expect("the address reached");
+    let name = rustls::pki_types::ServerName::IpAddress(address.ip().into());
+    let mut stream = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config))
+        .connect(name, tcp)
+        .await
+        .map_err(|e| e.to_string())?;
+    stream.write_all(request).await.map_err(|e| e.to_string())?;
+    let mut answer = vec![0; 256];
+    let read = stream.read(&mut answer).await.map_err(|e| e.to_string())?;
+    answer.truncate(read);
+    Ok(answer)
+}

@@ -1692,6 +1692,17 @@ impl Default for WorkerSection {
     }
 }
 
+/// `[tls] worker_identity` (decision 520).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkerIdentity {
+    /// A worker's certificate names `[tls] worker_name`: any worker's is any worker.
+    #[default]
+    Role,
+    /// It also names its worker ID, `<id>.<worker_name>`, checked at every call naming one.
+    Certificate,
+}
+
 /// `[tls] mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1769,6 +1780,11 @@ pub struct TlsSection {
     /// The name the webserver expects in workers' certificates, whatever address it reaches
     /// them at.
     pub worker_name: String,
+    /// What the master checks a worker's certificate names (decision 520): `role`, the worker
+    /// name alone (so another role's certificate can't connect as a worker); `certificate`,
+    /// also its worker ID, as `<id>.<worker_name>`, so one worker's certificate can't act as
+    /// another (a certificate per worker, e.g. from cert-manager's CSI driver). `app` mode only.
+    pub worker_identity: WorkerIdentity,
     /// The name a webserver expects in `schedr ui`'s certificate on its `[webserver] ui_port`
     /// (decision 36: only a caller so proven may pass a user's name on).
     pub ui_name: String,
@@ -1791,6 +1807,7 @@ impl Default for TlsSection {
             cert: None,
             key: None,
             worker_name: "schedr-worker".to_owned(),
+            worker_identity: WorkerIdentity::Role,
             ui_name: "schedr-ui".to_owned(),
             reload_interval: Duration::from_secs(30),
         }

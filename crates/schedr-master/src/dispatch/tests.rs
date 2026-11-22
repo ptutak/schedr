@@ -880,7 +880,7 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
         []
     );
     // Handled, it no longer protects the attempt: with no `Started` stored, it expires.
-    arrivals.start_handled(&attempt);
+    arrivals.start_handled("w1", &attempt);
     let out = dispatcher
         .step(&InRound::for_tests(), later(12))
         .await
@@ -1887,7 +1887,7 @@ async fn a_moved_cleanup_whose_start_arrived_is_not_taken_back() {
         .await
         .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
-    arrivals.start_handled(&attempt);
+    arrivals.start_handled("w2", &attempt);
     dispatcher
         .expire(&InRound::for_tests(), later(1200))
         .await

@@ -276,7 +276,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i10 | Chart functions: a panel's point, combine, group_by and limit (decision 516) | done 2026-11-22 | D516 |
 | M5.2i7 | `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard | done 2026-11-22 |  |
 | M5.2i8 | Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED | done 2026-11-22 | D515 |
-| M5.2i14 | A worker's identity bound to its certificate, standalone's ports under in-memory mTLS, and the trust model | planned |  |
+| M5.2i14 | A worker's identity bound to its certificate, standalone's ports under in-memory mTLS, and the trust model | done 2026-11-22 | D520 |
 | M5.2i9 | An extension's service: a long-running process per worker beside its plugins (decision 518) | planned | D518 |
 | M5.2i11 | The Kubernetes plugin widened: an async client with watches, and every panel kind | planned |  |
 | M5.2i12 | Stress 25: extension tasks under load, comparable with scenario 1 | planned |  |

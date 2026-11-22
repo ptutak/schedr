@@ -95,7 +95,23 @@ render --set tls.existingSecrets.master=m --set tls.existingSecrets.webserver=w 
     --set tls.existingSecrets.worker=k --set tls.existingSecrets.ui=u > "$WORK/out.yaml"
 lacks "kind: Secret" "existing Secrets"
 has "secretName: k" "the workers' own Secret"
-echo "ok: mesh, cert-manager, Secrets of one's own"
+# A certificate per worker pod (decision 520): from the CSI driver, the master told to check it.
+render --set tls.certManager.issuerRef.name=ca --set tls.certManager.issuerRef.kind=ClusterIssuer \
+    --set tls.workerIdentity=certificate > "$WORK/out.yaml"
+has "driver: csi.cert-manager.io" "the worker's CSI volume"
+# shellcheck disable=SC2016 # the chart's text: the CSI driver fills in POD_NAME.
+has 'csi.cert-manager.io/dns-names: "${POD_NAME}.schedr-worker,schedr-worker"' "the pod's names"
+has 'csi.cert-manager.io/issuer-kind: "ClusterIssuer"' "the issuer"
+grep -A1 'SCHEDR_CONFIG__TLS__WORKER_IDENTITY$' "$WORK/out.yaml" | grep -q '"certificate"' \
+    || fail "the master checks the worker ID"
+has "csi.cert-manager.io/ca-file: ca.crt" "the CA file [tls] ca reads"
+has 'csi.cert-manager.io/fs-group: "0"' "the key readable by the container's group"
+[ "$(grep -c '^kind: Certificate$' "$WORK/out.yaml")" = 3 ] || fail "no shared worker Certificate"
+refused "${PG[@]}" --set tls.workerIdentity=certificate
+refused "${PG[@]}" --set tls.workerIdentity=pod
+refused "${PG[@]}" --set tls.mode=mesh --set tls.certManager.issuerRef.name=ca \
+    --set tls.workerIdentity=certificate
+echo "ok: mesh, cert-manager, Secrets of one's own, a certificate per worker"
 
 # An existing account shared by every role; Istio's internal policies then by namespace.
 render -f "$CHART/ci/istio-values.yaml" > "$WORK/out.yaml"

@@ -3364,3 +3364,88 @@ fn trigger_messages_are_told_apart() {
         pb::Heartbeat::default()
     )));
 }
+
+/// Decision 520 (agy's review of M5.2i14): with a worker identity check, `Register`, a parse
+/// upload and an attempt's inputs are each refused when the call's certificate doesn't name the
+/// worker they are for. The check stands for the certificate here: it names `named`.
+#[tokio::test]
+async fn with_a_worker_identity_each_call_is_checked_against_the_certificate() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let named = Arc::new(std::sync::Mutex::new("w2".to_owned()));
+    let certificate = named.clone();
+    let check =
+        crate::service::WorkerIdentity(Arc::new(move |_: &tonic::Extensions, worker_id: &str| {
+            let name = certificate.lock().unwrap().clone();
+            if name == worker_id {
+                Ok(())
+            } else {
+                Err(format!("its certificate names `{name}`"))
+            }
+        }));
+    let hub = Hub::with_clock(MasterCore::new(db.clone(), Settings::default()), fixed_now)
+        .with_epoch(7)
+        .with_worker_identity(Some(check));
+    let mut client = served(&hub).await;
+    // w1's registration with w2's certificate: refused.
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let refused = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied, "{refused}");
+    // With its own: registered, its parse uploaded, a task assigned.
+    *named.lock().unwrap() = "w1".to_owned();
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::AssignParse(_)
+    ));
+    upload(&mut client, parse_result()).await.unwrap();
+    let trigger = schedr_model::commands::Command::TriggerRun {
+        event: None,
+        params: None,
+        dag_id: DagId::new("sync").unwrap(),
+        planned_for: None,
+    };
+    db.insert_command(&trigger, "anna", fixed_now())
+        .await
+        .unwrap();
+    hub.tick().await.unwrap();
+    let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
+        panic!("expected AssignTask")
+    };
+    // w2's certificate: neither w1's inputs nor an upload as w1.
+    *named.lock().unwrap() = "w2".to_owned();
+    let inputs = client
+        .fetch_inputs(pb::FetchInputsRequest {
+            attempt_id: assign.attempt_id.clone(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(inputs.code(), tonic::Code::PermissionDenied, "{inputs}");
+    let uploaded = upload(&mut client, parse_result()).await.unwrap_err();
+    assert_eq!(uploaded.code(), tonic::Code::PermissionDenied, "{uploaded}");
+    // w1's own again: its inputs.
+    *named.lock().unwrap() = "w1".to_owned();
+    let mut inputs = client
+        .fetch_inputs(pb::FetchInputsRequest {
+            attempt_id: assign.attempt_id.clone(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(inputs.message().await.unwrap().unwrap().data, b"{}");
+    drop(to_master);
+}

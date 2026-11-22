@@ -55,7 +55,11 @@ worker's log endpoint, and on the webserver's UI-only API port.
 - Servers require a client certificate signed by the CA. A worker checks that the master's
   certificate names the host of `master_url`. The webserver checks that a worker's certificate
   names `[tls] worker_name` (default `schedr-worker`), whatever address it used, since pod IPs
-  and names change.
+  and names change. The master checks the same name on a worker's certificate, so another
+  role's certificate can't connect as a worker.
+- `[tls] worker_identity = "certificate"` on the master also requires a worker's certificate
+  to name its worker ID, as `<id>.<worker_name>`: a certificate per worker, so one worker's
+  key can't act as another (see [What schedr trusts](23-trust.md#a-worker-acts-only-as-itself)).
 - TLS 1.3 only (rustls). The files are read again every `[tls] reload_interval` (30 s), so a
   rotated certificate is used for new connections without a restart; a broken change keeps
   the old one.
@@ -66,7 +70,9 @@ pods. schedr adds no TLS of its own, and the mesh's policies decide who may conn
 `master_url` must be `http://`. Every role must use the same mode. A webserver that reaches a
 worker in the other mode reports it.
 
-`schedr standalone` never uses TLS: its gRPC port and log endpoint listen on localhost only.
+`schedr standalone` ignores `[tls]`: its gRPC port and log endpoint listen on localhost only,
+under mTLS it makes in memory at each start, so other processes on the machine can't use
+them (see [What schedr trusts](23-trust.md#standalone)).
 
 ## Reaching workers: the log address
 

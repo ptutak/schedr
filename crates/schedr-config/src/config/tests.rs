@@ -302,6 +302,7 @@ fn worker_and_tls_defaults() {
             cert: None,
             key: None,
             worker_name: "schedr-worker".into(),
+            worker_identity: WorkerIdentity::Role,
             ui_name: "schedr-ui".into(),
             reload_interval: Duration::from_secs(30),
         }
@@ -401,6 +402,7 @@ fn reads_the_tls_section() {
             cert: Some("/etc/schedr/tls/tls.crt".into()),
             key: Some("/etc/schedr/tls/tls.key".into()),
             worker_name: "worker.schedr".into(),
+            worker_identity: WorkerIdentity::Role,
             ui_name: "schedr-ui".into(),
             reload_interval: Duration::from_mins(1),
         }

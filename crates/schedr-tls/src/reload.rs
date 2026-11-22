@@ -25,7 +25,10 @@ pub struct Tls {
 
 #[derive(Debug)]
 struct Inner {
+    /// The files; made up names when the material is in memory.
     files: TlsFiles,
+    /// Material given in memory (decision 520): never read from files, replaced by `replace`.
+    in_memory: bool,
     worker_name: String,
     ui_name: String,
     state: RwLock<State>,
@@ -64,6 +67,7 @@ impl Tls {
         Ok(Self {
             inner: Arc::new(Inner {
                 files,
+                in_memory: false,
                 worker_name: worker_name.to_owned(),
                 ui_name: ui_name.to_owned(),
                 state: RwLock::new(State {
@@ -76,6 +80,61 @@ impl Tls {
             handshake_timeout: crate::incoming::HANDSHAKE_TIMEOUT,
             handshakes_at_once: crate::incoming::MAX_HANDSHAKES,
         })
+    }
+
+    /// Material given in memory (decision 520): `contents` as if read from files, which it
+    /// never reads; [`Self::replace`] changes it.
+    ///
+    /// # Errors
+    ///
+    /// [`TlsError`] if `contents` can't be used.
+    pub fn in_memory(
+        contents: Contents,
+        worker_name: &str,
+        ui_name: &str,
+    ) -> Result<Self, TlsError> {
+        let files = TlsFiles {
+            ca: "(in memory) ca".into(),
+            cert: "(in memory) cert".into(),
+            key: "(in memory) key".into(),
+        };
+        let configs = build(&contents, &files, (worker_name, ui_name))?;
+        Ok(Self {
+            inner: Arc::new(Inner {
+                files,
+                in_memory: true,
+                worker_name: worker_name.to_owned(),
+                ui_name: ui_name.to_owned(),
+                state: RwLock::new(State {
+                    contents,
+                    configs,
+                    generation: 0,
+                    failed: None,
+                }),
+            }),
+            handshake_timeout: crate::incoming::HANDSHAKE_TIMEOUT,
+            handshakes_at_once: crate::incoming::MAX_HANDSHAKES,
+        })
+    }
+
+    /// Uses `contents` from now on (new connections; open ones go on).
+    ///
+    /// # Errors
+    ///
+    /// [`TlsError`] if they can't be used: the previous material stays in use.
+    pub fn replace(&self, contents: Contents) -> Result<(), TlsError> {
+        let names = (self.inner.worker_name.as_str(), self.inner.ui_name.as_str());
+        let configs = build(&contents, &self.inner.files, names)?;
+        let mut state = self
+            .inner
+            .state
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.contents = contents;
+        state.configs = configs;
+        state.generation += 1;
+        state.failed = None;
+        Ok(())
     }
 
     /// This, giving peers `timeout` to complete a handshake (`handshake_timeout`).
@@ -165,6 +224,9 @@ impl Tls {
 
     /// Reads the files again and uses them if they changed and can be used.
     pub fn reload(&self) -> Reload {
+        if self.inner.in_memory {
+            return Reload::Unchanged;
+        }
         let read = self.inner.files.read();
         let mut state = self
             .inner

@@ -9,11 +9,11 @@ authors.workspace = true
 
 [features]
 # Certificates for tests (a CA and the certificates it signs), used by other crates' tests.
-testing = ["dep:rcgen"]
+testing = []
 
 [dependencies]
 axum.workspace = true
-rcgen = { workspace = true, optional = true }
+rcgen.workspace = true
 hyper-util.workspace = true
 rustls.workspace = true
 rustls-webpki.workspace = true
@@ -27,7 +27,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-rcgen.workspace = true
 schedr-tls = { workspace = true, features = ["testing"] }
 rstest.workspace = true
 tempfile.workspace = true

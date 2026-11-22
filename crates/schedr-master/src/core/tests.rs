@@ -1507,6 +1507,73 @@ async fn uploads_that_dont_read_are_bad_messages() {
     ));
 }
 
+/// Decision 520 (agy's review of M5.2i14): a worker reporting another worker's attempt as its
+/// running trigger, then its stop, frees nothing of the other worker's.
+#[tokio::test]
+async fn another_workers_attempt_reported_as_a_trigger_stays_its_own() {
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask, got {out:?}")
+    };
+    let attempt = assign.attempt_id.clone();
+    let holds = |core: &MasterCore| {
+        core.dispatcher()
+            .workers()
+            .get("w1")
+            .is_some_and(|w| w.attempts.contains(&attempt))
+    };
+    assert!(holds(&core));
+    let mut w2 = register("w2", "i2", vec![]);
+    w2.running_triggers = vec![attempt.clone()];
+    core.register(&w2, ts(NOW)).await.unwrap();
+    let stopped = worker_message::Message::TriggerStopped(pb::TriggerStopped {
+        instance_id: attempt.clone(),
+        ..pb::TriggerStopped::default()
+    });
+    core.handle_in_round("w2", stopped, ts(NOW)).await.unwrap();
+    assert!(holds(&core), "w2 freed w1's slot");
+    assert!(
+        !core
+            .dispatcher()
+            .workers()
+            .get("w2")
+            .is_some_and(|w| w.wait_steps.contains(&attempt)),
+        "w2 keeps a slot for it"
+    );
+}
+
+/// Decision 520: a worker uploads a parse only of the code it reported (or a job it was given):
+/// another worker's, or a hash it never reported, would define DAGs for code it doesn't hold.
+#[tokio::test]
+async fn a_parse_upload_of_code_the_worker_didnt_report_is_refused() {
+    let mut core = with_dag().await;
+    let stranger = pb::ParseResult {
+        worker_id: "w9".to_owned(),
+        ..upload("j")
+    };
+    let refused = core
+        .upload(stranger, ts(NOW))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("it didn't report and wasn't given"),
+        "{refused}"
+    );
+    let forged = pb::ParseResult {
+        root: Some(root("h-forged")),
+        ..upload("j")
+    };
+    assert!(matches!(
+        core.upload(forged, ts(NOW)).await.unwrap_err(),
+        CoreError::BadMessage { .. }
+    ));
+    // Its own reported code, again (a retry whose acknowledgement was lost): taken.
+    core.upload(upload("j"), ts(NOW)).await.unwrap();
+}
+
 #[tokio::test]
 async fn a_cancel_missed_while_away_is_sent_again_on_reconnect() {
     let mut core = with_dag().await;
@@ -2211,7 +2278,7 @@ fn arrivals_hold_an_arrived_start_until_it_is_handled() {
     arrivals.clone().start_arrived("w1", "a1");
     assert!(arrivals.start_waiting("a1"));
     assert!(!arrivals.start_waiting("a2"));
-    arrivals.start_handled("a1");
+    arrivals.start_handled("w1", "a1");
     assert!(!arrivals.start_waiting("a1"));
     // A worker forgotten (lost, gone) takes its waiting starts with it.
     arrivals.start_arrived("w1", "a3");
@@ -2220,8 +2287,19 @@ fn arrivals_hold_an_arrived_start_until_it_is_handled() {
     assert!(!arrivals.start_waiting("a3"));
     assert!(arrivals.start_waiting("a4"));
     // Handled twice (a `Started`, then its `Finished`): nothing left, nothing wrong.
-    arrivals.start_handled("a1");
+    arrivals.start_handled("w1", "a1");
     assert!(!arrivals.start_waiting("a1"));
+    // Another worker's message stands for nothing of w1's, and clears nothing of it (decision
+    // 520, agy's review of M5.2i14).
+    arrivals.start_arrived("w1", "a5");
+    arrivals.start_arrived("w2", "a5");
+    arrivals.start_handled("w2", "a5");
+    assert!(
+        arrivals.start_waiting("a5"),
+        "w2's handling cleared w1's start"
+    );
+    arrivals.forget_starts("w2");
+    assert!(arrivals.start_waiting("a5"));
 }
 
 #[tokio::test]

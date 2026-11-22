@@ -53,16 +53,38 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
-| 2 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
-| 3 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 5 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 6 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 7 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 8 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 9 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 10 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 1 | B279: a worker reporting an instance the master doesn't know holds every wait_for trigger until it stops it | 2 | medium | rare | **security** |
+| 2 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
+| 3 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
+| 4 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
+| 5 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 6 | B280: the integration tests' Postgres runs out of connections when roles tests overlap | 2 | low | possible | tests |
+| 7 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 8 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 9 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 10 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B280: the integration tests' Postgres runs out of connections when roles tests overlap
+
+- **Rating:** severity **low**, probability **possible**, tests (score 2): `make test-integration` starts Postgres with its default `max_connections` (100) while nextest runs 12 tests at once, each roles test a master and a webserver with pools of their own; in M5.2i14's `make check` three roles tests failed with `FATAL: sorry, too many clients already` and pool timeouts, and the next run passed whole.
+- **Found:** 2026-11-22, by Claude, in M5.2i14's second `make check` (the third passed: 339 of
+  339). The stress target already starts its Postgres with `max_connections=500`.
+- **A fix:** the same `-c max_connections=500` for `make test-integration`'s Postgres (and CI's),
+  or a nextest group limiting the roles tests that run at once.
+
+## B279: a worker reporting an instance the master doesn't know holds every wait_for trigger until it stops it
+
+- **Rating:** severity **medium**, probability **rare**, security (score 2): `triggers_on_register` keeps an unknown reported trigger instance in `stopping_triggers` with an empty DAG ID, and `may_start` then holds every `@trigger(wait_for=...)` DAG until that worker reports it stopped; a compromised worker that never does stalls them all (decision 520's trust model: one worker reaches only its own).
+- **Found:** 2026-11-22, by agy, in its review of M5.2i14 (its finding 4, the first half; the
+  second half, another worker's slot freed, fixed in M5.2i14).
+- **Why it holds everything:** after a master's restart an instance a worker still runs is known
+  only by its ID, not its DAG, so the master can't tell which DAG's single trigger it is; the
+  wait is right for an honest worker, which stops it at once when told.
+- **A fix:** bound the wait (an unknown instance stops counting after the trigger stop grace),
+  or have the worker report its instances' DAG IDs in `Register`, checked against the trigger
+  records.
 
 ## B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses
 

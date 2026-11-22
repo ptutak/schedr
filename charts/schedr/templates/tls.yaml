@@ -13,7 +13,9 @@ names tls.workerName (the webserver checks it); every one has serverAuth and cli
   "master" (fromJsonArray (include "schedr.masterHosts" .))
   "webserver" (list (printf "%s-webserver" $fullname) $fullname (printf "%s.%s" $fullname $ns) (printf "%s.%s.svc" $fullname $ns) (printf "%s.%s.svc.%s" $fullname $ns .Values.clusterDomain))
   "worker" (list $tls.workerName) }}
-{{- $roles := list "master" "webserver" "worker" }}
+{{- $roles := list "master" "webserver" }}
+{{- /* With a certificate per worker pod (tls.workerIdentity), the CSI driver makes theirs. */}}
+{{- if ne (include "schedr.workerIdentity" .) "certificate" }}{{ $roles = append $roles "worker" }}{{ end }}
 {{- if include "schedr.uiDeployed" . }}
 {{- $_ := set $names "ui" (list $tls.uiName) }}
 {{- $roles = append $roles "ui" }}

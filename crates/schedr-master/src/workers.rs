@@ -348,6 +348,18 @@ impl Workers {
         }
     }
 
+    /// Whether a worker other than `worker` holds `attempt` (a task's slot, a wait step's or a
+    /// trigger's).
+    #[must_use]
+    pub fn held_by_another(&self, worker: &str, attempt: &str) -> bool {
+        self.workers.values().any(|w| {
+            w.id != worker
+                && (w.attempts.contains(attempt)
+                    || w.wait_steps.contains(attempt)
+                    || w.pokes.contains(attempt))
+        })
+    }
+
     /// Frees the slot of `attempt`, wherever it is.
     pub fn release(&mut self, attempt: &str) {
         for worker in self.workers.values_mut() {

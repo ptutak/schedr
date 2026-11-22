@@ -496,6 +496,19 @@ impl Discovery {
             .collect()
     }
 
+    /// Whether `worker_id` may upload a parse of `key` (decision 520: a worker acts only on its
+    /// own roots): the key it last reported for the root, or one whose job it holds or is a
+    /// candidate of. Another's would define DAGs, their commands among them, for code it
+    /// doesn't hold.
+    #[must_use]
+    pub fn may_upload(&self, worker_id: &str, key: &ParseKey) -> bool {
+        self.reports
+            .get(worker_id)
+            .and_then(|roots| roots.get(&key.root))
+            .is_some_and(|reported| reported == key)
+            || self.jobs.concerns(key, worker_id)
+    }
+
     /// Stores an uploaded parse (after validation) and finishes its job. If it is the parse of
     /// the root's reported hash, it becomes current and the DAG list is updated. Returns the
     /// stored parse's ID.

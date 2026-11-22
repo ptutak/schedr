@@ -1480,7 +1480,7 @@ impl Sim {
             }
             Err(schedr_master::core::CoreError::Refused(_)) => {
                 for attempt_id in &added {
-                    arrivals.start_handled(attempt_id);
+                    arrivals.start_handled(id, attempt_id);
                 }
                 self.send(inst, sid, false, Event::Refused(inst, sid));
             }

@@ -66,6 +66,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
 | D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
@@ -786,6 +787,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### deployment
 
+- D520: A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS
 - D454: Images on glibc beside Alpine; Alpine tagged -alpine
 - D441: A DAG that no longer parses after a major upgrade is held
 - D439: Upgrade-rule gaps: the clear ones fixed, the others asked

@@ -20,6 +20,7 @@ pub mod local;
 pub mod logging;
 pub mod node;
 pub mod ops;
+pub mod private_files;
 pub mod roles;
 pub mod secret_storage;
 pub mod secrets;
@@ -37,6 +38,18 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Exit code for wrong usage (unknown command, bad arguments).
 pub const EXIT_USAGE: u8 = 2;
+
+/// Decision 520: standalone's configuration file, on the machine it runs on, warned of when
+/// others may read it.
+fn warn_open_config(cli: &cli::Cli, env: &BTreeMap<String, String>) {
+    if matches!(cli.command, cli::Command::Standalone { .. }) {
+        let file = schedr_config::sources::config_file(cli.config.as_deref(), env);
+        let path = file.path();
+        for warning in private_files::secret_files(&[("the configuration file", Some(path))]) {
+            tracing::warn!("{warning}");
+        }
+    }
+}
 
 /// Runs `schedr` with the given arguments (including the program name) and returns the
 /// process exit code: 0 on success, 1 on an error, 2 on wrong usage.
@@ -131,6 +144,7 @@ where
     if let Err(message) = logging::init(&config.log, stdout_is_terminal) {
         return report(err, &format!("error: {message}\n"), 1);
     }
+    warn_open_config(&cli, env);
     for name in &config.timings.overridden {
         tracing::warn!("{name} is set: an unsupported timing, at your own risk");
     }

@@ -144,6 +144,43 @@ async fn a_worker_from_another_ca_is_refused_by_the_master() {
     assert!(error.to_string().contains("UnknownCA"), "{error}");
 }
 
+/// Decision 520: the master's gRPC port takes only a certificate naming `[tls] worker_name`:
+/// another role's, though the CA signed it (the webserver's, `schedr ui`'s), can't connect as a
+/// worker. A per-worker certificate names both (`schedr-worker` and `<id>.schedr-worker`).
+#[tokio::test]
+async fn only_a_workers_certificate_reaches_the_masters_grpc_port() {
+    let dir = TempDir::new().unwrap();
+    let ca = TestCa::new("schedr CA");
+    let address = grpc_server(Some(tls(&ca, &dir, "master", &["127.0.0.1"]))).await;
+    let per_pod = tls(&ca, &dir, "pod", &["schedr-worker", "w-7f9c.schedr-worker"]);
+    channel(&format!("https://{address}"), Some(&per_pod))
+        .await
+        .unwrap();
+    for (prefix, names) in [
+        ("webserver", &["schedr-webserver"][..]),
+        ("ui", &["schedr-ui"][..]),
+    ] {
+        let other = tls(&ca, &dir, prefix, names);
+        // TLS 1.3: the refusal arrives with the first read, as for another CA's.
+        let tcp = TcpStream::connect(address).await.unwrap();
+        let name = ServerName::try_from("127.0.0.1").unwrap();
+        let mut stream = TlsConnector::from(other.grpc_client())
+            .connect(name, tcp)
+            .await
+            .unwrap();
+        stream
+            .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buffer = [0; 64];
+        let error = stream.read(&mut buffer).await.unwrap_err();
+        assert!(
+            error.to_string().contains("BadCertificate"),
+            "{prefix}: {error}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_log_endpoint_is_checked_against_the_worker_name_whatever_the_address() {
     let dir = TempDir::new().unwrap();
@@ -319,4 +356,97 @@ async fn a_webservers_ui_port_takes_only_the_uis_certificate() {
         error.contains("NotValidForName") || error.contains("BadCertificate"),
         "{error}"
     );
+}
+
+/// Decision 520: a peer's certificate names a worker by `<id>.<worker_name>`, exactly; a
+/// wildcard names no one, nor another worker's name, nor a plain connection.
+#[test]
+fn a_certificate_names_its_own_worker_and_no_other() {
+    let ca = TestCa::new("schedr CA");
+    let peer = |names: &[&str]| schedr_tls::Peer {
+        remote_addr: None,
+        certificate: Some(
+            rustls::pki_types::CertificateDer::from_pem_slice(ca.issue(names).cert.as_bytes())
+                .unwrap()
+                .into_owned(),
+        ),
+    };
+    let pod = peer(&["schedr-worker", "w-7f9c.schedr-worker"]);
+    assert_eq!(pod.names_worker("w-7f9c", "schedr-worker"), Ok(()));
+    // DNS names ignore case and worker IDs don't: an uppercase ID is no certificate's.
+    assert!(
+        pod.names_worker("W-7F9C", "schedr-worker")
+            .unwrap_err()
+            .contains("lowercase")
+    );
+    let other = pod.names_worker("w-other", "schedr-worker").unwrap_err();
+    assert!(
+        other.contains("doesn't name `w-other.schedr-worker`"),
+        "{other}"
+    );
+    // The shared certificate names the role only.
+    assert!(
+        peer(&["schedr-worker"])
+            .names_worker("w-7f9c", "schedr-worker")
+            .is_err()
+    );
+    // A wildcard would pass the usual name check for any ID.
+    let wildcard = peer(&["schedr-worker", "*.schedr-worker"]);
+    assert!(wildcard.names_worker("w-7f9c", "schedr-worker").is_err());
+    assert!(
+        pod.names_worker("w_7f9c", "schedr-worker")
+            .unwrap_err()
+            .contains("DNS label")
+    );
+    let plain = schedr_tls::Peer {
+        remote_addr: None,
+        certificate: None,
+    };
+    assert!(
+        plain
+            .names_worker("w-7f9c", "schedr-worker")
+            .unwrap_err()
+            .contains("no certificate")
+    );
+}
+
+/// agy's review of M5.2i14: a wildcard of another role's (`*.schedr.local`) doesn't pass for a
+/// worker name under it (`worker.schedr.local`), on the master's gRPC port.
+#[tokio::test]
+async fn a_wildcard_certificate_doesnt_pass_for_the_worker_name() {
+    let dir = TempDir::new().unwrap();
+    let ca = TestCa::new("schedr CA");
+    let master = Tls::load(
+        ca.write(dir.path(), "master", &["127.0.0.1"]),
+        "worker.schedr.local",
+        "schedr-ui",
+    )
+    .unwrap();
+    let address = grpc_server(Some(master)).await;
+    let load = |prefix: &str, names: &[&str]| {
+        Tls::load(
+            ca.write(dir.path(), prefix, names),
+            "worker.schedr.local",
+            "schedr-ui",
+        )
+        .unwrap()
+    };
+    let named = load("named", &["worker.schedr.local"]);
+    channel(&format!("https://{address}"), Some(&named))
+        .await
+        .unwrap();
+    let wildcard = load("wildcard", &["*.schedr.local"]);
+    let tcp = TcpStream::connect(address).await.unwrap();
+    let name = ServerName::try_from("127.0.0.1").unwrap();
+    let mut stream = TlsConnector::from(wildcard.grpc_client())
+        .connect(name, tcp)
+        .await
+        .unwrap();
+    stream
+        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .await
+        .unwrap();
+    let mut buffer = [0; 64];
+    let error = stream.read(&mut buffer).await.unwrap_err();
+    assert!(error.to_string().contains("BadCertificate"), "{error}");
 }

@@ -155,7 +155,7 @@ async fn the_master_and_the_api_serve_until_stopped() {
             master_outbox(&config(), &BTreeMap::new()).unwrap(),
         ),
         listen(loopback()).await.unwrap(),
-        None,
+        (None, None),
         // Past three query limits (sqlx's 30 s acquire timeout), as a real lease: else it
         // would be over as taken, and the master never led (nor be ready, B165).
         async { Ok(take_lease(db, Duration::from_secs(120), "master", new_master_id()).await) },
@@ -436,6 +436,24 @@ fn log_retention_comes_from_the_config() {
             max_size: Some(1 << 30),
         }
     );
+}
+
+/// Decision 520: a worker's ID checked by its certificate needs `app` mode (mesh mode sees
+/// none), and is checked by the master only when asked for.
+#[test]
+fn worker_identity_by_certificate_needs_app_mode() {
+    let mut config = config();
+    config.tls.mode = TlsMode::Mesh;
+    assert!(role_tls(&config).unwrap().is_none());
+    assert!(worker_identity(&config).is_none());
+    config.tls.worker_identity = schedr_config::config::WorkerIdentity::Certificate;
+    let error = role_tls(&config).unwrap_err().to_string();
+    assert!(error.contains("needs [tls] mode = \"app\""), "{error}");
+    assert!(worker_identity(&config).is_none());
+    config.tls.mode = TlsMode::App;
+    assert!(worker_identity(&config).is_some());
+    config.tls.worker_identity = schedr_config::config::WorkerIdentity::Role;
+    assert!(worker_identity(&config).is_none());
 }
 
 #[test]

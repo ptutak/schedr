@@ -492,8 +492,17 @@ tls:
   #   or your own Secrets there. Rotate by deleting the <release>-*-tls Secrets and upgrading
   #   (schedr reloads certificates without a restart).
   generate: true
-  # The name in the workers' certificate, checked by the webserver ([tls] worker_name).
+  # The name in the workers' certificate, checked by the webserver and the master
+  # ([tls] worker_name).
   workerName: schedr-worker
+  # What the master checks a worker's certificate names ([tls] worker_identity, decision 520):
+  # role, tls.workerName alone (any worker's certificate is any worker's); certificate, also
+  # its worker ID, <pod>.<workerName>, so a worker's certificate can't act as another worker.
+  # certificate gives each worker pod a certificate of its own from cert-manager's CSI driver
+  # (csi.cert-manager.io, installed apart) and tls.certManager.issuerRef, made when the pod
+  # starts and renewed by the driver. Recommended where workers run extensions that control
+  # other systems. tls.mode app, mode distributed.
+  workerIdentity: role
   # The name in the web UI's certificate, checked by the webserver on its UI port
   # ([tls] ui_name).
   uiName: schedr-ui

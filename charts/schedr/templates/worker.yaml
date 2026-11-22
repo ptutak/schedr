@@ -1,4 +1,5 @@
 {{- if eq .Values.mode "distributed" }}
+{{- $_ := include "schedr.workerIdentity" . }}
 {{- $fullname := include "schedr.fullname" . }}
 {{- $w := .Values.worker }}
 {{- $scheme := ternary "https" "http" (eq .Values.tls.mode "app") }}
@@ -122,7 +123,28 @@ spec:
       {{- end }}
       {{- if or $volumes (eq .Values.tls.mode "app") }}
       volumes:
-        {{- if eq .Values.tls.mode "app" }}
+        {{- if and (eq .Values.tls.mode "app") (eq (include "schedr.workerIdentity" .) "certificate") }}
+        # The pod's own certificate (decision 520): its worker ID (the pod's name) under
+        # tls.workerName, and tls.workerName, from cert-manager's CSI driver.
+        {{- $issuer := .Values.tls.certManager.issuerRef }}
+        - name: tls
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: {{ $issuer.name | quote }}
+              csi.cert-manager.io/issuer-kind: {{ $issuer.kind | default "Issuer" | quote }}
+              csi.cert-manager.io/issuer-group: {{ $issuer.group | default "cert-manager.io" | quote }}
+              csi.cert-manager.io/common-name: {{ .Values.tls.workerName | quote }}
+              csi.cert-manager.io/dns-names: {{ printf "${POD_NAME}.%s,%s" .Values.tls.workerName .Values.tls.workerName | quote }}
+              csi.cert-manager.io/key-usages: "server auth,client auth,digital signature,key encipherment"
+              # The files [tls] reads; the key readable by the container's group (the image's
+              # user is in group 0, as OpenShift's arbitrary users are).
+              csi.cert-manager.io/ca-file: ca.crt
+              csi.cert-manager.io/certificate-file: tls.crt
+              csi.cert-manager.io/privatekey-file: tls.key
+              csi.cert-manager.io/fs-group: {{ .Values.podSecurityContext.fsGroup | default 0 | quote }}
+        {{- else if eq .Values.tls.mode "app" }}
         - name: tls
           secret:
             secretName: {{ include "schedr.tlsSecret" (list . "worker") }}

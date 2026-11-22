@@ -7,25 +7,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i14, M5.2i9, M5.2i11, M5.2i12, M5.2i13.
+- **Then:** M5.2i9, M5.2i11, M5.2i12, M5.2i13, M5.2i4.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 10; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely), B278 (low/possible) (`BUGS.md`).
+- **Open bugs:** 12; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely) (`BUGS.md`).
 
 ## Recent
 
+- D520 (2026-11-22): A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS
 - DN28 (2026-11-22): A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run (adds to D515)
 - DN27 (2026-11-22): A shell plugin's own commands sit under `task-ctx extension` (corrects D519)
 - DN26 (2026-11-22): A gauge's default point is its mean (corrects D516)
 - DN25 (2026-11-21): A service's memory 256 MiB by default (corrects D518)
-- D519 (2026-11-21): shell plugins' details
 - M5.2i8 (2026-11-22): Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED
 - M5.2i7 (2026-11-22): `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard
 - M5.2i6 (2026-11-22): Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx`
 
 ## In progress
 
-- M5.2i6, i10, i7 done and pushed; M5.2i8 done (notifications: RUN_STARTED, EVENT_POSTED, EXTENSION_EVENT, DN28; agy's review, 8 findings, all fixed). The night's choices accepted by the user (2026-11-22). Next: M5.2i14 (a worker's identity and the trust model, before the service; its scope under discussion with the user: shrink to the identity binding, standalone's localhost ports and the written trust model, the rest 'won't do by design'?), then i9, i11, i12, i13 (extension stress), i4, j, k.
+- M5.2i6, i10, i7, i8 and i14 done and pushed. M5.2i14 (D520): a worker's certificate names its role, `[tls] worker_identity = "certificate"` its ID too (the chart's `tls.workerIdentity`, cert-manager's CSI driver, not tried on a real cluster); parse uploads only of reported code; starts and triggers per worker; standalone's links under in-memory mTLS, its files private, its open local API warned of; the trust page (docs/03-guide/23-trust.md, accepted by the user). B279 (an unknown trigger instance holds wait_for triggers) and B280 (the integration Postgres out of connections) logged. Next: M5.2i9 (the extension's service, decision 518: its lifecycle like a fork server's, the user agreeing), then i11, i12, i13 (extension stress), i4, j, k.
 
 ## Waiting for the user
 

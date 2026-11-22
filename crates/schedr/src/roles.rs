@@ -651,6 +651,15 @@ pub fn log_endpoint(
 /// [`AppError::BadArgument`] when a file isn't configured, or can't be read or used.
 pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
     if config.tls.mode == TlsMode::Mesh {
+        // No certificate reaches schedr there: the mesh's policy says who may call (decision 520).
+        if config.tls.worker_identity == schedr_config::config::WorkerIdentity::Certificate {
+            return Err(AppError::BadArgument(
+                "[tls] worker_identity = \"certificate\" needs [tls] mode = \"app\": in mesh mode \
+                 schedr sees no certificate; let only the workers' service account reach the \
+                 master's gRPC port (an AuthorizationPolicy) instead"
+                    .to_owned(),
+            ));
+        }
         return Ok(None);
     }
     if config.tls.reload_interval.is_zero() {
@@ -680,6 +689,41 @@ pub fn role_tls(config: &Config) -> Result<Option<Tls>, AppError> {
         })
         .map(Some)
         .map_err(|e| AppError::BadArgument(e.to_string()))
+}
+
+/// Tasks' requests to the API (M4.11h): answered in one message to their worker, with room
+/// for its envelope; fenced as the master's writes, so a call checked before another master
+/// took over writes nothing after (Codex's review).
+fn task_api(
+    leadership: &Leadership,
+    limits: (usize, schedr_api::state::ApiLimits),
+    settings: &Settings,
+) -> crate::task_api::RouterTaskApi {
+    crate::task_api::RouterTaskApi::new(
+        leadership.fenced_db(),
+        limits,
+        settings.max_message_size.saturating_sub(4096),
+    )
+}
+
+/// The master's check that a worker call's certificate names the worker it says it is
+/// (decision 520, `[tls] worker_identity = "certificate"` in `app` mode); none otherwise.
+#[must_use]
+pub fn worker_identity(config: &Config) -> Option<schedr_master::service::WorkerIdentity> {
+    if config.tls.mode != TlsMode::App
+        || config.tls.worker_identity != schedr_config::config::WorkerIdentity::Certificate
+    {
+        return None;
+    }
+    let worker_name = config.tls.worker_name.clone();
+    Some(schedr_master::service::WorkerIdentity(std::sync::Arc::new(
+        move |extensions: &tonic::Extensions, worker_id: &str| {
+            extensions
+                .get::<schedr_tls::Peer>()
+                .ok_or_else(|| "the connection carries no certificate".to_owned())
+                .and_then(|peer| peer.names_worker(worker_id, &worker_name))
+        },
+    )))
 }
 
 /// Reads the role's certificates again every `[tls] reload_interval` until `stop`.
@@ -788,7 +832,7 @@ pub async fn serve_master(
         MasterOutbox,
     ),
     listener: TcpListener,
-    tls: Option<Tls>,
+    (tls, identity): (Option<Tls>, Option<schedr_master::service::WorkerIdentity>),
     leadership: impl Future<Output = Result<Leadership, AppError>>,
     observed: Observed<'_, MasterMetrics>,
     stop: watch::Receiver<u32>,
@@ -825,15 +869,7 @@ pub async fn serve_master(
             (None, true)
         }
     };
-    // Tasks' requests to the API (M4.11h): answered in one message to their worker, with room
-    // for its envelope.
-    // Fenced as the master's writes: a call checked before another master took over writes
-    // nothing after (Codex's review).
-    let task_api = crate::task_api::RouterTaskApi::new(
-        leadership.fenced_db(),
-        (max_event_size, api_limits),
-        settings.max_message_size.saturating_sub(4096),
-    );
+    let task_api = task_api(&leadership, (max_event_size, api_limits), &settings);
     // Its writes through the lease: refused once another master took it over.
     let sending = (leadership.fenced_db(), observed.metrics.clone());
     let mut hub = Hub::new(
@@ -844,7 +880,8 @@ pub async fn serve_master(
     )
     .with_refresh_limit(observed.health.stall() / 2)
     .with_epoch(leadership.epoch())
-    .with_problems(problems);
+    .with_problems(problems)
+    .with_worker_identity(identity);
     if retry {
         hub = hub.with_listen_retry(listen_retry);
     }
@@ -2012,7 +2049,7 @@ pub async fn master(config: &Config, migrate: bool) -> Result<(), AppError> {
             outbox,
         ),
         listener,
-        tls,
+        (tls, worker_identity(config)),
         leadership,
         Observed {
             metrics,

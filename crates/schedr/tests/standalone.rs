@@ -4617,3 +4617,103 @@ fn a_shell_plugin_fails_and_stops_and_a_command_task_reports(standalone: &Standa
         "the refusal printed"
     );
 }
+
+/// Decision 520: standalone's gRPC port is under mTLS made in memory: another process on the
+/// machine, speaking plain gRPC or TLS with a certificate of its own, can't connect, while
+/// standalone's own worker runs a DAG through it.
+/// What it created (its data directory, its SQLite file) is its user's alone.
+#[test]
+fn another_process_cant_reach_standalones_grpc_port() {
+    use std::io::{Read as _, Write as _};
+    let standalone = Standalone::start(&[("chain.py", CHAIN)], None);
+    let log = standalone.log();
+    // Its API, signing no one in, is every local user's: said at start (Grok's review).
+    assert!(
+        log.contains("every user of this machine can reach it"),
+        "{log}"
+    );
+    let master = log
+        .split("master on ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap()
+        .to_owned();
+    // Plain HTTP/2: not answered as gRPC (a TLS alert, or the connection closed).
+    let mut tcp = std::net::TcpStream::connect(&master).unwrap();
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    tcp.write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").unwrap();
+    let mut answer = [0u8; 16];
+    let read = tcp.read(&mut answer).unwrap_or(0);
+    assert!(
+        read == 0 || answer[0] == 0x15,
+        "a plain client got {:?}",
+        &answer[..read]
+    );
+    // TLS with a certificate standalone's CA didn't sign.
+    let dir = TempDir::new().unwrap();
+    let ca = schedr_tls::testing::TestCa::new("another CA");
+    let other = schedr_tls::Tls::load(
+        ca.write(dir.path(), "other", &["schedr-worker"]),
+        "schedr-worker",
+        "schedr-ui",
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let refused = runtime
+        .block_on(schedr_tls::channel(
+            &format!("https://{master}"),
+            Some(&other),
+        ))
+        .unwrap_err();
+    assert!(refused.contains("UnknownIssuer"), "{refused}");
+    // The servers themselves ask for a client certificate (agy's review of M5.2i14): a client
+    // trusting any server, presenting none, is refused by the gRPC port and the log endpoint.
+    let master: std::net::SocketAddr = master.parse().unwrap();
+    let grpc = runtime.block_on(schedr_tls::testing::without_a_certificate(
+        master,
+        b"h2",
+        b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n",
+    ));
+    assert!(
+        grpc.as_ref()
+            .is_err_and(|e| e.contains("CertificateRequired")),
+        "{grpc:?}"
+    );
+    standalone.wait("the worker's log endpoint", || {
+        standalone
+            .get("/api/v1/workers")
+            .is_some_and(|w| w["workers"][0]["log_endpoint"].is_string())
+    });
+    let workers = standalone.get("/api/v1/workers").unwrap();
+    let endpoint = workers["workers"][0]["log_endpoint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let logs: std::net::SocketAddr = endpoint.trim_start_matches("https://").parse().unwrap();
+    let http = runtime.block_on(schedr_tls::testing::without_a_certificate(
+        logs,
+        b"http/1.1",
+        b"GET / HTTP/1.1\r\nHost: x\r\n\r\n",
+    ));
+    assert!(
+        http.as_ref()
+            .is_err_and(|e| e.contains("CertificateRequired")),
+        "{http:?}"
+    );
+    a_chain_runs_end_to_end(&standalone);
+    // What it created is its user's alone.
+    let mode = |path: &Path| {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    };
+    let data = standalone.dir.path().join("data");
+    assert_eq!(mode(&data), 0o700);
+    assert_eq!(mode(&data.join("schedr.db")), 0o600);
+    for side in ["schedr.db-wal", "schedr.db-shm"] {
+        let file = data.join(side);
+        if file.exists() {
+            assert_eq!(mode(&file), 0o600, "{side}");
+        }
+    }
+}

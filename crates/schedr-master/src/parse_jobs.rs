@@ -255,6 +255,19 @@ impl ParseJobs {
         self.jobs.contains_key(key)
     }
 
+    /// Whether `worker_id` is concerned in `key`'s job: it holds it, or reported the key (a
+    /// candidate).
+    #[must_use]
+    pub fn concerns(&self, key: &ParseKey, worker_id: &str) -> bool {
+        self.jobs.get(key).is_some_and(|job| {
+            job.candidates.contains(worker_id)
+                || job
+                    .worker
+                    .as_ref()
+                    .is_some_and(|(worker, _)| worker == worker_id)
+        })
+    }
+
     /// A worker is gone: it is no longer a candidate, and its jobs go to other candidates
     /// (or wait for one).
     pub fn worker_lost(&mut self, worker_id: &str, now: Timestamp) -> Vec<ParseAssignment> {

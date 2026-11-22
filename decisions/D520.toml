@@ -1,0 +1,42 @@
+title = "A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS"
+date = 2026-11-22
+by = "user"
+status = "active"
+topic = "deployment"
+section = "Access and authentication"
+summary = '''
+schedr trusts its nodes: a compromised node is out of scope, and so is defending it (the plugin's
+local link unencrypted, no in-memory database, no plugin as its own OS user). The master requires
+a worker's client certificate to name `[tls] worker_name`, so another role's certificate (the
+webserver's, `schedr ui`'s) can't act as a worker; with `[tls] worker_identity = "certificate"`
+the worker ID must be named too, as the DNS name `<id>.<worker_name>` (the ID a lowercase DNS
+label, never matched through a wildcard) (the chart issues one per
+pod through cert-manager's CSI driver), checked at registration, so one worker can't act as
+another. In mesh mode the chart's AuthorizationPolicy lets only the workers' service account
+reach the master's gRPC port; per-worker identity isn't available there. Every worker message about an attempt
+is taken only from the attempt's worker, and a parse upload only of the code the worker reported
+or a job it was given. Standalone's gRPC port
+and log endpoint use mTLS made in memory at each start (a CA and certificates of 24 h, renewed after
+12 h of wall time, never on disk); what it creates is private (its data directory 0700, its SQLite file 0600),
+and an existing one or a config or password file others can read is warned of at start. Standalone's REST API with auth `none` is every local user's: warned of at
+start, also on loopback, and documented (not: requiring auth unless a flag says, the API on a
+Unix socket). The
+cleanup barrier keeps its socket file (a 0700 folder), documented. Not chosen: per-worker
+identity required (it breaks app-mode deployments sharing the chart's certificate), a SPIFFE URI
+(a trust domain to set), certificates for the process's life, refusing to start on loose files,
+the barrier as a socket pair, standalone's SQLite in memory.
+'''
+history = "JOURNAL.md#D520"  # <a id="D520"></a> starts its JOURNAL.md entry
+step = "M5.2i14"
+code = [
+  "crates/schedr-tls/src/material.rs::build",
+  "crates/schedr-tls/src/incoming.rs::Peer",
+  "crates/schedr-tls/src/ephemeral.rs::Ephemeral",
+  "crates/schedr-master/src/service.rs::WorkerIdentity",
+  "crates/schedr-master/src/discovery.rs::may_upload",
+  "crates/schedr/src/roles.rs::worker_identity",
+  "crates/schedr/src/private_files.rs",
+  "crates/schedr/src/standalone.rs::links_tls",
+  "charts/schedr/templates/worker.yaml",
+]
+checked = 2026-11-22

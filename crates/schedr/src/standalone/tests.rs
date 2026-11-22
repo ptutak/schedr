@@ -241,3 +241,14 @@ fn debug_hides_the_database_urls_passwords() {
     );
     assert!(shown.contains("postgres://u:***@db/schedr"), "{shown}");
 }
+
+/// Grok's review of M5.2i14: auth `none` on loopback is still every local user's.
+#[test]
+fn an_api_signing_no_one_in_on_loopback_is_warned_of_for_other_users() {
+    let warning = local_users_warning("127.0.0.1:8080".parse().unwrap());
+    assert!(warning.contains("every user of this machine"), "{warning}");
+    assert!(
+        warning.contains("[webserver.auth] mode = \"basic\""),
+        "{warning}"
+    );
+}

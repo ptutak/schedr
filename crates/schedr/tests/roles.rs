@@ -933,6 +933,54 @@ fn a_worker_with_a_certificate_from_another_ca_is_refused() {
     assert_eq!(cluster.worker_state("w1"), None);
 }
 
+/// Decision 520: with `[tls] worker_identity = "certificate"`, a worker registers only as the
+/// ID its certificate names (`<id>.schedr-worker`): `w1`'s runs a DAG (its parse uploaded, its
+/// tasks' inputs fetched), `w2` with `w1`'s certificate is refused, and isn't registered.
+#[test]
+fn with_worker_identity_a_worker_is_only_the_worker_its_certificate_names() {
+    let mut cluster = Cluster::with_tls(Some(postgres_database()));
+    let (code, err) = cluster.schedr(&["db", "migrate"]);
+    assert_eq!(code, 0, "{err}");
+    let identity = [("SCHEDR_CONFIG__TLS__WORKER_IDENTITY", "certificate")];
+    cluster.start_tls("master", "master", &["127.0.0.1"], None, &identity);
+    cluster.start_tls("webserver", "webserver", &["schedr-webserver"], None, &[]);
+    let w1 = ["schedr-worker", "w1.schedr-worker"];
+    cluster.start_tls("worker", "worker", &w1, None, &[]);
+    cluster.wait("w1", || {
+        cluster.worker_state("w1").as_deref() == Some("active")
+    });
+    let elsewhere = cluster.dir.path().join("w2");
+    let elsewhere = elsewhere.to_str().unwrap().to_owned();
+    cluster.start_tls(
+        "worker2",
+        "worker",
+        &w1,
+        None,
+        &[
+            ("SCHEDR_CONFIG__WORKER__ID", "w2"),
+            ("SCHEDR_CONFIG__WORKER__DATA_DIR", &elsewhere),
+        ],
+    );
+    cluster.wait("the master to refuse w2", || {
+        let master = cluster.log_of("master");
+        master.contains("its certificate isn't this worker's")
+            && master.contains("doesn't name `w2.schedr-worker`")
+    });
+    assert_eq!(cluster.worker_state("w2"), None);
+    cluster.wait("DAG `chain`", || {
+        cluster
+            .cli_json(&["dags", "list"])
+            .is_some_and(|d| d["dags"][0]["dag_id"] == "chain")
+    });
+    let (code, _, err) = cluster.cli(&["runs", "trigger", "chain", "--for", "2026-10-15"]);
+    assert_eq!(code, 0, "{err}");
+    cluster.wait("the run to succeed on w1", || {
+        cluster
+            .cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
+            .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+    });
+}
+
 #[test]
 fn the_master_takes_rotated_certificates_without_a_restart() {
     let mut cluster = Cluster::with_tls(Some(postgres_database()));

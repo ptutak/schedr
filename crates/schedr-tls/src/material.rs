@@ -1,7 +1,9 @@
 //! The certificate files and the rustls configurations built from them.
 //!
 //! - **Servers** (the master's gRPC, a worker's log endpoint) present their certificate and
-//!   require a client certificate signed by the CA.
+//!   require a client certificate signed by the CA; the master's gRPC port, beyond that, one
+//!   naming `[tls] worker_name`: only a worker may connect there, not another role's
+//!   certificate (decision 520).
 //! - **The webserver's UI port** (`[webserver] ui_port`) requires, beyond that, a client
 //!   certificate naming `[tls] ui_name`: only `schedr ui` may pass users' names on there
 //!   (decision 36); any other certificate fails the handshake.
@@ -91,6 +93,9 @@ pub enum TlsError {
     /// `[tls] worker_name` isn't a DNS name or an IP address.
     #[error("[tls] worker_name `{0}` isn't a DNS name or an IP address")]
     WorkerName(String),
+    /// Certificates in memory can't be made (decision 520).
+    #[error("can't make the in-memory TLS certificates: {0}")]
+    Generate(String),
     /// `[tls] ui_name` isn't a DNS name or an IP address.
     #[error("[tls] ui_name `{0}` isn't a DNS name or an IP address")]
     UiName(String),
@@ -211,14 +216,18 @@ pub fn build(
     };
     let named = Arc::new(FixedName {
         inner: server_verifier.clone(),
-        name: worker_name,
+        name: worker_name.clone(),
     });
     let ui_only = Arc::new(NamedClient {
         inner: client_verifier.clone(),
         name: ui_name,
     });
+    let workers_only = Arc::new(NamedClient {
+        inner: client_verifier.clone(),
+        name: worker_name,
+    });
     Ok(Configs {
-        grpc_server: server(ALPN_H2, client_verifier.clone())?,
+        grpc_server: server(ALPN_H2, workers_only)?,
         http_server: server(ALPN_HTTP1, client_verifier)?,
         grpc_client: client(ALPN_H2, server_verifier.clone())?,
         worker_client: client(ALPN_HTTP1, named)?,
@@ -281,11 +290,20 @@ impl ClientCertVerifier for NamedClient {
             .verify_client_cert(end_entity, intermediates, now)?;
         let certificate = webpki::EndEntityCert::try_from(end_entity)
             .map_err(|e| rustls::Error::General(format!("the client's certificate: {e}")))?;
+        let not_named =
+            || rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName);
         certificate
             .verify_is_valid_for_subject_name(&self.name)
-            .map_err(|_| {
-                rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName)
-            })?;
+            .map_err(|_| not_named())?;
+        // A DNS name exactly, not through a wildcard: another role's `*.<domain>` would pass
+        // for `worker.<domain>` (agy's review of M5.2i14).
+        if let ServerName::DnsName(wanted) = &self.name
+            && !certificate
+                .valid_dns_names()
+                .any(|presented| presented.eq_ignore_ascii_case(wanted.as_ref()))
+        {
+            return Err(not_named());
+        }
         Ok(verified)
     }
 

@@ -511,8 +511,10 @@ pub struct Arrivals(Arc<std::sync::Mutex<Arrived>>);
 #[derive(Debug, Default)]
 struct Arrived {
     last: BTreeMap<String, Timestamp>,
-    /// Attempts whose start arrived and waits to be handled, with their worker.
-    started: BTreeMap<String, String>,
+    /// Attempts whose start arrived and waits to be handled, each with the worker it came
+    /// from: one worker's message neither stands for nor clears another's (decision 520,
+    /// agy's review of M5.2i14).
+    started: BTreeSet<(String, String)>,
     /// Each worker's current stream, as numbered (B240).
     streams: BTreeMap<String, StreamRead>,
     /// The last stream's ID handed out.
@@ -610,7 +612,7 @@ impl Arrivals {
     pub fn forget(&self, worker_id: &str) {
         let mut inner = self.inner();
         inner.last.remove(worker_id);
-        inner.started.retain(|_, worker| worker != worker_id);
+        inner.started.retain(|(_, worker)| worker != worker_id);
         inner.streams.remove(worker_id);
         inner.unsent.retain(|_, worker| worker != worker_id);
     }
@@ -679,7 +681,9 @@ impl Arrivals {
     #[must_use]
     pub fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
         let inner = self.inner();
-        !inner.started.contains_key(attempt_id)
+        !inner
+            .started
+            .contains(&(attempt_id.to_owned(), worker_id.to_owned()))
             && (inner.unsent.get(attempt_id).is_some_and(|w| w == worker_id)
                 || inner.streams.get(worker_id).is_some_and(|read| {
                     read.assigned
@@ -698,14 +702,17 @@ impl Arrivals {
     pub fn start_known(&self, worker_id: &str, attempt_id: &str) -> bool {
         self.inner()
             .started
-            .insert(attempt_id.to_owned(), worker_id.to_owned())
-            .is_none()
+            .insert((attempt_id.to_owned(), worker_id.to_owned()))
     }
 
     /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
     #[must_use]
     pub fn start_waiting(&self, attempt_id: &str) -> bool {
-        self.inner().started.contains_key(attempt_id)
+        self.inner()
+            .started
+            .range((attempt_id.to_owned(), String::new())..)
+            .next()
+            .is_some_and(|(attempt, _)| attempt == attempt_id)
     }
 
     /// How many `Started` or `Finished` messages arrived and aren't handled yet.
@@ -717,12 +724,16 @@ impl Arrivals {
     /// Forgets the starts of `worker_id`'s that wait: it registered, and its journal is what
     /// stands now.
     pub fn forget_starts(&self, worker_id: &str) {
-        self.inner().started.retain(|_, worker| worker != worker_id);
+        self.inner()
+            .started
+            .retain(|(_, worker)| worker != worker_id);
     }
 
-    /// The message about `attempt_id`'s start was handled (or failed to be).
-    pub fn start_handled(&self, attempt_id: &str) {
-        self.inner().started.remove(attempt_id);
+    /// `worker_id`'s message about `attempt_id`'s start was handled (or failed to be).
+    pub fn start_handled(&self, worker_id: &str, attempt_id: &str) {
+        self.inner()
+            .started
+            .remove(&(attempt_id.to_owned(), worker_id.to_owned()));
     }
 }
 
@@ -1662,7 +1673,7 @@ impl MasterCore {
                 // Not stored, the start stays known in memory: the attempt runs, and isn't
                 // taken back meanwhile; its `Finished` (or a reconnect's journal) settles it.
                 if settled.is_ok() {
-                    self.arrivals.start_handled(id);
+                    self.arrivals.start_handled(worker_id, id);
                 }
                 match settled? {
                     Some(out) => out.into_iter().collect(),
@@ -2116,16 +2127,29 @@ impl MasterCore {
             .map(parsed_file_from_proto)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad(e.to_string()))?;
+        let key = ParseKey {
+            kind: root.kind(),
+            root: root.root.clone(),
+            content_hash: root.content_hash.clone(),
+            schedr_version: result.schedr_version.clone(),
+        };
+        if !self.discovery.may_upload(&result.worker_id, &key) {
+            tracing::warn!(
+                worker_id = result.worker_id,
+                root = key.root,
+                content_hash = key.content_hash,
+                "a parse upload refused: of code this worker didn't report"
+            );
+            return Err(bad(format!(
+                "a parse of root `{}` at `{}` it didn't report and wasn't given",
+                key.root, key.content_hash
+            )));
+        }
         self.discovery
             .parse_uploaded(
                 ParseUpload {
                     worker_id: result.worker_id.clone(),
-                    key: ParseKey {
-                        kind: root.kind(),
-                        root: root.root,
-                        content_hash: root.content_hash,
-                        schedr_version: result.schedr_version.clone(),
-                    },
+                    key,
                     files,
                     secret_storages: self
                         .connections
@@ -2186,7 +2210,7 @@ impl MasterCore {
         // As for `Started`: not stored, the worker sends it again (B41), and the
         // attempt isn't taken back meanwhile.
         if settled.is_ok() {
-            self.arrivals.start_handled(id);
+            self.arrivals.start_handled(worker_id, id);
         }
         Ok(vec![settled?.unwrap_or_else(|| {
             crate::dispatch::finished_ack(worker_id, id)
@@ -2276,7 +2300,7 @@ impl MasterCore {
         }
         self.metrics.count_staged();
         for id in group.attempt_ids() {
-            self.arrivals.start_handled(id);
+            self.arrivals.start_handled(worker_id, id);
         }
         Ok(out)
     }
@@ -2344,9 +2368,9 @@ impl MasterCore {
             }
         }
         self.metrics.count_staged();
-        for (_, group) in &batch {
+        for (worker_id, group) in &batch {
             for id in group.attempt_ids() {
-                self.arrivals.start_handled(id);
+                self.arrivals.start_handled(worker_id, id);
             }
         }
         Ok(out)

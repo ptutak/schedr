@@ -3055,3 +3055,35 @@ process and its children; the cleanup barrier alone is a socket file, in a 0700 
 ("add it"): M5.2i14's trust page states the rule (local links are inherited descriptors, never
 ports), weighs the barrier's file against a socket pair, and says the ops port's metrics are
 readable by whoever reaches it; M5.2i9's service listens on nothing.
+
+### <a id="D520"></a>2026-11-22: A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS (decision 520)
+
+Found at M5.2i14's start, in the code (schedr-tls's `build`): the master's gRPC port accepts any
+client certificate the CA signed and never compares a `Register`'s worker ID with it, so any
+worker's certificate registers under any ID, and the webserver's or `schedr ui`'s can connect as
+a worker; the chart makes one worker certificate for all workers. The user chose, of the options
+shown: the role checked always and the worker ID by an opt-in (not: the role only; per-worker
+always, which breaks shared certificates); in mesh mode the policy documented and made by the
+chart (not: nothing); the ID as the DNS name `<id>.<worker_name>` (not: a SPIFFE URI);
+standalone's certificates for 24 h, renewed at 12 h (not: the process's life); private files
+created, loose ones warned of (not: refusing to start); the barrier's socket file kept and
+documented (not: a socket pair).
+
+Found while checking every worker message for its owner (i14's scope: "checked to be on its own
+attempts and roots"): the attempt messages, triggers and connection jobs each compare the
+attempt's or job's worker with the stream's, but a parse upload was taken for any root and hash,
+an existing parse's files replaced: a worker could define DAGs, command tasks' commands among
+them, that every worker then runs. Now taken only for the key the worker last reported for the
+root, or a job it holds or is a candidate of (`Discovery::may_upload`); a worker logs a refused
+upload and doesn't retry it, and the job moves on as a timed-out one does. A worker serving a
+root is still trusted with that root's code: the trust page says so.
+
+The reviews (agy, Grok's second security review): fixed a worker ID matched to its certificate
+regardless of case (IDs now lowercase DNS labels), a wildcard passing for `[tls] worker_name` or
+`ui_name`, another worker's attempt kept and freed as a reported trigger, start messages keyed by
+attempt only (now by attempt and worker), renewal by a sleep that doesn't count a suspend (now
+the wall clock, looked at every minute), the chart's CSI files and key group, mesh mode and a
+shared worker certificate in the chart, a database linked to nothing; the trigger stall of an
+unknown instance logged as B279. Grok found standalone's REST API, auth `none` on loopback,
+open to every local user and handing out logs; the user chose, of the options shown, a warning
+at start and the trust page (not: auth required unless a flag says; the API on a Unix socket).

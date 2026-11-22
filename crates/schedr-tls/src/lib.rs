@@ -13,6 +13,7 @@
 //! With the `testing` feature, `testing` makes certificates for tests.
 
 pub mod connect;
+pub mod ephemeral;
 pub mod incoming;
 pub mod material;
 pub mod reload;
@@ -20,6 +21,6 @@ pub mod reload;
 pub mod testing;
 
 pub use connect::{channel, error_text};
-pub use incoming::{Conn, Incoming, Protocol, incoming};
+pub use incoming::{Conn, Incoming, Peer, Protocol, incoming};
 pub use material::{TlsError, TlsFiles};
 pub use reload::{Reload, Tls};

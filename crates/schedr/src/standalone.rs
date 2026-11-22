@@ -3,8 +3,10 @@
 //!
 //! The master's gRPC service, the REST API, the master's loop and one worker agent with its log
 //! endpoint run side by side; the agent talks to the master over gRPC on localhost like any
-//! worker, and the API reads logs from the endpoint (no TLS: neither listens beyond
-//! localhost, whatever `[tls]` says). `--migrate` migrates the database at start (a laptop);
+//! worker, and the API reads logs from the endpoint, both over mTLS whatever `[tls]` says: a
+//! CA and a certificate made in memory at start, renewed every 12 hours, never on disk
+//! (decision 520), so another process on the machine can't connect to either. `--migrate`
+//! migrates the database at start (a laptop);
 //! without it, a schema that isn't up to date is refused (production migrates as a step of its
 //! own, `schedr db migrate`). When the master fails (another took the lease over), the whole
 //! process ends, its tasks interrupted: restarted, it waits as a standby.
@@ -38,6 +40,7 @@ use crate::roles::{
     LocalUi, MasterOutbox, Observed, WorkerLinks, agent_settings, check_timeouts, data_dir,
     docs_dir, lead, listen, lock_journal, log_retention, master_outbox, master_settings,
     memory_text, no_auth_warning, role_auth, run_worker, serve_api, serve_master, stop_on_signal,
+    until,
 };
 use schedr_config::masked::masked;
 
@@ -89,6 +92,9 @@ pub struct Standalone {
     pub database_url: String,
     /// The master's gRPC address.
     pub grpc: SocketAddr,
+    /// How long a handshake on its links may take, and how many run at once
+    /// (`[timings] handshake_timeout`, `SCHEDR_HIDDEN__LIMITS__TLS_HANDSHAKES_AT_ONCE`).
+    pub handshakes: (Duration, usize),
     /// The REST API's address.
     pub http: SocketAddr,
     /// The worker's log endpoint's address.
@@ -188,6 +194,10 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
     let localhost = |port| SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     Ok(Standalone {
         grpc: localhost(config.master.grpc_port),
+        handshakes: (
+            config.timings.handshake_timeout,
+            config.limits.tls_handshakes_at_once,
+        ),
         http: localhost(config.webserver.port),
         logs: localhost(config.worker.log_port),
         ops: localhost(config.ops.port),
@@ -318,9 +328,14 @@ pub async fn run(
 ) -> Result<(), AppError> {
     let lease = setup.lease();
     let io = |what: &str, e: std::io::Error| AppError::BadArgument(format!("{what}: {e}"));
-    tokio::fs::create_dir_all(&setup.data_dir)
-        .await
+    // Its user's alone (decision 520): created so, warned of when open to others.
+    let warned = crate::private_files::data_dir(&setup.data_dir)
         .map_err(|e| io(&format!("can't create {}", setup.data_dir.display()), e))?;
+    let database = crate::private_files::database(&setup.database_url)
+        .map_err(|e| io("can't create the SQLite file", e))?;
+    for warning in warned.into_iter().chain(database) {
+        tracing::warn!("{warning}");
+    }
     let _lock = lock_data_dir(&setup.data_dir)?;
     let _journal_lock = lock_journal(&setup.agent)?;
     // After the lock: a second standalone on the data directory stops before touching it.
@@ -360,8 +375,14 @@ pub async fn run(
     };
     let secrets = setup.secret_storage.for_role(Some(&db))?;
     let (master_id, problems, heartbeat) = heartbeat(&db, setup.node_beat(), &stopped);
+    let (tls, ephemeral) = links_tls(setup.handshakes)?;
+    tokio::spawn(ephemeral.renew(
+        tls.clone(),
+        schedr_tls::ephemeral::RENEW_AFTER,
+        until(stopped.clone()),
+    ));
     let mut agent = setup.agent;
-    agent.log_endpoint = format!("http://{}", addresses.logs);
+    agent.log_endpoint = format!("https://{}", addresses.logs);
     agent.secrets = secrets;
     let leading = lead(
         &db,
@@ -381,13 +402,14 @@ pub async fn run(
     let forwarding = tokio::spawn(forward_requests(shutdown, request.clone()));
     // Boxed: the roles' futures are large.
     let master_db = db.clone();
+    let master_tls = tls.clone();
     let master = Box::pin(async {
         let served = Box::pin(serve_master(
             master_db,
             setup.master,
             (tick, problems, max_event_size, outbox),
             grpc,
-            None,
+            (Some(master_tls), None),
             leadership,
             master_observed,
             stopped.clone(),
@@ -405,14 +427,14 @@ pub async fn run(
         db,
         (auth, setup.api_timings, node),
         (http, None),
-        None,
+        Some(tls.clone()),
         setup.ui.clone(),
         api_observed,
         stopped.clone(),
     ));
     let links = WorkerLinks {
-        master_url: format!("http://{}", addresses.grpc),
-        tls: None,
+        master_url: format!("https://{}", addresses.grpc),
+        tls: Some(tls),
         log_listener: logs,
         retention: setup.retention,
         max_message_size: setup.master.max_message_size,
@@ -434,6 +456,38 @@ pub async fn run(
     }
     master?;
     api
+}
+
+/// The warning for standalone's API signing no one in on a loopback address (decision 520,
+/// Grok's review of M5.2i14): every user of the machine reaches it, and through it runs and
+/// task logs, though its internal links are under mTLS.
+#[must_use]
+pub fn local_users_warning(address: SocketAddr) -> String {
+    format!(
+        "the REST API and its pages sign no one in (auth mode `none`) on {address}: every user \
+         of this machine can reach it, and read runs and task logs through it; on a machine \
+         shared with other users set [webserver.auth] mode = \"basic\" or \"proxy_header\""
+    )
+}
+
+/// The name standalone's certificate gives its worker (checked as `[tls] worker_name` is).
+const WORKER_NAME: &str = "schedr-worker";
+
+/// Standalone's links' material, made in memory (decision 520): its certificate names
+/// 127.0.0.1 (the master's and the log endpoint's address) and [`WORKER_NAME`]; and its CA, to
+/// renew it.
+fn links_tls(
+    (timeout, at_once): (Duration, usize),
+) -> Result<(schedr_tls::Tls, schedr_tls::ephemeral::Ephemeral), AppError> {
+    let made = |e: schedr_tls::TlsError| AppError::BadArgument(e.to_string());
+    let ephemeral =
+        schedr_tls::ephemeral::Ephemeral::new(&["127.0.0.1", WORKER_NAME]).map_err(made)?;
+    let tls = ephemeral
+        .tls(WORKER_NAME)
+        .map_err(made)?
+        .with_handshake_timeout(timeout)
+        .with_handshakes_at_once(at_once);
+    Ok((tls, ephemeral))
 }
 
 /// Who a standalone's requests are from, by `setup`, on `http`.
@@ -642,14 +696,26 @@ pub async fn command(
         setup.http.set_ip(address);
         setup.ops.set_ip(address);
     }
+    let secrets = crate::private_files::secret_files(&[
+        (
+            "[webserver.auth] users_file",
+            config.webserver.auth.users_file.as_deref(),
+        ),
+        (
+            "[webserver] ui_token_file",
+            config.webserver.ui_token_file.as_deref(),
+        ),
+    ]);
+    for warning in secrets {
+        tracing::warn!("{warning}");
+    }
     let shown = setup.clone();
     Box::pin(run(
         setup,
         |listening| {
-            if shown.auth.mode == AuthMode::None
-                && let Some(warning) =
-                    no_auth_warning(listening.http, "reach it with kubectl port-forward")
-            {
+            if shown.auth.mode == AuthMode::None {
+                let warning = no_auth_warning(listening.http, "reach it with kubectl port-forward")
+                    .unwrap_or_else(|| local_users_warning(listening.http));
                 tracing::warn!("{warning}");
             }
             tracing::info!("{}", banner(listening, &shown));

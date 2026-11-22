@@ -123,6 +123,17 @@ certificate per role in a Secret of its own (`ca.crt`, `tls.crt`, `tls.key`), fr
    there. To rotate, delete the `<release>-*-tls` Secrets and upgrade; schedr reloads the
    files without a restart.
 
+**A certificate per worker:** `tls.workerIdentity: certificate` gives each worker pod a
+certificate of its own, naming `<pod>.<tls.workerName>` and `tls.workerName`, from
+cert-manager's CSI driver (`csi.cert-manager.io`, installed apart) and
+`tls.certManager.issuerRef`. The driver makes it when the pod starts and renews it; its files
+are the ones `[tls]` reads, the key readable by the pod's `fsGroup` (0 by default, the image's
+group). The chart refuses it in `tls.mode: mesh`, and makes no shared worker certificate with
+it. The master
+then checks that a worker's certificate names its ID (`[tls] worker_identity`), so one
+worker's key can't act as another. Use it where workers run extensions that control other
+systems (see [What schedr trusts](23-trust.md)). The chart refuses it without an issuer.
+
 `tls.mode: mesh` sends plain traffic for a service mesh to encrypt (Istio) and needs no
 certificates.
 

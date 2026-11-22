@@ -16,6 +16,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::serve::Listener;
+use rustls::pki_types::{CertificateDer, ServerName};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, mpsc};
@@ -23,7 +24,7 @@ use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 use tokio_stream::Stream;
-use tonic::transport::server::{Connected, TcpConnectInfo};
+use tonic::transport::server::Connected;
 
 use crate::reload::Tls;
 
@@ -107,13 +108,77 @@ impl AsyncWrite for Conn {
     }
 }
 
-impl Connected for Conn {
-    type ConnectInfo = TcpConnectInfo;
+/// What a handler knows of the connection a request came on (decision 520): its addresses, and
+/// over TLS the peer's own certificate, checked by the handshake already.
+#[derive(Debug, Clone)]
+pub struct Peer {
+    /// The peer's address.
+    pub remote_addr: Option<SocketAddr>,
+    /// The peer's end-entity certificate; none over plain TCP.
+    pub certificate: Option<CertificateDer<'static>>,
+}
 
-    fn connect_info(&self) -> TcpConnectInfo {
-        TcpConnectInfo {
-            local_addr: self.tcp().local_addr().ok(),
+impl Peer {
+    /// Whether the peer's certificate names worker `worker_id`: the DNS name
+    /// `<worker_id>.<worker_name>`, exactly, in its subject alternative names (decision 520). A
+    /// wildcard (`*.<worker_name>`) names no one worker, and so none: matched by the usual name
+    /// check, it would let one certificate be every worker. The ID must be a lowercase DNS
+    /// label: DNS names ignore case and worker IDs don't, so `W1` and `w1` would share one
+    /// certificate (agy's review of M5.2i14).
+    ///
+    /// # Errors
+    ///
+    /// Why not, for the refusal: no certificate (plain TCP), a worker ID that isn't a DNS
+    /// label, a certificate that can't be read or doesn't name it.
+    pub fn names_worker(&self, worker_id: &str, worker_name: &str) -> Result<(), String> {
+        let Some(der) = &self.certificate else {
+            return Err("the connection carries no certificate".to_owned());
+        };
+        let wanted = format!("{worker_id}.{worker_name}");
+        let label_ok = !worker_id.is_empty()
+            && worker_id.len() <= 63
+            && worker_id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !worker_id.starts_with('-')
+            && !worker_id.ends_with('-');
+        if !label_ok {
+            return Err(format!(
+                "worker ID `{worker_id}` isn't a lowercase DNS label (letters a-z, digits, `-`), \
+                 so no certificate can name it"
+            ));
+        }
+        let name = ServerName::try_from(wanted.clone())
+            .map_err(|_| format!("`{wanted}` isn't a DNS name"))?;
+        let certificate = webpki::EndEntityCert::try_from(der)
+            .map_err(|e| format!("the certificate can't be read: {e}"))?;
+        let exact = certificate
+            .valid_dns_names()
+            .any(|presented| presented.eq_ignore_ascii_case(&wanted));
+        if exact && certificate.verify_is_valid_for_subject_name(&name).is_ok() {
+            Ok(())
+        } else {
+            Err(format!("its certificate doesn't name `{wanted}`"))
+        }
+    }
+}
+
+impl Connected for Conn {
+    type ConnectInfo = Peer;
+
+    fn connect_info(&self) -> Peer {
+        let certificate = match self {
+            Self::Plain(_) => None,
+            Self::Tls(tls) => tls
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(|chain| chain.first())
+                .map(|der| der.clone().into_owned()),
+        };
+        Peer {
             remote_addr: self.tcp().peer_addr().ok(),
+            certificate,
         }
     }
 }

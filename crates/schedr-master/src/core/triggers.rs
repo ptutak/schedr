@@ -1545,6 +1545,20 @@ impl MasterCore {
             .filter_map(|r| r.instance_id.as_deref())
             .collect();
         for instance in reported {
+            // Another worker's slot isn't this one's to keep, nor to free with a stop
+            // (decision 520: a worker acts only on its own; agy's review of M5.2i14).
+            if self
+                .dispatcher
+                .workers()
+                .held_by_another(worker_id, instance)
+            {
+                tracing::warn!(
+                    worker_id,
+                    instance,
+                    "a registration reported another worker's attempt as its trigger; ignored"
+                );
+                continue;
+            }
             if !current.contains(instance.as_str()) {
                 self.dispatcher.trigger_kept(worker_id, instance, now);
                 self.stopping_triggers

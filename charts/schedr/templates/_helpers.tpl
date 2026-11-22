@@ -253,9 +253,26 @@ parse as gRPC or HTTP.
   value: /etc/schedr/tls/tls.key
 - name: SCHEDR_CONFIG__TLS__WORKER_NAME
   value: {{ $ctx.Values.tls.workerName | quote }}
+- name: SCHEDR_CONFIG__TLS__WORKER_IDENTITY
+  value: {{ include "schedr.workerIdentity" $ctx | quote }}
 - name: SCHEDR_CONFIG__TLS__UI_NAME
   value: {{ $ctx.Values.tls.uiName | quote }}
 {{- end }}
+{{- end -}}
+
+{{/* tls.workerIdentity, checked: certificate needs cert-manager's issuer for the CSI driver. */}}
+{{- define "schedr.workerIdentity" -}}
+{{- $identity := .Values.tls.workerIdentity | default "role" -}}
+{{- if not (has $identity (list "role" "certificate")) -}}
+{{- fail (printf "tls.workerIdentity must be role or certificate, not %s" $identity) -}}
+{{- end -}}
+{{- if and (eq $identity "certificate") (ne .Values.tls.mode "app") -}}
+{{- fail "tls.workerIdentity certificate needs tls.mode app: in mesh mode schedr sees no certificate (the workers' service account is their identity)" -}}
+{{- end -}}
+{{- if and (eq $identity "certificate") (not .Values.tls.certManager.issuerRef.name) -}}
+{{- fail "tls.workerIdentity certificate needs tls.certManager.issuerRef: each worker's certificate comes from cert-manager's CSI driver" -}}
+{{- end -}}
+{{- $identity -}}
 {{- end -}}
 
 {{/* Whether `schedr ui` is deployed: mode ui, or mode distributed with ui.enabled. */}}

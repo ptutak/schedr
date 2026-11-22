@@ -102,6 +102,21 @@ fn numbered_send(
     Ok(number)
 }
 
+/// Whether the certificate a call came with names worker `worker_id` (decision 520,
+/// `[tls] worker_identity = "certificate"`): given the call's extensions (where the role puts
+/// its connection's peer) and the ID; an `Err` says why not.
+#[derive(Clone)]
+pub struct WorkerIdentity(pub Arc<IdentityCheck>);
+
+/// [`WorkerIdentity`]'s function: a call's extensions and the worker ID it names.
+pub type IdentityCheck = dyn Fn(&tonic::Extensions, &str) -> Result<(), String> + Send + Sync;
+
+impl std::fmt::Debug for WorkerIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WorkerIdentity")
+    }
+}
+
 /// The core and the workers' outgoing streams.
 #[derive(Debug, Clone)]
 pub struct Hub {
@@ -165,6 +180,8 @@ pub struct Hub {
     triggers_failed: Arc<std::sync::atomic::AtomicBool>,
     /// Its problems now, written with its row (decision 129).
     problems: Problems,
+    /// The worker identity check (decision 520); none: any worker certificate is any worker.
+    worker_identity: Option<WorkerIdentity>,
     /// How its loop is paced.
     timings: crate::core::MasterTimings,
     /// Master time (see [`crate::clock`]), stamped on every message.
@@ -235,6 +252,7 @@ impl Hub {
             triggers_due: core.dispatcher().trigger_wake(),
             triggers_failed: Arc::default(),
             problems: Problems::default(),
+            worker_identity: None,
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
@@ -261,6 +279,26 @@ impl Hub {
     pub const fn with_epoch(mut self, epoch: i64) -> Self {
         self.epoch = epoch;
         self
+    }
+
+    /// The hub checking each worker call's certificate names the worker it says it is (decision
+    /// 520): a `Register`, a parse upload, an attempt's inputs; none, no check.
+    #[must_use]
+    pub fn with_worker_identity(mut self, check: Option<WorkerIdentity>) -> Self {
+        self.worker_identity = check;
+        self
+    }
+
+    /// Whether a call with `extensions` may act as worker `worker_id`: always without the
+    /// check; with it, only when its certificate names it, refused otherwise (and warned of).
+    fn identified(&self, extensions: &tonic::Extensions, worker_id: &str) -> Result<(), Status> {
+        let Some(check) = &self.worker_identity else {
+            return Ok(());
+        };
+        (check.0)(extensions, worker_id).map_err(|why| {
+            tracing::warn!(worker_id, %why, "a call refused: its certificate isn't this worker's");
+            Status::permission_denied(format!("worker `{worker_id}`: {why}"))
+        })
     }
 
     /// The hub reporting its problems to `problems` (its heartbeat writes them).
@@ -1828,7 +1866,7 @@ impl Hub {
         if !leads || !*self.leading.borrow() {
             drop(core);
             for attempt_id in &added {
-                self.arrivals.start_handled(attempt_id);
+                self.arrivals.start_handled(&register.worker_id, attempt_id);
             }
             return Err(Status::unavailable(NOT_LEADING));
         }
@@ -1864,7 +1902,7 @@ impl Hub {
             // `Started` that couldn't be stored, its stream still live) stays.
             Err(CoreError::Refused(_)) => {
                 for attempt_id in &added {
-                    self.arrivals.start_handled(attempt_id);
+                    self.arrivals.start_handled(&register.worker_id, attempt_id);
                 }
             }
             // A database failure: the worker registers again with the same journal; kept
@@ -2257,7 +2295,7 @@ async fn read_stream(
                     | worker_message::Message::Finished(pb::Finished { attempt_id, .. }) =
                         &unsent
                     {
-                        arrivals.start_handled(attempt_id);
+                        arrivals.start_handled(&worker_id, attempt_id);
                     }
                     return;
                 }
@@ -2280,6 +2318,7 @@ impl Master for Hub {
         &self,
         request: Request<Streaming<pb::WorkerMessage>>,
     ) -> Result<Response<Self::ControlStream>, Status> {
+        let extensions = request.extensions().clone();
         let mut inbound = request.into_inner();
         // Not waited for once the master stops: a stream that never sends `Register` would
         // keep tonic's graceful shutdown waiting (B219).
@@ -2296,6 +2335,9 @@ impl Master for Hub {
                 "the first message must be `Register`",
             ));
         };
+        // Its certificate's worker, before anything is noted of it (decision 520): the stream
+        // is then that worker's, every message on it too.
+        self.identified(&extensions, &register.worker_id)?;
         // Not while paused: another master may be leading. Refused at once rather than held
         // (B165), before anything is noted of it: the worker connects again, through the
         // Service, to the master that leads.
@@ -2315,6 +2357,7 @@ impl Master for Hub {
         request: Request<Streaming<pb::ParseResultPart>>,
     ) -> Result<Response<pb::ParseResultAck>, Status> {
         // The header, then a file a message (B35): read whole before the lock is taken.
+        let extensions = request.extensions().clone();
         let mut parts = request.into_inner();
         let mut upload = ParseUpload::default();
         // Not waited for once the master stops, as `control`'s `Register` isn't (B219's review).
@@ -2334,6 +2377,7 @@ impl Master for Hub {
         let result = upload
             .finish()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        self.identified(&extensions, &result.worker_id)?;
         // Apart from this call, as a registration is: a reset stream doesn't stop it half-way.
         let hub = self.clone();
         let uploaded = tokio::spawn(async move {
@@ -2363,7 +2407,18 @@ impl Master for Hub {
         &self,
         request: Request<pb::FetchInputsRequest>,
     ) -> Result<Response<Self::FetchInputsStream>, Status> {
+        let extensions = request.extensions().clone();
         let attempt_id = request.into_inner().attempt_id;
+        // Only the attempt's own worker gets its inputs (decision 520): read without the lock.
+        if self.worker_identity.is_some() {
+            let attempt = self
+                .db
+                .attempt(&attempt_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?
+                .ok_or_else(|| Status::not_found(format!("no open attempt `{attempt_id}`")))?;
+            self.identified(&extensions, &attempt.worker_id)?;
+        }
         // Read without the master's lock: a busy master doesn't hold a task's start up (B11).
         let inputs = crate::dispatch::attempt_inputs(&self.db, &attempt_id)
             .await
