@@ -85,20 +85,16 @@ async fn users_are_read_and_checked() {
 #[tokio::test]
 async fn a_check_that_passed_is_remembered_and_a_failed_one_is_not() {
     let users = Users::parse(&users_text()).unwrap();
-    let timed = async |name: &str, password: &str| {
-        let started = std::time::Instant::now();
-        let valid = users.verify(name, password).await;
-        (valid, started.elapsed())
-    };
-    let (valid, first) = timed("anna", "secret").await;
-    assert!(valid);
-    let (valid, again) = timed("anna", "secret").await;
-    assert!(valid);
-    // bcrypt's cost 4 is about a millisecond; remembered, a lookup.
-    assert!(again * 10 < first, "{again:?} vs {first:?}");
-    // The same name with another password isn't taken from what was remembered.
+    assert!(users.verify("anna", "secret").await);
+    assert_eq!(users.bcrypt_checks(), 1);
+    // Remembered: no bcrypt check again (B278: counted, not timed).
+    assert!(users.verify("anna", "secret").await);
+    assert_eq!(users.bcrypt_checks(), 1);
+    // The same name with another password isn't taken from what was remembered, and a failed
+    // check isn't remembered: each one checked.
     assert!(!users.verify("anna", "secreT").await);
     assert!(!users.verify("anna", "secreT").await);
+    assert_eq!(users.bcrypt_checks(), 3);
 }
 
 #[rstest]

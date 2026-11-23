@@ -10,7 +10,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Then:** M5.2j, M5.2k, R1.2, M5.3a, M5.3b.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 12; first: B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely), B254 (low/likely) (`BUGS.md`).
+- **Open bugs:** 9; first: B272 (medium/likely), B265 (medium/possible), B281 (low/likely), B254 (low/likely), B286 (low/possible) (`BUGS.md`).
 
 ## Recent
 

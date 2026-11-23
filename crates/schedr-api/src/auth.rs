@@ -221,6 +221,9 @@ pub struct Users {
     loaded: Arc<Followed<Loaded>>,
     passed: Arc<Mutex<Passed>>,
     timings: AuthTimings,
+    /// How many bcrypt checks ran: what a test reads to see a check remembered, not timed
+    /// (B278: timing it failed under load).
+    bcrypt_checks: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How the users and the UI's token are followed.
@@ -400,6 +403,13 @@ impl Users {
         })
     }
 
+    /// How many bcrypt checks have run.
+    #[cfg(test)]
+    pub(crate) fn bcrypt_checks(&self) -> usize {
+        self.bcrypt_checks
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Whether `password` is `name`'s (a check that passed within [`REMEMBERED`] isn't run
     /// again). The bcrypt check runs on the blocking pool (B134): about a second of CPU at
     /// cost 12, it would otherwise hold a runtime worker, and a few at once every worker.
@@ -422,6 +432,8 @@ impl Users {
             |hash| (hash.clone(), true),
         );
         let password = password.to_owned();
+        self.bcrypt_checks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let checked =
             tokio::task::spawn_blocking(move || bcrypt::verify(&password, &hash).unwrap_or(false))
                 .await

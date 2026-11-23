@@ -54,17 +54,14 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
-| 2 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
-| 3 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 4 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 5 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 6 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
-| 7 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 8 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 9 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 10 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
+| 3 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
+| 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 5 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
+| 6 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 7 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 8 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 9 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back
 
@@ -81,24 +78,6 @@ step touches their code or the user schedules them.
 - **Found:** 2026-11-23, by Claude, reading decision 463 against M5.2i9's diff.
 - **A fix:** the services' measured memory (the supervisor measures each one every memory check)
   as one more part of the split, with M5.2i12's built-in `service_memory_bytes`.
-
-## B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): `a_check_that_passed_is_remembered_and_a_failed_one_is_not` (schedr-api) asserts the remembered check is ten times faster than the first bcrypt check; under `make check`'s coverage build beside the other suites it took 3.1 ms against 24 ms and failed, passing alone five times in five.
-- **Found:** 2026-11-22, by Claude, in M5.2i8's `make check` (which stopped there: the rest of
-  the run didn't happen). The step doesn't touch the test or `auth`.
-- **A fix:** check that the second check was remembered without timing it: a count of bcrypt
-  verifications the cache saved (a test-only counter), or a hash that would fail if verified
-  again, as the failed one's half already does.
-
-## B277: the metrics page's colour test checks whichever line the browser finds first
-
-- **Rating:** severity **low**, probability **possible**, tests (score 2): `test_the_metrics_page_charts_each_process_with_its_tasks` reads the stroke of the page's first `svg.chart path.line` and expects series 1's dark-mode blue (`rgb(57, 135, 229)`); in a full `make test-ui` it once got another series' orange (`rgb(217, 89, 38)`), passing alone and on the next full run: which line comes first follows the standalone's own processes and when they started.
-- **Found:** 2026-11-21, by Claude, running `make test-ui` for M5.2i5 (2 failed, 30 passed; the
-  other failure was the new `log_levels` DAG's count, fixed). The test passed twice alone and in
-  the next full run.
-- **A fix:** pick the line by its series (its `s1` class, or the legend's first key) and check
-  that one's stroke, not the page's first path.
 
 ## B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]`
 
@@ -133,25 +112,6 @@ step touches their code or the user schedules them.
 - **A fix:** count only the unfinished runs through `runs_unfinished` and keep the finished
   ones' counts as running totals (or read them less often), or refresh the gauges in a task
   of their own, off the master's loop.
-
-## B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing
-
-- **Rating:** severity **medium**, probability **likely**, tests (score 6): crates/schedr/tests/roles.rs run whole in parallel on one Postgres: 0-9 of 40 fail, on the last commit as on the next (cleanup moves, SIGTERM drains, cancels; `db migrate` timing out on the pool, 'the master's lease isn't renewed in time'); connections peak at 95-98 of Postgres's 100; make check failed once on three of them.
-- **Again:** 2026-11-21, `make check` on a cold build (after `cargo clean`):
-  `lease::the_lease_is_renewed_while_change_notifications_wait_on_a_lock` failed ("another
-  master took the lease during the switch", a 1 s lease period); alone it passed three times of
-  three.
-- **Found:** 2026-11-19, `make check` before the M5.2f commit: three cleanup-move tests of
-  `roles.rs` timed out (`waited too long for the run to end`, a moved cleanup's handle missing),
-  the master's log saying its lease wasn't renewed in time. Alone, the three pass.
-- **Measured:** the whole `roles` file in parallel against one Postgres container (the
-  Makefile's image): on `ce101532` 0 and 3 failures in two runs, on the M5.2f work 4, 9 and 0 in
-  three; the client connections sampled each second peak at 95 (base) and 98 (M5.2f) of 100,
-  means 54 and 52. One run's failure was `db migrate`: "pool timed out while waiting for an open
-  connection". Not a regression of M5.2f: the same tests fail on both under the same load.
-- **To look at:** each test cluster's pools (master, webserver, workers' none) against
-  Postgres's `max_connections` (a test container could start with more, or the tests' pools be
-  smaller); the lease pausing under CPU load (a test's lease timing against the machine).
 
 ## B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates
 

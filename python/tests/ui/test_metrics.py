@@ -169,8 +169,11 @@ def test_the_metrics_page_charts_each_process_with_its_tasks(
     _shot(page, "metrics-panel-light")
     page.locator("html").evaluate("e => e.setAttribute('data-theme', 'dark')")
     _shot(page, "metrics-panel-dark")
-    # The series colours follow the theme.
-    stroke = page.evaluate("getComputedStyle(document.querySelector('svg.chart path.line')).stroke")
+    # The series colours follow the theme: series 1's line, whichever line comes first (B277:
+    # the page's first line follows the processes' order).
+    stroke = page.evaluate(
+        "getComputedStyle(document.querySelector('svg.chart path.line.s1')).stroke"
+    )
     assert stroke == "rgb(57, 135, 229)", stroke
 
 

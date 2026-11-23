@@ -3365,3 +3365,10 @@ of either kind, not only its code refusals; a worker reporting new code that is 
 it and never refused it gets it, whether the others refused for code or for themselves. Kept in
 the dispatcher's memory copy, cleared with the refusals (a new worker, a resume) and pruned once
 a task has none.
+
+### 2026-11-23: M5.2k, B269, B277, B278: tests
+
+B269 closed by B280's `max_connections = 500`: the whole `roles` file in parallel on one
+Postgres, three runs of 42 tests, none failed (the record had 0 to 9 a run at 100 connections).
+B277: the metrics page's colour test reads series 1's line (`path.line.s1`), not the page's
+first. B278: the remembered auth check counted (a test-only count of bcrypt checks), not timed.
