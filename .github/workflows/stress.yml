@@ -23,9 +23,57 @@ permissions:
   actions: read
 
 jobs:
-  stress:
+  # The scenarios to run, each a job of its own below (the user, 2026-11-23: one that fails is
+  # run again alone with "Re-run failed jobs", not the whole suite): the suite's `stress_*`
+  # tests, read from its sources, as the filter or the nightly rule says.
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 10
+    outputs:
+      scenarios: ${{ steps.list.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Nightly: when main is where the last passing run left it, only the random chaos runs,
+      # with a fresh seed (M4.8z: a new seed each night).
+      - name: Changed since the last passing run?
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then exit 0; fi
+          last=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/stress.yml/runs?status=success&branch=main&per_page=1" \
+            | python3 -c 'import json, sys; runs = json.load(sys.stdin)["workflow_runs"]; print(runs[0]["head_sha"] if runs else "")')
+          if [ "$last" = "${{ github.sha }}" ]; then
+            echo "main unchanged since the last passing run ($last): the random chaos only"
+            echo "only=^stress_21_random_chaos$" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The scenarios
+        id: list
+        # The filter through the environment, never pasted into the script.
+        env:
+          FILTER: ${{ inputs.filter || steps.changed.outputs.only }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib, re
+          names = []
+          for path in sorted(pathlib.Path("crates/schedr/tests/stress").glob("*.rs")):
+              names += re.findall(r"#\[test\]\s*\nfn (stress_\w+)\(", path.read_text())
+          wanted = os.environ.get("FILTER", "")
+          names = sorted(n for n in names if not wanted or re.search(wanted, n))
+          print("scenarios=" + json.dumps(names))
+          PY
+
+  stress:
+    needs: plan
+    if: needs.plan.outputs.scenarios != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    name: ${{ matrix.scenario }}
     services:
       postgres:
         image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
@@ -56,69 +104,61 @@ jobs:
       SCHEDR_TEST_PGBOUNCER: 127.0.0.1:6432
       SCHEDR_STRESS_PROFILE: ${{ inputs.profile || 'quick' }}
     steps:
-      # Nightly: when main is where the last passing run left it, only the random chaos runs,
-      # with a fresh seed (M4.8z: a new seed each night).
-      - name: Changed since the last passing run?
-        id: changed
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          last=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/stress.yml/runs?status=success&branch=main&per_page=1" \
-            | python3 -c 'import json, sys; runs = json.load(sys.stdin)["workflow_runs"]; print(runs[0]["head_sha"] if runs else "")')
-          echo "run=true" >> "$GITHUB_OUTPUT"
-          if [ "$last" = "${{ github.sha }}" ]; then
-            echo "main unchanged since the last passing run ($last): the random chaos only"
-            echo "only=stress_21_random_chaos" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.changed.outputs.run == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - if: steps.changed.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: "1.99.1"
-      - if: steps.changed.outputs.run == 'true'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - if: steps.changed.outputs.run == 'true'
-        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      # One cache for every scenario's job: each builds the suite, mostly from it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: stress
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.149
-      - if: steps.changed.outputs.run == 'true'
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.5"
           # sha256 of uv-x86_64-unknown-linux-gnu.tar.gz: checked whatever the action knows.
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       # As `make stress`: room for the suite's connections (a service container takes no
       # arguments, so set and restarted; PgBouncer reconnects on its own).
-      - if: steps.changed.outputs.run == 'true'
-        name: Postgres with max_connections = 500
+      - name: Postgres with max_connections = 500
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_connections = 500"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
-      - if: steps.changed.outputs.run == 'true'
-        run: uv sync --python 3.14
-      - if: steps.changed.outputs.run == 'true'
-        run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
-      - if: steps.changed.outputs.run == 'true'
-        name: Stress suite
-        # The filter through the environment, never pasted into the script.
+      - run: uv sync --python 3.14
+      - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: ${{ matrix.scenario }}
         env:
-          FILTER: ${{ inputs.filter || steps.changed.outputs.only }}
-        run: |
-          filter=()
-          if [ -n "$FILTER" ]; then filter=(-E "test(/$FILTER/)"); fi
-          cargo nextest run -p schedr --test stress --test-threads 1 --no-fail-fast --no-capture "${filter[@]}"
-      # The results page: a table of every scenario's numbers on the run's summary.
-      - if: always() && steps.changed.outputs.run == 'true'
-        name: Results page
-        run: python3 scripts/stress_summary.py target/stress
-      - if: always() && steps.changed.outputs.run == 'true'
+          SCENARIO: ${{ matrix.scenario }}
+        run: >-
+          cargo nextest run -p schedr --test stress --test-threads 1 --no-capture
+          -E "test(/(^|::)${SCENARIO}$/)"
+      - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stress-report-${{ matrix.scenario }}
+          path: target/stress/
+          if-no-files-found: warn
+
+  # The results page: a table of every scenario's numbers on the run's summary, from each
+  # scenario's report, and all of them in one artifact.
+  summary:
+    needs: [plan, stress]
+    if: always() && needs.plan.outputs.scenarios != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: stress-report-stress_*
+          path: target/stress
+          merge-multiple: true
+      - name: Results page
+        run: python3 scripts/stress_summary.py target/stress
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stress-report-${{ github.run_id }}
           path: target/stress/

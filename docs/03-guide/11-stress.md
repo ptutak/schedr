@@ -5,7 +5,11 @@ unit and integration tests run on every change: the `schedr` binary as separate 
 many workers, killed processes, a frozen master, a stalled database, a connection pooler.
 It runs **nightly in CI** and **locally with `make stress`**. CI runs the whole suite
 when `main` has changed since its last passing run. Otherwise, it runs scenario 21 alone
-with a fresh seed. Run it locally at the end of each milestone and after changes to
+with a fresh seed. Each scenario is a job of its own there (2026-11-23), on its own machine with
+its own Postgres, all at once: one that fails is run again alone with **Re-run failed jobs**, and
+a scenario's numbers no longer follow another's on the same machine (before, they ran one after
+another on one). By hand, the workflow takes a profile and a filter, a regular expression on the
+scenarios' test names (`stress_14_quiet_dags`). Run it locally at the end of each milestone and after changes to
 scheduling, the database layer or the worker.
 
 ## What every scenario checks
@@ -155,7 +159,7 @@ make stress STRESS_STATEMENTS=1      # also count Postgres's statements
 `make stress` starts Postgres and PgBouncer in containers and removes them afterwards. The
 **quick** profile is sized for GitHub's smallest standard machine (2 CPUs, 7 GB) and grows with
 the machine, at most four times; **full** is fixed and larger. Each scenario writes its numbers
-to `target/stress/<scenario>.json` (in CI, an artifact of the run): the profile, the metrics,
+to `target/stress/<scenario>.json` (in CI, an artifact of each scenario's job, and all of them in one artifact of the run): the profile, the metrics,
 and what failed, if anything. In CI the run's summary page shows them as one table, a row per
 scenario (its result, tasks, tasks a second, run and start times, the longest rounds, its
 wall time), then each scenario's every number folded under its name;
