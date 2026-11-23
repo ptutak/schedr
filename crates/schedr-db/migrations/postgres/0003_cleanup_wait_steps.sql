@@ -88,3 +88,7 @@ CREATE INDEX runs_unannounced ON runs (started_at, id) WHERE NOT announced AND s
 -- the DAGs listening for its name. Events posted before this migration count as announced.
 ALTER TABLE named_events ADD COLUMN announced BOOLEAN NOT NULL DEFAULT true;
 CREATE INDEX named_events_unannounced ON named_events (posted_at, id) WHERE NOT announced;
+
+-- A worker's extensions' services' memory, a part of its own (B281): on average, as the other
+-- parts are.
+ALTER TABLE samples ADD COLUMN services_avg BIGINT;

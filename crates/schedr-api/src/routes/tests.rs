@@ -823,6 +823,7 @@ async fn deployment_workers(db: &schedr_db::Database) -> serde_json::Value {
                 map_index: None,
                 bytes: 300,
             }],
+            services_bytes: 0,
         },
         ts(NOW),
     )
@@ -944,7 +945,7 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
              "usage": {"process": {"resident_bytes": 50, "cpu_seconds": 1.0,
                                    "container_bytes": 900},
                        "fork_servers_bytes": 100, "watcher_hosts_bytes": 200,
-                       "tasks_bytes": 300,
+                       "tasks_bytes": 300, "services_bytes": 0,
                        "largest_tasks": [{"attempt_id": "a1", "dag_id": "sync",
                                           "run_id": "r1", "task_id": "load", "bytes": 300}]},
              "problems": [{"error": false, "message": "tasks start slower"}]},

@@ -1154,6 +1154,7 @@ impl From<&schedr_model::usage::WorkerUsage> for WorkerMemoryView {
                 .resident_bytes
                 .saturating_add(usage.fork_servers_bytes)
                 .saturating_add(usage.watcher_hosts_bytes)
+                .saturating_add(usage.services_bytes)
                 .saturating_add(usage.tasks_bytes),
             tasks_bytes: usage.tasks_bytes,
             container_bytes: usage.process.container_bytes,
@@ -1305,6 +1306,9 @@ pub struct WorkerUsageView {
     pub fork_servers_bytes: u64,
     /// Its wait step hosts', together.
     pub watcher_hosts_bytes: u64,
+    /// Its extensions' services', together (0 from an older worker or webserver).
+    #[serde(default)]
+    pub services_bytes: u64,
     /// Its running tasks', together.
     pub tasks_bytes: u64,
     /// The largest of them, largest first.
@@ -1336,6 +1340,7 @@ impl From<schedr_model::usage::WorkerUsage> for WorkerUsageView {
             process: usage.process.into(),
             fork_servers_bytes: usage.fork_servers_bytes,
             watcher_hosts_bytes: usage.watcher_hosts_bytes,
+            services_bytes: usage.services_bytes,
             tasks_bytes: usage.tasks_bytes,
             largest_tasks: usage
                 .largest_tasks
@@ -1457,6 +1462,9 @@ pub struct PartsPointView {
     pub fork_servers_bytes: u64,
     /// Its wait step hosts'.
     pub watcher_hosts_bytes: u64,
+    /// Its extensions' services' (0 from an older webserver).
+    #[serde(default)]
+    pub services_bytes: u64,
     /// Its running tasks'.
     pub tasks_bytes: u64,
 }
@@ -1470,6 +1478,9 @@ pub struct WorkerPartsView {
     pub fork_servers_bytes: u64,
     /// Its wait step hosts', together.
     pub watcher_hosts_bytes: u64,
+    /// Its extensions' services', together (0 from an older worker or webserver).
+    #[serde(default)]
+    pub services_bytes: u64,
     /// Its running tasks', together.
     pub tasks_bytes: u64,
     /// The largest of them, largest first.

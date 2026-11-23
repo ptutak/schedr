@@ -3389,3 +3389,12 @@ pages) is its tasks only, against its task slots; its wait steps running are
 `running_wait_steps`, against its watcher slots (`task_instances.wait_step`, counted by a second
 query: the worker row's tuple is at its size limit). The CLI shows `8/8 +1 waiting`, the
 Deployments page `· 1 wait step`. `running_wait_steps` defaults to 0 for an older webserver.
+
+### 2026-11-24: M5.2k, B281: the extensions' services in a worker's memory split
+
+A worker's memory split (decision 463) gains its extensions' services, as their supervisors last
+measured them (0 while none runs): `WorkerUsage.services_bytes` in the heartbeat (protocol
+2.2), kept in samples (`services_avg`, added in migration 0003, the open one) and averaged into
+buckets as the other parts are, in the API's usage and parts views (0 from an older worker or
+webserver), and on the Metrics page as a kind of its own, "extension services". The bucket row,
+past a tuple's 16 columns, is read into a struct by its columns' names.

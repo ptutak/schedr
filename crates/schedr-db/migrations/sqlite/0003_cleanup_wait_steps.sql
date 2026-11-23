@@ -91,3 +91,7 @@ CREATE INDEX runs_unannounced ON runs (started_at, id) WHERE announced = 0 AND s
 -- the DAGs listening for its name. Events posted before this migration count as announced.
 ALTER TABLE named_events ADD COLUMN announced INTEGER NOT NULL DEFAULT 1 CHECK (announced IN (0, 1));
 CREATE INDEX named_events_unannounced ON named_events (posted_at, id) WHERE announced = 0;
+
+-- A worker's extensions' services' memory, a part of its own (B281): on average, as the other
+-- parts are.
+ALTER TABLE samples ADD COLUMN services_avg BIGINT;

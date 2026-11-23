@@ -58,6 +58,7 @@ fn parts(tasks: u64) -> WorkerParts {
             map_index: None,
             bytes: tasks,
         }],
+        services_bytes: 0,
     }
 }
 
@@ -233,6 +234,7 @@ async fn the_workers_list_carries_each_workers_memory_with_its_tasks() {
             watcher_hosts_bytes: 20,
             tasks_bytes: 1000,
             largest_tasks: Vec::new(),
+            services_bytes: 0,
         },
         now(),
     )
@@ -642,6 +644,7 @@ fn rolled_up_for_test(minutes: &[Sample], at: i64) -> Vec<Sample> {
             watcher_hosts_bytes: 2,
             tasks_bytes: avg(|s| s.parts.as_ref().map_or(0, |p| p.tasks_bytes)),
             largest_tasks: Vec::new(),
+            services_bytes: 0,
         });
         let first = &group[0];
         rows.push(Sample {

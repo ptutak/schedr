@@ -393,3 +393,18 @@ async fn a_services_readies_are_counted() {
     assert_eq!(readies, 1);
     ready.stop.send_replace(true);
 }
+
+/// B281: a running service's memory, as its supervisor last measured it, is the worker's
+/// split's services part; once it has stopped, none.
+#[tokio::test]
+async fn a_services_memory_is_measured_for_the_split_and_none_once_stopped() {
+    let fake = start("serve", |_| {});
+    fake.until("ready", |fake| matches!(fake.state(), State::Ready(_)))
+        .await;
+    fake.until("its memory measured", |fake| fake.services.memory() > 0)
+        .await;
+    fake.stop.send_replace(true);
+    fake.until("stopped", |fake| fake.state() == State::Stopped)
+        .await;
+    assert_eq!(fake.services.memory(), 0);
+}

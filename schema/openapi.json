@@ -1936,6 +1936,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "services_bytes": {
+            "description": "Its extensions' services' (0 from an older webserver).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "tasks_bytes": {
             "description": "Its running tasks'.",
             "format": "int64",
@@ -3289,6 +3295,12 @@
             },
             "type": "array"
           },
+          "services_bytes": {
+            "description": "Its extensions' services', together (0 from an older worker or webserver).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "tasks_bytes": {
             "description": "Its running tasks', together.",
             "format": "int64",
@@ -3329,6 +3341,12 @@
           "process": {
             "$ref": "#/components/schemas/NodeUsageView",
             "description": "The agent's own process (in standalone the master's and the webserver's too)."
+          },
+          "services_bytes": {
+            "description": "Its extensions' services', together (0 from an older worker or webserver).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           },
           "tasks_bytes": {
             "description": "Its running tasks', together.",

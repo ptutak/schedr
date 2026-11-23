@@ -275,6 +275,11 @@ pub trait Executor: Clone + Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Its extensions' services' memory together, as last measured, for the heartbeat (B281).
+    fn services_memory(&self) -> u64 {
+        0
+    }
+
     /// The worker drained for maintenance, or resumed: its extensions' services told (DN33).
     fn maintenance_drained(&self, _drained: bool) {}
 
@@ -406,6 +411,10 @@ impl Executor for ProcessExecutor {
 
     fn service_readies(&self) -> Vec<(String, u64)> {
         self.services.readies()
+    }
+
+    fn services_memory(&self) -> u64 {
+        self.services.memory()
     }
 
     fn maintenance_drained(&self, drained: bool) {
@@ -3227,6 +3236,7 @@ impl<E: Executor> Agent<E> {
             }),
             fork_servers_bytes,
             watcher_hosts_bytes: watcher_hosts.iter().map(|h| h.memory_bytes).sum(),
+            services_bytes: self.executor.services_memory(),
             tasks_bytes: tasks.iter().map(|t| t.bytes).sum(),
             largest_tasks: tasks
                 .into_iter()

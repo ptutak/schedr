@@ -49,6 +49,7 @@ async fn samples_are_stored_once_read_by_step_and_deleted_by_age() {
         watcher_hosts_bytes: 2,
         tasks_bytes: 3,
         largest_tasks: Vec::new(),
+        services_bytes: 4,
     };
     let samples = vec![
         minute("p1", "2026-11-14T10:00:00Z", 100, None),
@@ -157,6 +158,7 @@ async fn the_sources_are_the_masters_heard_and_the_live_workers_with_their_usage
                 watcher_hosts_bytes: 2,
                 tasks_bytes: 3,
                 largest_tasks: Vec::new(),
+                services_bytes: 0,
             },
             ts("2026-11-14T10:00:00Z"),
         )
@@ -210,4 +212,42 @@ async fn a_rollup_of_many_processes_is_written_in_one_transaction() {
         .await
         .unwrap();
     assert_eq!(all.len(), 1100);
+}
+
+/// B281: a bucket's parts are averaged with the services' (and a sample from before them,
+/// none, reads as 0), on SQLite.
+#[tokio::test]
+async fn a_buckets_parts_include_the_services() {
+    let db = migrated().await;
+    let with = |at: &str, services: u64| Sample {
+        parts: Some(WorkerParts {
+            fork_servers_bytes: 1,
+            watcher_hosts_bytes: 2,
+            tasks_bytes: 3,
+            largest_tasks: Vec::new(),
+            services_bytes: services,
+        }),
+        ..minute("p1", at, 100, Some(0.5))
+    };
+    db.insert_samples(&[
+        with("2026-11-14T10:00:00Z", 4),
+        with("2026-11-14T10:01:00Z", 8),
+    ])
+    .await
+    .unwrap();
+    let range = (
+        ts("2026-11-14T00:00:00Z"),
+        ts("2026-11-14T00:00:00Z"),
+        ts("2026-11-15T00:00:00Z"),
+    );
+    let buckets = db.sample_buckets(range, 360, Some("p1")).await.unwrap();
+    assert_eq!(
+        buckets[0].parts,
+        Some(BucketParts {
+            fork_servers_bytes: 1,
+            watcher_hosts_bytes: 2,
+            services_bytes: 6,
+            tasks_bytes: 3,
+        })
+    );
 }

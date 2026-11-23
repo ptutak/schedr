@@ -2333,6 +2333,7 @@ async fn a_deployments_nodes_are_recorded_and_read() {
         process: usage.clone(),
         fork_servers_bytes: 1,
         watcher_hosts_bytes: 2,
+        services_bytes: 4,
         tasks_bytes: 3,
         largest_tasks: Vec::new(),
     };
@@ -2342,12 +2343,10 @@ async fn a_deployments_nodes_are_recorded_and_read() {
     assert_eq!(db.worker_nodes().await.unwrap()[0].usage, Some(parts));
 }
 
-#[tokio::test]
-async fn samples_are_stored_read_and_deleted_on_postgres() {
-    // Decision 464: the same statements as on SQLite.
-    use schedr_db::samples::{MINUTE, Sample};
-    let db = fresh().await;
-    let sample = |at: &str, resident: u64, cpu: Option<f64>| Sample {
+/// A minute sample of `p1` (a worker) at `at`, for the samples' Postgres test.
+fn minute_sample(at: &str, resident: u64, cpu: Option<f64>) -> schedr_db::samples::Sample {
+    use schedr_db::samples::MINUTE;
+    schedr_db::samples::Sample {
         process_id: "p1".to_owned(),
         step_s: MINUTE,
         at: ts(at),
@@ -2369,10 +2368,19 @@ async fn samples_are_stored_read_and_deleted_on_postgres() {
         parts: Some(schedr_model::usage::WorkerParts {
             fork_servers_bytes: 1,
             watcher_hosts_bytes: 2,
+            services_bytes: 4,
             tasks_bytes: 3,
             largest_tasks: Vec::new(),
         }),
-    };
+    }
+}
+
+#[tokio::test]
+async fn samples_are_stored_read_and_deleted_on_postgres() {
+    // Decision 464: the same statements as on SQLite.
+    use schedr_db::samples::{MINUTE, Sample};
+    let sample = minute_sample;
+    let db = fresh().await;
     let samples = vec![
         sample("2026-11-14T10:00:00Z", 100, None),
         sample("2026-11-14T10:01:00Z", 201, Some(0.25)),
@@ -2400,10 +2408,15 @@ async fn samples_are_stored_read_and_deleted_on_postgres() {
         (bucket.minutes, bucket.resident_avg, bucket.resident_peak),
         (2, 151, 201)
     );
-    assert_eq!(
-        (bucket.cpu_avg, bucket.parts),
-        (Some(0.25), Some((1, 2, 3)))
-    );
+    let parts = bucket.parts.map(|p| {
+        let bytes = [
+            p.fork_servers_bytes,
+            p.watcher_hosts_bytes,
+            p.services_bytes,
+        ];
+        (bytes, p.tasks_bytes)
+    });
+    assert_eq!((bucket.cpu_avg, parts), (Some(0.25), Some(([1, 2, 4], 3))));
     assert_eq!(
         db.sample_buckets(range, 360, Some("nope")).await.unwrap(),
         []

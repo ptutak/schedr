@@ -55,18 +55,10 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 3 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 4 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 5 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 6 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 7 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B281: a worker's memory split leaves out its extensions' services
-
-- **Rating:** severity **low**, probability **likely**, usability (score 3): a worker's heartbeat splits its memory into the agent, its fork servers, its watcher hosts and its running tasks (decision 463); an extension's service (decision 518), up to its `service_memory` each, is in none of them, so the Deployments page shows less than the worker uses.
-- **Found:** 2026-11-23, by Claude, reading decision 463 against M5.2i9's diff.
-- **A fix:** the services' measured memory (the supervisor measures each one every memory check)
-  as one more part of the split, with M5.2i12's built-in `service_memory_bytes`.
+| 3 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 4 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 5 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 6 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]`
 

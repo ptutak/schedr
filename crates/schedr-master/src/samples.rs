@@ -171,6 +171,7 @@ impl Sampler {
             .saturating_add(parts.as_ref().map_or(0, |p| {
                 p.fork_servers_bytes
                     .saturating_add(p.watcher_hosts_bytes)
+                    .saturating_add(p.services_bytes)
                     .saturating_add(p.tasks_bytes)
             }));
         Sample {
@@ -395,6 +396,7 @@ pub fn rolled_up(minutes: &[Sample], at: Timestamp) -> Vec<Sample> {
                     ran.then(|| WorkerParts {
                         fork_servers_bytes: part(|p| p.fork_servers_bytes),
                         watcher_hosts_bytes: part(|p| p.watcher_hosts_bytes),
+                        services_bytes: part(|p| p.services_bytes),
                         tasks_bytes: part(|p| p.tasks_bytes),
                         largest_tasks: Vec::new(),
                     })

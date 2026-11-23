@@ -201,6 +201,7 @@ async fn a_masters_and_a_workers_usage_are_stored_and_read_back() {
             map_index: Some(3),
             bytes: 400 << 20,
         }],
+        services_bytes: 0,
     };
     let queues = vec!["default".to_owned()];
     for id in ["w1", "w2"] {

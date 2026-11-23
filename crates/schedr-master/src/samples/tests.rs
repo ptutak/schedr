@@ -27,6 +27,7 @@ fn source(process: &str, role: &'static str, node: &str, cpu: f64) -> Source {
             watcher_hosts_bytes: 2,
             tasks_bytes: 3,
             largest_tasks: Vec::new(),
+            services_bytes: 0,
         }),
     }
 }
@@ -145,6 +146,7 @@ fn a_rollup_takes_every_role_its_window_saw_and_rounds_its_averages() {
                         map_index: None,
                         bytes: 1000,
                     }],
+                    services_bytes: 0,
                 }),
                 ..minute(
                     &[("master", "m-a"), ("worker", "standalone")],
@@ -166,6 +168,7 @@ fn a_rollup_takes_every_role_its_window_saw_and_rounds_its_averages() {
             watcher_hosts_bytes: 0,
             tasks_bytes: 500,
             largest_tasks: Vec::new(),
+            services_bytes: 0,
         })
     );
     assert_eq!(rolled[0].minutes, 2);

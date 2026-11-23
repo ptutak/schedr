@@ -243,6 +243,7 @@ pub async fn list_samples(
                 at: s.at,
                 fork_servers_bytes: parts.fork_servers_bytes,
                 watcher_hosts_bytes: parts.watcher_hosts_bytes,
+                services_bytes: parts.services_bytes,
                 tasks_bytes: parts.tasks_bytes,
                 largest_tasks: parts
                     .largest_tasks
@@ -323,10 +324,11 @@ fn point(bucket: &Bucket) -> SamplePointView {
         container_avg: bucket.container_avg,
         container_peak: bucket.container_peak,
         container_limit: bucket.container_limit,
-        parts: bucket.parts.map(|(forks, hosts, tasks)| PartsPointView {
-            fork_servers_bytes: forks,
-            watcher_hosts_bytes: hosts,
-            tasks_bytes: tasks,
+        parts: bucket.parts.map(|parts| PartsPointView {
+            fork_servers_bytes: parts.fork_servers_bytes,
+            watcher_hosts_bytes: parts.watcher_hosts_bytes,
+            services_bytes: parts.services_bytes,
+            tasks_bytes: parts.tasks_bytes,
         }),
     }
 }

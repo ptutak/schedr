@@ -353,20 +353,22 @@ fn process_chart(
 
 /// The kinds of memory a deployment's processes hold, bottom first, and what of a point each
 /// is (decided by the process's roles and its parts).
-const KINDS: [&str; 5] = [
+const KINDS: [&str; 6] = [
     "masters and webservers",
     "workers",
     "fork servers",
     "wait step hosts",
+    "extension services",
     "tasks",
 ];
 
 /// `point`'s memory of each of [`KINDS`] for a process that runs a worker (`worker`) or not.
-fn by_kind(point: &schedr_api::views::SamplePointView, worker: bool) -> [u64; 5] {
+fn by_kind(point: &schedr_api::views::SamplePointView, worker: bool) -> [u64; 6] {
     let parts = point.parts.unwrap_or(schedr_api::views::PartsPointView {
         fork_servers_bytes: 0,
         watcher_hosts_bytes: 0,
         tasks_bytes: 0,
+        services_bytes: 0,
     });
     let (others, workers) = if worker {
         (0, point.resident_avg)
@@ -378,6 +380,7 @@ fn by_kind(point: &schedr_api::views::SamplePointView, worker: bool) -> [u64; 5]
         workers,
         parts.fork_servers_bytes,
         parts.watcher_hosts_bytes,
+        parts.services_bytes,
         parts.tasks_bytes,
     ]
 }
@@ -394,7 +397,7 @@ fn kinds_chart(name: &str, list: &SampleSeriesList, zone: &TimeZone) -> (String,
         .iter()
         .map(|c| (secs(c.at), c.minutes))
         .collect();
-    let mut weighted: BTreeMap<i64, ([u128; 5], u32)> = BTreeMap::new();
+    let mut weighted: BTreeMap<i64, ([u128; KINDS.len()], u32)> = BTreeMap::new();
     for process in &list.processes {
         let worker = process.roles.contains_key("worker");
         for point in &process.points {
@@ -405,7 +408,7 @@ fn kinds_chart(name: &str, list: &SampleSeriesList, zone: &TimeZone) -> (String,
             entry.1 = entry.1.max(point.minutes);
         }
     }
-    let sums: BTreeMap<i64, [u64; 5]> = weighted
+    let sums: BTreeMap<i64, [u64; KINDS.len()]> = weighted
         .into_iter()
         .map(|(at, (kinds, most))| {
             let minutes = u128::from(coverage.get(&at).copied().unwrap_or(most).max(1));
@@ -490,9 +493,11 @@ fn rows(
                     if let Some(parts) = p.parts {
                         let _ = write!(
                             split,
-                            " · fork servers {} · wait step hosts {} · tasks {}",
+                            " · fork servers {} · wait step hosts {} · extension services {} · \
+                             tasks {}",
                             show(parts.fork_servers_bytes),
                             show(parts.watcher_hosts_bytes),
+                            show(parts.services_bytes),
                             show(parts.tasks_bytes)
                         );
                     }
@@ -544,6 +549,7 @@ fn parts_chart(
         "the process itself",
         "fork servers",
         "wait step hosts",
+        "extension services",
         "tasks",
     ];
     let mut stacked = Vec::new();
@@ -642,6 +648,7 @@ fn panel(
             "Wait step hosts".to_owned(),
             show(parts.watcher_hosts_bytes),
         ));
+        facts.push(("Extension services".to_owned(), show(parts.services_bytes)));
         facts.push(("Running tasks".to_owned(), show(parts.tasks_bytes)));
         tasks = parts
             .largest_tasks

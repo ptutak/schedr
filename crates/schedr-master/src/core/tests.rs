@@ -419,6 +419,7 @@ async fn what_a_worker_uses_is_kept_at_most_once_a_minute() {
                     map_index: None,
                     bytes: 30,
                 }],
+                services_bytes: 0,
             }),
             ..pb::Heartbeat::default()
         })

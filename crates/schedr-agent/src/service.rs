@@ -248,6 +248,9 @@ struct Counted {
     /// refusal for its not being ready, so the master knows a refusal answered by order of
     /// count, whatever the order its messages are handled in.
     readies: std::sync::atomic::AtomicU64,
+    /// Its processes' memory as last measured, 0 while none runs: its part of the worker's
+    /// memory split (B281).
+    memory: std::sync::atomic::AtomicU64,
 }
 
 impl Drop for Connected {
@@ -368,6 +371,15 @@ impl Services {
             .borrow()
             .not_ready(version)
             .map(|why| (why, readies))
+    }
+
+    /// Its services' memory together, as last measured (B281: a part of the worker's split).
+    #[must_use]
+    pub fn memory(&self) -> u64 {
+        self.by_extension
+            .values()
+            .map(|handle| handle.counted.memory.load(Ordering::SeqCst))
+            .sum()
     }
 
     /// Each extension with a service, and how many times its service has become ready (DN37:
@@ -514,6 +526,8 @@ async fn supervise(
             (&mut stopping, &mut unanswered, &mut drained),
         )
         .await;
+        // Ended: none of it runs any more.
+        counted.memory.store(0, Ordering::SeqCst);
         let Some(why) = told_ended(&spec, ended, event) else {
             break;
         };
@@ -976,6 +990,7 @@ async fn serve_control(
             }
             _ = memory_check.tick() => {
                 let used = measure(&deps.proc_root, group).await;
+                counted.memory.store(used, Ordering::SeqCst);
                 if used > spec.config.memory {
                     return Ended::OverMemory(used);
                 }

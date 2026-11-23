@@ -275,6 +275,9 @@ message WorkerUsage {
   uint64 tasks_bytes = 4;
   // The largest of them, largest first (at most 5).
   repeated TaskMemory largest_tasks = 5;
+  // Its extensions' services', together, as last measured (B281; protocol 2.2): none from an
+  // older worker.
+  uint64 services_bytes = 6;
 }
 
 // A running task's memory, named.

@@ -1394,6 +1394,7 @@ impl MasterCore {
             },
             fork_servers_bytes: usage.fork_servers_bytes,
             watcher_hosts_bytes: usage.watcher_hosts_bytes,
+            services_bytes: usage.services_bytes,
             tasks_bytes: usage.tasks_bytes,
             largest_tasks,
         };

@@ -95,6 +95,41 @@ fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
+/// A bucket of [`Database::buckets`], by the query's columns (more than a tuple reads).
+#[derive(sqlx::FromRow)]
+struct BucketRow {
+    process_id: String,
+    bucket: i64,
+    m: i64,
+    r: i64,
+    rp: i64,
+    mm: i64,
+    mp: i64,
+    ca: Option<f64>,
+    cp: Option<f64>,
+    ka: Option<i64>,
+    kp: Option<i64>,
+    kl: Option<i64>,
+    fa: Option<i64>,
+    ha: Option<i64>,
+    ta: Option<i64>,
+    sa: Option<i64>,
+    sampled: i64,
+}
+
+/// A worker's parts in a bucket, on average.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BucketParts {
+    /// Its fork servers'.
+    pub fork_servers_bytes: u64,
+    /// Its wait step hosts'.
+    pub watcher_hosts_bytes: u64,
+    /// Its extensions' services' (B281).
+    pub services_bytes: u64,
+    /// Its tasks'.
+    pub tasks_bytes: u64,
+}
+
 #[derive(sqlx::FromRow)]
 struct Row {
     process_id: String,
@@ -248,7 +283,8 @@ impl Database {
                         .bind(sample.parts.as_ref().map(to_json))
                         .bind(sample.parts.as_ref().map(|p| int(p.fork_servers_bytes)))
                         .bind(sample.parts.as_ref().map(|p| int(p.watcher_hosts_bytes)))
-                        .bind(sample.parts.as_ref().map(|p| int(p.tasks_bytes)));
+                        .bind(sample.parts.as_ref().map(|p| int(p.tasks_bytes)))
+                        .bind(sample.parts.as_ref().map(|p| int(p.services_bytes)));
                 }
                 insert.execute(&mut *tx).await?;
             }
@@ -350,24 +386,6 @@ impl Database {
         bucket_s: u32,
         process: Option<&str>,
     ) -> Result<Vec<Bucket>, DbError> {
-        type BucketRow = (
-            String,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            Option<f64>,
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            i64,
-        );
         let rows: Vec<BucketRow> = on_pool!(self, |pool, backend| {
             crate::query::query_as(sql_text(backend, &bucket_query(backend)))
                 .bind(db_time(from))
@@ -381,26 +399,32 @@ impl Database {
         rows.into_iter()
             .map(|row| {
                 Ok(Bucket {
-                    process_id: row.0,
-                    at: from_epoch(row.1)?,
-                    minutes: u32::try_from(row.2).unwrap_or(0),
-                    resident_avg: unsigned(row.3),
-                    resident_peak: unsigned(row.4),
-                    memory_avg: unsigned(row.5),
-                    memory_peak: unsigned(row.6),
-                    cpu_avg: row.7,
-                    cpu_peak: row.8,
-                    container_avg: row.9.map(unsigned),
-                    container_peak: row.10.map(unsigned),
-                    container_limit: row.11.map(unsigned),
+                    process_id: row.process_id,
+                    at: from_epoch(row.bucket)?,
+                    minutes: u32::try_from(row.m).unwrap_or(0),
+                    resident_avg: unsigned(row.r),
+                    resident_peak: unsigned(row.rp),
+                    memory_avg: unsigned(row.mm),
+                    memory_peak: unsigned(row.mp),
+                    cpu_avg: row.ca,
+                    cpu_peak: row.cp,
+                    container_avg: row.ka.map(unsigned),
+                    container_peak: row.kp.map(unsigned),
+                    container_limit: row.kl.map(unsigned),
                     parts: row
-                        .12
-                        .zip(row.13)
-                        .zip(row.14)
+                        .fa
+                        .zip(row.ha)
+                        .zip(row.ta)
                         .map(|((forks, hosts), tasks)| {
-                            (unsigned(forks), unsigned(hosts), unsigned(tasks))
+                            BucketParts {
+                                fork_servers_bytes: unsigned(forks),
+                                watcher_hosts_bytes: unsigned(hosts),
+                                tasks_bytes: unsigned(tasks),
+                                // Rows from before it was kept have none.
+                                services_bytes: row.sa.map_or(0, unsigned),
+                            }
                         }),
-                    covered: u32::try_from(row.15).unwrap_or(0),
+                    covered: u32::try_from(row.sampled).unwrap_or(0),
                 })
             })
             .collect()
@@ -534,9 +558,9 @@ pub struct Bucket {
     pub container_peak: Option<u64>,
     /// Its container's highest limit in the bucket.
     pub container_limit: Option<u64>,
-    /// A worker's fork servers', wait step hosts' and tasks' averages over all the bucket's
-    /// minutes (0 where it ran no worker); none when it ran none in the bucket.
-    pub parts: Option<(u64, u64, u64)>,
+    /// A worker's parts' averages over all the bucket's minutes (0 where it ran no worker);
+    /// none when it ran none in the bucket.
+    pub parts: Option<BucketParts>,
     /// The minutes the deployment (any process) was sampled in the bucket, read with it: a
     /// total's denominator.
     pub covered: u32,
@@ -548,21 +572,21 @@ fn insert_query(rows: usize) -> String {
         "INSERT INTO samples (process_id, step_s, at, roles, resident_avg, resident_peak, \
          memory_avg, memory_peak, minutes, cpu_minutes, container_minutes, covered, cpu_seconds, \
          cpu_avg, cpu_peak, container_avg, container_peak, container_limit, parts, forks_avg, \
-         hosts_avg, tasks_avg) VALUES ",
+         hosts_avg, tasks_avg, services_avg) VALUES ",
     );
     for row in 0..rows {
-        let n = row * 22;
+        let n = row * 23;
         if row > 0 {
             query.push_str(", ");
         }
-        // Each row's 22 parameters, the time and the parts cast for Postgres.
+        // Each row's 23 parameters, the time and the parts cast for Postgres.
         let cell = |k: usize| match k {
             3 => format!("${}{{ts}}", n + k),
             19 => format!("${}{{json}}", n + k),
             _ => format!("${}", n + k),
         };
         query.push('(');
-        query.push_str(&(1..=22).map(cell).collect::<Vec<_>>().join(", "));
+        query.push_str(&(1..=23).map(cell).collect::<Vec<_>>().join(", "));
         query.push(')');
     }
     query.push_str(" ON CONFLICT (process_id, step_s, at) DO NOTHING");
@@ -650,12 +674,12 @@ fn bucket_query(backend: Backend) -> String {
     // that a sample stored meanwhile doesn't count in one and not the other (Codex's review of
     // M5.1j).
     format!(
-        "SELECT p.*, CAST(c.sampled AS BIGINT) FROM \
+        "SELECT p.*, CAST(c.sampled AS BIGINT) AS sampled FROM \
          (SELECT process_id, ({e} / $4) * $4 AS bucket, CAST(SUM(minutes) AS BIGINT) AS m, \
           {res} AS r, MAX(resident_peak) AS rp, {mem} AS mm, MAX(memory_peak) AS mp, \
           {cpu} / NULLIF(SUM(cpu_minutes), 0) AS ca, MAX(cpu_peak) AS cp, {cont} AS ka, \
           MAX(container_peak) AS kp, MAX(container_limit) AS kl, {forks} AS fa, {hosts} AS ha, \
-          {tasks} AS ta FROM samples WHERE {RANGE} \
+          {tasks} AS ta, {services} AS sa FROM samples WHERE {RANGE} \
           AND ($5{{text}} IS NULL OR process_id = $5{{text}}) GROUP BY process_id, bucket) p \
          JOIN ({c}) c ON c.bucket = p.bucket ORDER BY p.process_id, p.bucket",
         c = coverage_rows(backend),
@@ -667,6 +691,7 @@ fn bucket_query(backend: Backend) -> String {
         forks = part("forks_avg"),
         hosts = part("hosts_avg"),
         tasks = part("tasks_avg"),
+        services = part("services_avg"),
     )
 }
 

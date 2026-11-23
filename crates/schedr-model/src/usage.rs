@@ -28,6 +28,9 @@ pub struct WorkerUsage {
     pub fork_servers_bytes: u64,
     /// Its wait step hosts', together.
     pub watcher_hosts_bytes: u64,
+    /// Its extensions' services', together, as last measured (B281); none from an older worker.
+    #[serde(default)]
+    pub services_bytes: u64,
     /// Its running tasks', together, as their memory watchdog last measured them.
     pub tasks_bytes: u64,
     /// The largest of them, largest first.
@@ -61,6 +64,9 @@ pub struct WorkerParts {
     pub fork_servers_bytes: u64,
     /// Its wait step hosts', together.
     pub watcher_hosts_bytes: u64,
+    /// Its extensions' services', together (B281); none from an older sample.
+    #[serde(default)]
+    pub services_bytes: u64,
     /// Its running tasks', together.
     pub tasks_bytes: u64,
     /// The largest of them, largest first.
@@ -75,6 +81,7 @@ impl WorkerUsage {
         WorkerParts {
             fork_servers_bytes: self.fork_servers_bytes,
             watcher_hosts_bytes: self.watcher_hosts_bytes,
+            services_bytes: self.services_bytes,
             tasks_bytes: self.tasks_bytes,
             largest_tasks: self.largest_tasks.clone(),
         }
