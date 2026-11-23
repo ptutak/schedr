@@ -820,6 +820,10 @@ pub struct MasterCore {
     /// keeps its watcher slot, as the worker's own count does, and what it ends with still counts
     /// (a strike for getting its host killed on the way).
     stopping_triggers: BTreeMap<String, (String, String)>,
+    /// Of those, the ones whose DAG isn't known (reported to a master started since), and since
+    /// when (master time): each holds every `@trigger(wait_for=...)` DAG for at most
+    /// `cancel_grace` and a lease (B279: a worker that never stops one stalled them all).
+    unknown_stopping_since: BTreeMap<String, Timestamp>,
     /// The API tasks call through their agents (M4.11h); none: they are refused.
     task_api: Option<Arc<dyn task_api::TaskApi>>,
     /// `[notifications]`.
@@ -883,6 +887,7 @@ impl MasterCore {
             script_roots_seen: (BTreeMap::new(), None),
             connection_jobs: BTreeMap::new(),
             stopping_triggers: BTreeMap::new(),
+            unknown_stopping_since: BTreeMap::new(),
             task_api: None,
             notifications: Arc::default(),
             steady: crate::clock::as_given,
@@ -2690,6 +2695,9 @@ impl MasterCore {
         self.arrivals.forget(worker_id);
         self.stopping_triggers
             .retain(|_, (worker, _)| worker != worker_id);
+        let stopping = &self.stopping_triggers;
+        self.unknown_stopping_since
+            .retain(|instance, _| stopping.contains_key(instance));
         // After what is retried: its failure is logged, the CLI giving up after its timeout.
         if let Err(error) = self
             .connection_jobs_lost(

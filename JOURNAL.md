@@ -3347,3 +3347,13 @@ it can't read (B275), the crate's two-way test (`in_step.rs`) and the Python hel
 checked against the schema. Added: DN35's rules, a service sending `service_call_seconds`, the
 one built-in it may, and a plugin's `service_*` points dropped without a word (checked in
 `reports.rs`).
+
+### 2026-11-23: M5.2k, B279: an unknown call holds waiting triggers for a bounded time
+
+A trigger instance a worker reports to a master that doesn't know it (started since) holds every
+`@trigger(wait_for=...)` DAG back, as it may be any DAG's call with its run; now for at most the
+cancel grace and a lease on master time. An honest worker has killed it by then (its host killed
+at the grace, the stop delivered within a lease or the worker lost); one that never stops it no
+longer stalls them all (decision 520). Not chosen: the worker reporting each instance's DAG in
+`Register` (a lying worker would claim a different DAG for each made-up instance, stalling them
+all still).

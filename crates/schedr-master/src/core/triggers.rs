@@ -424,13 +424,28 @@ impl MasterCore {
         // A call being stopped still runs, with the run it was given: the next waits for its
         // end, or for its worker to be gone, so a run is never called twice (Grok's review).
         // One whose DAG isn't known (a worker reporting it to a master started since) may be
-        // any DAG's: every such trigger waits for it, its cancel already sent (Codex's review).
+        // any DAG's: every such trigger waits for it, its cancel already sent (Codex's review),
+        // but only for the grace and a lease: an honest worker has killed it by then, its stop
+        // delivered within a lease or the worker lost (B279: one that never stops it would
+        // otherwise hold them all, against decision 520).
         let id = dag.dag.id.as_str();
+        let held_until = jiff::SignedDuration::try_from(
+            self.settings
+                .cancel_grace
+                .saturating_add(self.settings.lease_timeout),
+        )
+        .unwrap_or(jiff::SignedDuration::MAX);
+        let master_now = (self.steady)(now);
+        let unknown_holds = |instance: &str| {
+            self.unknown_stopping_since
+                .get(instance)
+                .is_none_or(|since| master_now.duration_since(*since) < held_until)
+        };
         if waits_for(&dag.dag).is_some()
             && self
                 .stopping_triggers
-                .values()
-                .any(|(_, d)| d == id || d.is_empty())
+                .iter()
+                .any(|(instance, (_, d))| d == id || (d.is_empty() && unknown_holds(instance)))
         {
             return Ok(false);
         }
@@ -803,6 +818,7 @@ impl MasterCore {
         self.heard_from(worker_id, now).await;
         let db = self.db.clone();
         let (memory, stopping) = (self.dispatcher.memory(), self.stopping_triggers.clone());
+        let unknown = self.unknown_stopping_since.clone();
         let again = messages.clone();
         self.metrics.stage();
         let handled = Box::pin(db.atomically(async {
@@ -845,6 +861,7 @@ impl MasterCore {
                 self.metrics.drop_staged();
                 self.dispatcher.restore(memory);
                 self.stopping_triggers = stopping;
+                self.unknown_stopping_since = unknown;
                 tracing::warn!(
                     worker_id,
                     %error,
@@ -1084,6 +1101,7 @@ impl MasterCore {
             .is_some_and(|(worker, _)| worker == worker_id)
         {
             let dag = self.stopping_triggers.remove(&stopped.instance_id);
+            self.unknown_stopping_since.remove(&stopped.instance_id);
             self.dispatcher.trigger_released(&stopped.instance_id);
             if let Some((_, dag)) = dag {
                 self.count_strike(&dag, None, &stopped, now).await?;
@@ -1537,6 +1555,7 @@ impl MasterCore {
         for instance in told {
             if !reported.contains(&instance) {
                 self.stopping_triggers.remove(&instance);
+                self.unknown_stopping_since.remove(&instance);
                 self.dispatcher.trigger_released(&instance);
             }
         }
@@ -1564,6 +1583,9 @@ impl MasterCore {
                 self.stopping_triggers
                     .entry(instance.clone())
                     .or_insert_with(|| (worker_id.to_owned(), String::new()));
+                self.unknown_stopping_since
+                    .entry(instance.clone())
+                    .or_insert((self.steady)(now));
             }
         }
         self.heartbeat_triggers(worker_id, reported, &[], now).await

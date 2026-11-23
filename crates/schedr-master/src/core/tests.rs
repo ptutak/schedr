@@ -5063,6 +5063,51 @@ async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until
     assert_eq!(handed_run(&call), first);
 }
 
+/// B279: a worker that never stops a call this master doesn't know (decision 520: it may lie)
+/// holds back waiting triggers only for the cancel grace and a lease, alive all along.
+#[tokio::test]
+async fn an_unknown_call_never_stopped_holds_waiting_triggers_back_for_a_bounded_time() {
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let mut back = register("w2", "i2", vec![]);
+    back.running_triggers = vec!["from-before".to_owned()];
+    core.register(&back, later(3)).await.unwrap();
+    let held = core
+        .settings
+        .cancel_grace
+        .saturating_add(core.settings.lease_timeout)
+        .as_secs();
+    let held = i64::try_from(held).unwrap();
+    // Alive, never stopping it, still reporting it: held until the bound, then not.
+    let beat = || {
+        worker_message::Message::Heartbeat(pb::Heartbeat {
+            running_triggers: vec!["from-before".to_owned()],
+            ..pb::Heartbeat::default()
+        })
+    };
+    let mut at = 3;
+    while at < 3 + held - 1 {
+        at = (at + 10).min(3 + held - 1);
+        for worker in ["w1", "w2"] {
+            core.handle_in_round(worker, beat(), later(at))
+                .await
+                .unwrap();
+        }
+        assert!(
+            assign_of(&core.tick(later(at)).await.unwrap()).is_none(),
+            "held at {at} s"
+        );
+    }
+    let past = 3 + held + 1;
+    for worker in ["w1", "w2"] {
+        core.handle_in_round(worker, beat(), later(past))
+            .await
+            .unwrap();
+    }
+    let call = assign_of(&core.tick(later(past)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&call), first);
+}
+
 #[tokio::test]
 async fn an_event_stored_behind_the_newest_one_seen_still_starts_its_run() {
     // Codex's review: a post's time is taken before its commit, so one can land behind.
