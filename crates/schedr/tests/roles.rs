@@ -2261,15 +2261,34 @@ fn a_master_whose_extension_writes_are_held_up_keeps_its_rounds_and_drops_them()
         holder.try_wait().unwrap().is_none(),
         "the lock ended before the run did ({took:?}): the test proves nothing"
     );
-    let (_, metrics) = cluster.ops_get("master", "/metrics");
-    let slow: f64 = metrics
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("schedr_master_extension_reports_dropped_total{reason=\"slow\"} ")
-        })
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0.0);
-    assert!(slow > 0.0, "no report dropped as too slow:\n{metrics}");
+    // The run may end before the first held write's timeout (2 s): its drop comes after, while
+    // the lock still holds (CI, 2026-11-23: read at once, none yet).
+    let slow = |metrics: &str| -> f64 {
+        metrics
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("schedr_master_extension_reports_dropped_total{reason=\"slow\"} ")
+            })
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0.0)
+    };
+    let mut metrics = String::new();
+    let dropped = Instant::now();
+    while dropped.elapsed() < Duration::from_secs(15) {
+        metrics = cluster.ops_get("master", "/metrics").1;
+        if slow(&metrics) > 0.0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        slow(&metrics) > 0.0,
+        "no report dropped as too slow:\n{metrics}"
+    );
+    assert!(
+        holder.try_wait().unwrap().is_none(),
+        "the lock ended before a report was dropped: the drop wasn't the lock's"
+    );
     let _ = holder.kill();
     let _ = holder.wait();
 }
