@@ -3372,3 +3372,12 @@ B269 closed by B280's `max_connections = 500`: the whole `roles` file in paralle
 Postgres, three runs of 42 tests, none failed (the record had 0 to 9 a run at 100 connections).
 B277: the metrics page's colour test reads series 1's line (`path.line.s1`), not the page's
 first. B278: the remembered auth check counted (a test-only count of bcrypt checks), not timed.
+
+### 2026-11-23: M5.2k, B286: refusals of tasks gone final are dropped
+
+The dispatcher drops the refusals (`code_missing`, `rejections`) and needs of task instances in
+a final state or gone, read from the database (`not_final`) before memory changes: on each round
+that scans the refusals, and at least once a minute while any are kept. Not only `queued` and
+`unschedulable` are kept: a moved cleanup's instance (`cleaning_up`) routes by `rejections`
+(a first version keeping only those two broke it; its test caught it), and one being assigned
+is `running`.

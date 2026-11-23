@@ -426,6 +426,15 @@ async fn only_the_unschedulable_instances_named_are_queued_again() {
         db.requeue_unschedulable_of(&named, ts(NOW)).await.unwrap(),
         0
     );
+    // B286: of these, those still there and not final.
+    let both = [
+        named[0].clone(),
+        "01920000-0000-7000-8000-000000000000".to_owned(),
+    ];
+    assert_eq!(
+        db.not_final(&both).await.unwrap(),
+        BTreeSet::from([named[0].clone()])
+    );
 }
 
 #[tokio::test]

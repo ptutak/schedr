@@ -475,6 +475,8 @@ pub struct Dispatcher {
     /// What each refused task needs of a worker (its root, queue, parse's version), kept while
     /// it has refusals: a worker with new code eligible for it now gets it (agy's review, B287).
     wants: BTreeMap<String, Wants>,
+    /// When refusals of tasks no longer waiting were last dropped (master time; B286).
+    refusals_pruned: Option<Timestamp>,
     code_wait: SignedDuration,
     /// Each root's accepted content hashes (its current code, and newer code whose parse is on
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
@@ -666,6 +668,7 @@ impl Dispatcher {
             new_code: BTreeSet::new(),
             refusals_dirty: false,
             wants: BTreeMap::new(),
+            refusals_pruned: None,
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
             connections: BTreeMap::new(),
@@ -1197,6 +1200,14 @@ impl Dispatcher {
     /// starting over. Memory changes only once the queue is written (agy's review: a failed
     /// write would have forgotten them for good, the task left `unschedulable`).
     async fn able_again(&mut self, now: Timestamp) -> Result<(), DispatchError> {
+        let master_now = (self.steady)(now);
+        let prune_due = self
+            .refusals_pruned
+            .is_none_or(|at| master_now.duration_since(at) >= SignedDuration::from_mins(1));
+        if self.refusals_dirty || prune_due {
+            self.drop_refusals_not_waiting().await?;
+            self.refusals_pruned = Some(master_now);
+        }
         if !self.refusals_dirty {
             return Ok(());
         }
@@ -1232,6 +1243,42 @@ impl Dispatcher {
         self.refusals_dirty = false;
         self.prune_wants();
         Ok(())
+    }
+
+    /// Drops the refusals of tasks in a final state or gone (cancelled, failed, their DAG
+    /// removed: B286), read from the database before memory changes. A moved cleanup's
+    /// (`cleaning_up`) and one being assigned keep theirs.
+    async fn drop_refusals_not_waiting(&mut self) -> Result<(), DispatchError> {
+        let tracked: Vec<String> = self
+            .code_missing
+            .keys()
+            .chain(self.rejections.keys())
+            .chain(self.wants.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if tracked.is_empty() {
+            return Ok(());
+        }
+        let waiting = self.db.not_final(&tracked).await?;
+        self.code_missing
+            .retain(|instance, _| waiting.contains(instance));
+        self.rejections
+            .retain(|instance, _| waiting.contains(instance));
+        self.wants.retain(|instance, _| waiting.contains(instance));
+        Ok(())
+    }
+
+    /// How many task instances have refusals or needs kept (B286's test).
+    #[cfg(test)]
+    pub(crate) fn refusals_kept(&self) -> usize {
+        self.code_missing
+            .keys()
+            .chain(self.rejections.keys())
+            .chain(self.wants.keys())
+            .collect::<BTreeSet<_>>()
+            .len()
     }
 
     /// Drops what a task needs once it has no refusals left.

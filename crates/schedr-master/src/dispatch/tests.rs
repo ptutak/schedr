@@ -3155,6 +3155,36 @@ async fn a_worker_reaching_the_code_gets_a_task_the_others_refused_for_themselve
     assert_eq!(given, ["w2"], "{out:?}");
 }
 
+/// B286: a cancelled run's refusals are dropped within a minute, whatever else changes.
+#[tokio::test]
+async fn a_cancelled_runs_refusals_are_dropped() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    let missing = pb::RejectReason::DagFileMissing;
+    refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[("w1", missing, "no team/sync.py")],
+    )
+    .await;
+    assert_eq!(dispatcher.refusals_kept(), 1);
+    dispatcher
+        .cancel_run(&InRound::for_tests(), &run_id, later(10))
+        .await
+        .unwrap();
+    dispatcher
+        .step(&InRound::for_tests(), later(20))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.refusals_kept(), 1, "within the minute: kept");
+    dispatcher
+        .step(&InRound::for_tests(), later(90))
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.refusals_kept(), 0);
+}
+
 #[tokio::test]
 async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;

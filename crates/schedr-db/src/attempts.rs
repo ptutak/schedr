@@ -1961,6 +1961,37 @@ impl Database {
         });
         Ok(updated)
     }
+    /// Of these task instances, those still there and not in a final state (a moved cleanup's,
+    /// `cleaning_up`, or one being assigned, `running`, included): what the dispatcher keeps
+    /// their refusals for (B286).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn not_final(&self, instance_ids: &[String]) -> Result<BTreeSet<String>, DbError> {
+        const SQLITE: &str = "SELECT id FROM task_instances WHERE state NOT IN ('success', \
+            'failed', 'cancelled', 'skipped', 'upstream_failed') \
+            AND id IN (SELECT value FROM json_each($1))";
+        const POSTGRES: &str = "SELECT id::text FROM task_instances WHERE state NOT IN \
+            ('success', 'failed', 'cancelled', 'skipped', 'upstream_failed') \
+            AND id IN (SELECT value::uuid FROM jsonb_array_elements_text($1::jsonb))";
+        if instance_ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let list = crate::query::to_json(&instance_ids);
+        let waiting: Vec<String> = in_tx!(self, |tx, backend| {
+            let query = match backend {
+                crate::backend::Backend::Sqlite => SQLITE,
+                crate::backend::Backend::Postgres => POSTGRES,
+            };
+            crate::query::query_scalar(sql(backend, query))
+                .bind(&list)
+                .fetch_all(&mut *tx)
+                .await?
+        });
+        Ok(waiting.into_iter().collect())
+    }
+
     /// Puts these `unschedulable` task instances back in the queue, ready at `now` (B284,
     /// B285: a worker became able to run them); others are left as they are. How many.
     ///

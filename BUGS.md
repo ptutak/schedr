@@ -57,20 +57,10 @@ step touches their code or the user schedules them.
 | 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
 | 3 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
 | 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 5 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
-| 6 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 7 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 8 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 9 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back
-
-- **Rating:** severity **low**, probability **possible**, performance (score 2): the dispatcher's `rejections` and `code_missing` keep a task instance's refusals until it starts, is retried, or a worker registers or resumes; cancelling its run or task, its DAG removed, or `unschedulable_timeout` failing it leaves them, scanned each round since DN37 (`answered_refusals`) and copied with the dispatcher's memory on each worker message, until its refusing workers are able again or one registers anew.
-- **Found:** 2026-11-23, by agy's second review of M5.2i13 (proof: a cancelled run's instance
-  still in `code_missing`); older than DN37 for `rejections`.
-- **A fix:** forget an instance's refusals where it leaves `queued`/`unschedulable` for good
-  (cancel, wind down, `fail_waiting_users`), or prune those not waiting when a round reads its
-  ready instances.
+| 5 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 6 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 7 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 8 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B281: a worker's memory split leaves out its extensions' services
 

@@ -1038,6 +1038,42 @@ async fn a_groups_starts_dags_and_cleared_strikes_are_stored_on_postgres() {
     );
 }
 
+/// B286: of the instances named, those still there and not final, on Postgres's own query.
+#[tokio::test]
+async fn the_instances_not_final_are_told_apart() {
+    let (db, run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let extract = ready[0].instance_id.clone();
+    let gone = "01920000-0000-7000-8000-000000000000".to_owned();
+    assert_eq!(
+        db.not_final(&[extract.clone(), gone.clone()])
+            .await
+            .unwrap(),
+        std::collections::BTreeSet::from([extract.clone()])
+    );
+    db.request_cancel(&run_id, ts(NOW)).await.unwrap();
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            task_id: id("extract"),
+            map_index: -1,
+            state: TaskInstanceState::Cancelled,
+            ready_at: None,
+            outcome: None,
+            used_retry: false,
+            reason: None,
+            map_sizes: None,
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db.not_final(&[extract, gone]).await.unwrap(),
+        std::collections::BTreeSet::new()
+    );
+}
+
 #[tokio::test]
 async fn failures_retries_requeues_and_cancels_are_stored() {
     let (db, run_id) = with_instances().await;
@@ -1112,7 +1148,9 @@ async fn failures_retries_requeues_and_cancels_are_stored() {
         .id
         .clone();
     assert_eq!(
-        db.requeue_unschedulable_of(&[load], ts(NOW)).await.unwrap(),
+        db.requeue_unschedulable_of(std::slice::from_ref(&load), ts(NOW))
+            .await
+            .unwrap(),
         1
     );
     db.update_instances(
