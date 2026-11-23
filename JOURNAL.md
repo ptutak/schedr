@@ -3357,3 +3357,11 @@ at the grace, the stop delivered within a lease or the worker lost); one that ne
 longer stalls them all (decision 520). Not chosen: the worker reporting each instance's DAG in
 `Register` (a lying worker would claim a different DAG for each made-up instance, stalling them
 all still).
+
+### 2026-11-23: M5.2k, B287: new code gives a task the others refused for themselves
+
+What a refused task needs of a worker (root, queue, parse's version) is kept beside its refusals
+of either kind, not only its code refusals; a worker reporting new code that is now eligible for
+it and never refused it gets it, whether the others refused for code or for themselves. Kept in
+the dispatcher's memory copy, cleared with the refusals (a new worker, a resume) and pruned once
+a task has none.

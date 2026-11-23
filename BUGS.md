@@ -55,26 +55,16 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 2 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
-| 3 | B287: a worker that becomes eligible later never gives a task every other worker refused for itself another chance | 4 | medium | possible | reliability |
-| 4 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 5 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 6 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 7 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
-| 8 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 9 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 10 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 11 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 13 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B287: a worker that becomes eligible later never gives a task every other worker refused for itself another chance
-
-- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a task every eligible worker refused for a worker-specific reason (`INTERPRETER_UNDEFINED`, `EXTENSION_UNDEFINED`, ...) is `unschedulable` at once; a worker that wasn't eligible then (on older code of its root, or serving the queue only later through a new incarnation's settings change without a restart) and becomes eligible by reporting the new code never queues it again: only a new worker or incarnation, a resume, or a user retry does (DN37 answers only code and service refusals).
-- **Found:** 2026-11-23, by agy's fourth review of M5.2i13 (B284/B285): DN37's new code answers
-  the code-waiting tasks of a worker now eligible, which live in `code_missing`; one refused
-  only for worker-specific reasons is in `rejections` alone.
-- **A fix:** keep what such a task needs of a worker (`Wants`) beside its `rejections` too, and
-  queue it again when a worker becomes eligible for it (new code, or a queue it now serves).
+| 3 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
+| 4 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
+| 5 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 6 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
+| 7 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 8 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 9 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 10 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 12 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back
 

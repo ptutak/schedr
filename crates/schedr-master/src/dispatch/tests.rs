@@ -3122,6 +3122,39 @@ async fn the_code_wait_runs_on_master_time() {
     assert_eq!(states.last(), Some(&TaskInstanceState::Queued));
 }
 
+/// B287: a task every eligible worker refused for itself, then a worker on older code then
+/// reaching the code: it gets the task.
+#[tokio::test]
+async fn a_worker_reaching_the_code_gets_a_task_the_others_refused_for_themselves() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher.report_root("w2", "etl", "h1");
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[(
+            "w1",
+            pb::RejectReason::InterpreterUndefined,
+            "no python3.15",
+        )],
+    )
+    .await;
+    assert_eq!(states, [TaskInstanceState::Unschedulable]);
+    dispatcher.report_root("w2", "etl", "h2");
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(100))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w2"], "{out:?}");
+}
+
 #[tokio::test]
 async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;

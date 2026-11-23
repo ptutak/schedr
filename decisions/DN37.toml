@@ -12,7 +12,8 @@ worker's count is past its own (the service ready again since; a service ready f
 versions only never counts up, so its refusals stand). A "code missing" refusal is answered once
 the worker reports a root's content hash other than the one it last reported (a reconnect's same
 hash isn't new code) (B285); that new code also gives the task to a worker that never refused it
-(on older code then), if it is eligible for it now, as assignment reads it. Each round, the refusals answered are forgotten and those tasks, if
+(on older code then), if it is eligible for it now, as assignment reads it, whatever the others
+refused it for (B287). Each round, the refusals answered are forgotten and those tasks, if
 `unschedulable`, queued again, their code wait starting over (B284: they stayed `unschedulable`
 once the services came back, and a worker's old refusal still counted towards "every eligible
 worker"). Only those: a worker that refused the task for itself is never answered, its later

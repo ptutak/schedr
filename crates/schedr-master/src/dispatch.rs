@@ -472,6 +472,9 @@ pub struct Dispatcher {
     /// Whether a worker's state changed since the round last looked at the refusals (a count
     /// risen, new code, a service refusal): rounds with nothing new skip the scan (agy's review).
     refusals_dirty: bool,
+    /// What each refused task needs of a worker (its root, queue, parse's version), kept while
+    /// it has refusals: a worker with new code eligible for it now gets it (agy's review, B287).
+    wants: BTreeMap<String, Wants>,
     code_wait: SignedDuration,
     /// Each root's accepted content hashes (its current code, and newer code whose parse is on
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
@@ -569,6 +572,7 @@ pub struct Memory {
     code_missing: BTreeMap<String, CodeMissing>,
     new_code: BTreeSet<String>,
     refusals_dirty: bool,
+    wants: BTreeMap<String, Wants>,
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
     active: Active,
@@ -624,9 +628,6 @@ struct CodeMissing {
     service: BTreeMap<String, u64>,
     /// The task's extension, for an extension task.
     extension: Option<String>,
-    /// What the task needs of a worker: its root, queue and parse's schedr version, to tell a
-    /// worker with new code that may run it now from one that may not (agy's review).
-    wants: Option<Wants>,
 }
 
 /// A task's root, queue and parse's schedr version: what [`Dispatcher::needs`] reads.
@@ -664,6 +665,7 @@ impl Dispatcher {
             code_missing: BTreeMap::new(),
             new_code: BTreeSet::new(),
             refusals_dirty: false,
+            wants: BTreeMap::new(),
             code_wait: SignedDuration::ZERO,
             current_code: BTreeMap::new(),
             connections: BTreeMap::new(),
@@ -750,6 +752,7 @@ impl Dispatcher {
             code_missing: self.code_missing.clone(),
             new_code: self.new_code.clone(),
             refusals_dirty: self.refusals_dirty,
+            wants: self.wants.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
         }
@@ -787,6 +790,7 @@ impl Dispatcher {
         self.code_missing = memory.code_missing;
         self.new_code = memory.new_code;
         self.refusals_dirty = memory.refusals_dirty;
+        self.wants = memory.wants;
         self.stops = memory.stops;
         self.active = memory.active;
     }
@@ -953,6 +957,7 @@ impl Dispatcher {
         if new {
             self.rejections.clear();
             self.code_missing.clear();
+            self.wants.clear();
         }
         Ok(())
     }
@@ -1121,6 +1126,7 @@ impl Dispatcher {
             !by.is_empty()
         });
         self.new_code.remove(worker_id);
+        self.prune_wants();
     }
 
     /// The refusals a worker's state now answers (B284, B285): `(instance, worker)`. A
@@ -1146,18 +1152,22 @@ impl Dispatcher {
                     answered.push((instance.clone(), worker.clone()));
                 }
             }
-            // A worker with new code that never refused it (not eligible then, on older code:
-            // agy's review) and may run it now: the task is queued again for it too. Only one
-            // eligible for it, as assignment reads it: serving its queue, not drained, at its
-            // root's code (agy's next review: any worker's new code re-queued every task).
-            for worker in &self.new_code {
-                if !missing.by.contains_key(worker)
-                    && !excluded.is_some_and(|r| r.contains_key(worker))
-                    && missing
-                        .wants
-                        .as_ref()
-                        .is_some_and(|wants| self.eligible_for(worker, wants))
-                {
+        }
+        // A worker with new code that never refused a task (not eligible then, on older code:
+        // agy's review, B287) and may run it now: the task is queued again for it, whether its
+        // refusals were for code or workers' own. Only a worker eligible for it, as assignment
+        // reads it: serving its queue, not drained, at its root's code.
+        for worker in &self.new_code {
+            for (instance, wants) in &self.wants {
+                let refused = self
+                    .code_missing
+                    .get(instance)
+                    .is_some_and(|m| m.by.contains_key(worker))
+                    || self
+                        .rejections
+                        .get(instance)
+                        .is_some_and(|r| r.contains_key(worker));
+                if !refused && self.eligible_for(worker, wants) {
                     answered.push((instance.clone(), worker.clone()));
                 }
             }
@@ -1194,6 +1204,7 @@ impl Dispatcher {
         if answered.is_empty() {
             self.new_code.clear();
             self.refusals_dirty = false;
+            self.prune_wants();
             return Ok(());
         }
         let again: Vec<String> = answered
@@ -1219,7 +1230,16 @@ impl Dispatcher {
         }
         self.new_code.clear();
         self.refusals_dirty = false;
+        self.prune_wants();
         Ok(())
+    }
+
+    /// Drops what a task needs once it has no refusals left.
+    fn prune_wants(&mut self) {
+        let (missing, rejections) = (&self.code_missing, &self.rejections);
+        self.wants.retain(|instance, _| {
+            missing.contains_key(instance) || rejections.contains_key(instance)
+        });
     }
 
     /// A worker withdrew a root (decision 303): its tasks no longer go there.
@@ -1341,6 +1361,7 @@ impl Dispatcher {
         self.workers.set_drained(worker_id, false);
         self.rejections.clear();
         self.code_missing.clear();
+        self.wants.clear();
         self.db.requeue_unschedulable(now).await?;
         Ok(())
     }
@@ -4341,6 +4362,9 @@ impl Dispatcher {
     ) -> (TaskInstanceState, Option<Timestamp>, Option<String>) {
         let instance = &attempt.instance_id;
         let detail = (attempt.worker_id.clone(), rejected.detail.clone());
+        if let Some(wants) = wants {
+            self.wants.insert(instance.clone(), wants);
+        }
         if code {
             let missing = self
                 .code_missing
@@ -4350,7 +4374,6 @@ impl Dispatcher {
                     by: BTreeMap::new(),
                     service: BTreeMap::new(),
                     extension: None,
-                    wants: None,
                 });
             if rejected.reason == i32::from(pb::RejectReason::ExtensionNotReady) {
                 missing
@@ -4361,7 +4384,6 @@ impl Dispatcher {
                 missing.service.remove(&detail.0);
             }
             missing.extension = extension;
-            missing.wants = wants;
             missing.by.insert(detail.0, detail.1);
         } else {
             // Its refusal for itself holds whatever comes back: no code or service refusal of
