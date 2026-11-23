@@ -7,10 +7,10 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i11, M5.2i12, M5.2i13, M5.2i4, M5.2j.
+- **Then:** M5.2i12, M5.2i13, M5.2i4, M5.2j, M5.2k.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 13; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely) (`BUGS.md`).
+- **Open bugs:** 14; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B282 (high/rare) (`BUGS.md`).
 
 ## Recent
 
@@ -20,12 +20,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - DN31 (2026-11-22): A service whose attempts time out a few times in a row counts as crashed (adds to D518)
 - DN30 (2026-11-22): No stall check for a service: a hung one shows as its attempts timing out (corrects D518)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
+- M5.2i11 (2026-11-23): The Kubernetes plugin widened: an async client with watches, and every panel kind
 - M5.2i8 (2026-11-22): Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED
-- M5.2i7 (2026-11-22): `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard
 
 ## In progress
 
-- M5.2i9 (D518, DN29-DN33) finished, being pushed: an extension's service, its supervisor in the worker, Python's serve() and channel.service.call(), the Rust crate's service_call, task-ctx extension call, the maintenance drain told (DN33); agy's 11 and Grok's 4 findings fixed; docs accepted by the user. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i11, i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split).
+- M5.2i11 finished, being pushed: the Kubernetes plugin on kubernetes_asyncio through its extension's service (watches of Jobs and pods, a Secret per Job, every chart kind, the service's pods gauge); agy's 8 findings fixed; kind passes. Its done-when's two-worker gauge can't be shown on kind (standalone's in-memory mTLS admits no outside worker), journaled. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split). For the user in the morning: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).
 
 ## Waiting for the user
 

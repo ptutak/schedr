@@ -1,46 +1,65 @@
 #!/usr/bin/env python3
-"""An extension's plugin that runs each attempt as a Kubernetes Job (M5.2i2), driving `kubectl`.
+"""An extension that runs each attempt as a Kubernetes Job (M5.2i2, M5.2i11), with a service.
 
-A model for plugin authors: it registers a cleanup handle before it creates anything, reports
-its phases, links to its Job and pod in Headlamp (``--headlamp``) or the Kubernetes Dashboard
-(``--dashboard``), declares and reports its metrics and page (decision 513), streams the pod's
-log into the attempt's log, asks why when it is stopped and deletes its Job unless the master was
-lost, and its cleanup deletes what a lost worker left behind. Its own lines are ``logging``'s,
-structured (decision 514). The payload:
+Two processes, one program (decision 518):
+
+- **its service** (``--service``): one per worker, for what the attempts share. It holds the one
+  ``kubernetes_asyncio`` client, watches the namespace's Jobs and pods (never polling), and
+  answers the plugins' calls: ``submit`` (a Kubernetes Secret for the task's secret variables,
+  owned by the Job so it goes with it, then the Job), ``started`` and ``ended`` (answered from
+  the watch), ``logs`` (the pod's log, followed, in chunks), ``output`` and ``delete``. From its
+  watch it reports the cluster-wide gauges (pods running and pending, pods by phase): every worker
+  sees the same namespace, so their panels combine them with ``max``, not a sum.
+- **its plugin**: one per attempt. It reads the task's declared secrets, registers a cleanup
+  handle before anything exists, calls the service, writes the pod's log into the attempt's log,
+  reports its phases, links (Headlamp with ``--headlamp``, the Kubernetes Dashboard with
+  ``--dashboard``), metrics and notifications (decision 513, M5.2i8), and on a stop asks why and
+  deletes its Job unless the master was lost; its cleanup deletes what a lost worker left.
+
+The payload:
 
     {
       "image": "busybox:1.36",                     the container's image (required)
       "command": ["sh", "-c", "echo hi"],          its command (optional: the image's own)
       "env": {"MODE": "fast"},                     plain variables
-      "secret_env": {"TOKEN": "spark/api#token"},  declared secrets, as variables
+      "secret_env": {"TOKEN": "spark/api#token"},  declared secrets, as variables from a Secret
       "resources": {"limits": {"memory": "256Mi"}},
       "node_selector": {"pool": "batch"}
     }
 
 The pod's last log line ``SCHEDR_OUTPUT: <json>`` is the task's output; without it, ``null``.
-A secret given as a variable is visible to anyone who can read the Job: a demonstration only;
-a real plugin would create a Kubernetes Secret.
 
-Configure it on a worker (``kubectl`` and its kubeconfig must work for the worker's user, with
-create, get, logs and delete on Jobs and pods in the namespace):
+Configure both on a worker (its kubeconfig, or the pod's service account in a cluster, may
+create, get, watch, patch and delete Jobs, pods, pods' logs and Secrets in the namespace), the
+same options on both:
 
     [extensions.kubernetes]
     command = ["/path/to/schedr-ext-kubernetes", "--namespace", "batch", "--context", "kind-x"]
+    service = ["/path/to/schedr-ext-kubernetes", "--service", "--namespace", "batch",
+               "--context", "kind-x"]
     versions = ["1.0"]
+
+``kubernetes_asyncio`` is this example's own dependency, never schedr's.
 """
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
-import subprocess
 import sys
 import time
-from collections.abc import Mapping
-from typing import cast
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from typing import Protocol, cast
+
+import aiohttp
+from kubernetes_asyncio import client, config, watch
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from schedr.extension import (
     ExtensionChannel,
@@ -50,23 +69,46 @@ from schedr.extension import (
     NotificationDeclaration,
     PanelDeclaration,
     Run,
+    ServiceAttempt,
+    ServiceContext,
     main,
+    serve,
 )
 
 OUTPUT_PREFIX = "SCHEDR_OUTPUT: "
 # The pod never starts with these: the attempt fails at once instead of waiting for its timeout.
 STUCK = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError"}
-POLL = 1.0
+MANAGED = "app.kubernetes.io/managed-by"
+MANAGED_SELECTOR = f"{MANAGED}=schedr"
+# A log call's most bytes, and how long it waits for some before answering with none.
+LOG_CHUNK = 65536
+LOG_WAIT = 1.0
+# The most chunks of a pod's log held for its plugin: the log is followed no faster.
+LOG_HELD = 64
+NOT_FOUND = 404
+# A watch's server-side end, and the client's own limit beyond it: a connection gone silent (a
+# half-open one) is given up instead of waited on for ever.
+WATCH_SECONDS = 300
+WATCH_CLIENT_SECONDS = WATCH_SECONDS + 30
+# How long a failed Job waits for its pod's reason before it is told without one: the Jobs and
+# the pods are two watches, either may come first.
+FAILURE_DETAIL_SECONDS = 5.0
+# The most of a pod's last line read for its output, whatever a task's `max_output_size` says.
+MAX_OUTPUT_READ = 16 * 1024 * 1024
+# The most deleted Jobs remembered (a call about one ends at once).
+REMEMBERED = 1000
+
+log = logging.getLogger("schedr-ext-kubernetes")
 
 
-def obj(value: ExtensionJson) -> dict[str, ExtensionJson]:
-    """`value` if a JSON object, else an empty one: what `kubectl` printed, read defensively."""
-    return value if isinstance(value, dict) else {}
+def obj(value: object) -> dict[str, ExtensionJson]:
+    """`value` if a JSON object, else an empty one: what the API sent, read defensively."""
+    return cast("dict[str, ExtensionJson]", value) if isinstance(value, dict) else {}
 
 
-def items(value: ExtensionJson) -> list[ExtensionJson]:
+def items(value: object) -> list[ExtensionJson]:
     """`value` if a JSON array, else an empty one."""
-    return value if isinstance(value, list) else []
+    return cast("list[ExtensionJson]", value) if isinstance(value, list) else []
 
 
 def decoded(text: str) -> ExtensionJson:
@@ -82,53 +124,6 @@ class PodFailedError(Exception):
         """Of what happened; `waiting`: the reason a pod that will never start waits for."""
         super().__init__(message)
         self.waiting: str | None = waiting
-
-
-class Kubectl:
-    """`kubectl` for one namespace and context."""
-
-    def __init__(self, namespace: str, context: str | None, kubeconfig: str | None) -> None:
-        """`kubectl` with these options on every command."""
-        self.namespace: str = namespace
-        self.options: list[str] = []
-        if context:
-            self.options += ["--context", context]
-        if kubeconfig:
-            self.options += ["--kubeconfig", kubeconfig]
-        self.base: list[str] = ["kubectl", "-n", namespace, *self.options]
-
-    def in_namespace(self, namespace: str) -> Kubectl:
-        """The same `kubectl` in another namespace (a handle's)."""
-        other = Kubectl(namespace, None, None)
-        other.options = self.options
-        other.base = ["kubectl", "-n", namespace, *self.options]
-        return other
-
-    async def run(self, *args: str, stdin: str | None = None) -> str:
-        """Runs a command; its standard output, or `RuntimeError` with its error."""
-        process = await asyncio.create_subprocess_exec(
-            *self.base,
-            *args,
-            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        out, err = await process.communicate(stdin.encode() if stdin is not None else None)
-        if process.returncode != 0:
-            raise RuntimeError(f"kubectl {' '.join(args)}: {err.decode().strip()}")
-        return out.decode()
-
-    async def json(self, *args: str) -> dict[str, ExtensionJson]:
-        """A command's JSON output, an object."""
-        return obj(decoded(await self.run(*args, "-o", "json")))
-
-    def delete_now(self, job: str) -> None:
-        """Deletes a Job and its pods, synchronously: what a signal handler can do."""
-        subprocess.run(
-            [*self.base, "delete", "job", job, "--ignore-not-found", "--wait=false"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-        )
 
 
 def job_name(request: ExtensionRequest) -> str:
@@ -164,14 +159,30 @@ def checked(payload: ExtensionJson) -> dict[str, ExtensionJson]:
     return fields
 
 
+def secret_name(job: str) -> str:
+    """The Secret holding a Job's secret variables."""
+    return f"{job}-env"
+
+
 def manifest(
-    name: str, payload: Mapping[str, ExtensionJson], env: dict[str, str]
+    name: str, payload: Mapping[str, ExtensionJson], secret_vars: list[str]
 ) -> dict[str, ExtensionJson]:
-    """The Job: one pod, never restarted, never retried (schedr retries)."""
+    """The Job: one pod, never restarted, never retried (schedr retries).
+
+    Its secret variables are read from its Secret, never written in the Job.
+    """
+    env: list[ExtensionJson] = []
+    for key, value in obj(payload.get("env")).items():
+        plain: dict[str, ExtensionJson] = {"name": key, "value": str(value)}
+        env.append(plain)
+    for var in secret_vars:
+        ref: dict[str, ExtensionJson] = {"name": secret_name(name), "key": var}
+        from_secret: dict[str, ExtensionJson] = {"name": var, "valueFrom": {"secretKeyRef": ref}}
+        env.append(from_secret)
     container: dict[str, ExtensionJson] = {
         "name": "task",
         "image": payload["image"],
-        "env": [{"name": k, "value": v} for k, v in env.items()],
+        "env": env,
     }
     if "command" in payload:
         container["command"] = [str(part) for part in items(payload["command"])]
@@ -185,108 +196,595 @@ def manifest(
     }
     if "node_selector" in payload:
         pod["nodeSelector"] = payload["node_selector"]
+    labels: dict[str, ExtensionJson] = {MANAGED: "schedr"}
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": {"name": name, "labels": {"app.kubernetes.io/managed-by": "schedr"}},
-        "spec": {"backoffLimit": 0, "template": {"spec": pod}},
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "backoffLimit": 0,
+            # Its pod labelled too: the service watches schedr's pods by it.
+            "template": {"metadata": {"labels": dict(labels)}, "spec": pod},
+        },
     }
 
 
-async def environment(
-    payload: Mapping[str, ExtensionJson], channel: ExtensionChannel
-) -> dict[str, str]:
-    """The container's variables: the plain ones, then the declared secrets."""
-    env = {k: str(v) for k, v in obj(payload.get("env")).items()}
-    for variable, reference in obj(payload.get("secret_env")).items():
-        path, _, key = str(reference).partition("#")
-        env[str(variable)] = str(await channel.secret(path, key or None))
-    return env
+# ---------------------------------------------------------------- the cluster
 
 
-def stuck(pod: ExtensionJson) -> None:
+class Cluster(Protocol):
+    """What the service asks of Kubernetes, in one namespace (a handle's may be another)."""
+
+    namespace: str
+
+    async def open(self) -> None:
+        """Connects."""
+        ...
+
+    async def close(self) -> None:
+        """Disconnects."""
+        ...
+
+    async def create_secret(self, name: str, values: Mapping[str, str]) -> None:
+        """Creates a Secret of `values`."""
+        ...
+
+    async def create_job(self, manifest: Mapping[str, ExtensionJson]) -> str:
+        """Creates a Job; its UID."""
+        ...
+
+    async def own_secret(self, name: str, job: str, job_uid: str) -> None:
+        """Makes Secret `name` the Job's: deleted with it."""
+        ...
+
+    async def delete_job(self, name: str, namespace: str) -> None:
+        """Deletes a Job and its pods; none there is no error."""
+        ...
+
+    async def delete_secret(self, name: str, namespace: str) -> None:
+        """Deletes a Secret; none there is no error."""
+        ...
+
+    def watch(self, kind: str) -> AsyncIterator[tuple[str, dict[str, ExtensionJson]]]:
+        """Schedr's `pods` or `jobs` in the namespace as they change.
+
+        First `SYNC` (`{"items": [...]}`: all of them now), then `ADDED`, `MODIFIED`, `DELETED`;
+        a watch that breaks lists them again (`SYNC`) and goes on from there.
+        """
+        ...
+
+    def follow_logs(self, pod: str) -> AsyncIterator[bytes]:
+        """A pod's log as it comes, to its end."""
+        ...
+
+    async def last_line(self, pod: str, limit: int) -> str:
+        """An ended pod's last log line, at most `limit` bytes read of it."""
+        ...
+
+
+class KubeCluster:
+    """The cluster through `kubernetes_asyncio`."""
+
+    def __init__(self, namespace: str, context: str | None, kubeconfig: str | None) -> None:
+        """Of these options; connected by `open`."""
+        self.namespace: str = namespace
+        self.context: str | None = context
+        self.kubeconfig: str | None = kubeconfig
+        # Made by `open`, in the event loop: the client's sessions need one.
+        self.clients: tuple[client.ApiClient, client.CoreV1Api, client.BatchV1Api] | None = None
+
+    @property
+    def api(self) -> client.ApiClient:
+        """The API client; opened first."""
+        return self.opened()[0]
+
+    @property
+    def core(self) -> client.CoreV1Api:
+        """The core API (pods, logs, Secrets)."""
+        return self.opened()[1]
+
+    @property
+    def batch(self) -> client.BatchV1Api:
+        """The batch API (Jobs)."""
+        return self.opened()[2]
+
+    def opened(self) -> tuple[client.ApiClient, client.CoreV1Api, client.BatchV1Api]:
+        """Its clients, made by `open`."""
+        if self.clients is None:
+            raise RuntimeError("the cluster isn't opened")
+        return self.clients
+
+    async def open(self) -> None:
+        """Its kubeconfig (or the pod's service account in a cluster)."""
+        # The library's loaders aren't fully typed; they return nothing used here.
+        # In a pod with neither option, its service account; else the kubeconfig, its errors
+        # told as they are (agy's review: a wrong --kubeconfig fell back to the pod's own).
+        given = self.kubeconfig is not None or self.context is not None
+        if not given and os.environ.get("KUBERNETES_SERVICE_HOST"):
+            config.load_incluster_config()  # type: ignore[no-untyped-call]  # pyright: ignore[reportUnknownMemberType]
+        else:
+            if self.kubeconfig is not None and not os.path.isfile(self.kubeconfig):
+                # The library's own message ("Expected key current-context") names no file.
+                raise FileNotFoundError(f"no kubeconfig at {self.kubeconfig}")
+            await config.load_kube_config(  # pyright: ignore[reportUnknownMemberType]
+                config_file=self.kubeconfig, context=self.context
+            )
+        api = client.ApiClient()
+        self.clients = (api, client.CoreV1Api(api), client.BatchV1Api(api))
+
+    async def close(self) -> None:
+        """Closes its connections."""
+        if self.clients is not None:
+            await self.clients[0].close()
+
+    def plain(self, value: object) -> dict[str, ExtensionJson]:
+        """An API object as the JSON the API sent (camelCase keys)."""
+        # Untyped in the library: plain JSON, read through `obj`.
+        return obj(cast("object", self.api.sanitize_for_serialization(value)))
+
+    async def create_secret(self, name: str, values: Mapping[str, str]) -> None:
+        """Creates a Secret of `values`."""
+        body = client.V1Secret(
+            metadata=client.V1ObjectMeta(name=name, labels={MANAGED: "schedr"}),
+            string_data=dict(values),
+        )
+        await self.core.create_namespaced_secret(self.namespace, body)
+
+    async def create_job(self, manifest: Mapping[str, ExtensionJson]) -> str:
+        """Creates a Job; its UID."""
+        # The client sends a dict as it is: the manifest is the Job's JSON.
+        body = cast("client.V1Job", cast("object", dict(manifest)))
+        created = await self.batch.create_namespaced_job(self.namespace, body)
+        return str(obj(self.plain(created).get("metadata")).get("uid", ""))
+
+    async def own_secret(self, name: str, job: str, job_uid: str) -> None:
+        """Makes Secret `name` the Job's: deleted with it."""
+        owner = {"apiVersion": "batch/v1", "kind": "Job", "name": job, "uid": job_uid}
+        patch = {"metadata": {"ownerReferences": [owner]}}
+        await self.core.patch_namespaced_secret(name, self.namespace, patch)
+
+    async def delete_job(self, name: str, namespace: str) -> None:
+        """Deletes a Job and its pods; none there is no error."""
+        try:
+            await self.batch.delete_namespaced_job(name, namespace, propagation_policy="Background")
+        except ApiException as e:
+            if e.status != NOT_FOUND:
+                raise
+
+    async def delete_secret(self, name: str, namespace: str) -> None:
+        """Deletes a Secret; none there is no error."""
+        try:
+            await self.core.delete_namespaced_secret(name, namespace)
+        except ApiException as e:
+            if e.status != NOT_FOUND:
+                raise
+
+    async def watch(self, kind: str) -> AsyncIterator[tuple[str, dict[str, ExtensionJson]]]:
+        """Schedr's `pods` or `jobs`, as `Cluster.watch` says.
+
+        Listed, then watched from the list's version, so a restarted watch replaces what it held
+        at once (agy's review: cleared first, the gauges dropped to nothing at every restart).
+        """
+        lister = self.core.list_namespaced_pod if kind == "pods" else self.batch.list_namespaced_job
+        while True:
+            try:
+                listed = self.plain(await lister(self.namespace, label_selector=MANAGED_SELECTOR))
+                version = str(obj(listed.get("metadata")).get("resourceVersion", ""))
+                yield "SYNC", {"items": items(listed.get("items"))}
+                watcher = watch.Watch()
+                try:
+                    # Untyped in the library: each event a dict, read through `obj`.
+                    events = cast(
+                        "AsyncIterator[object]",
+                        watcher.stream(  # pyright: ignore[reportUnknownMemberType]
+                            lister,
+                            self.namespace,
+                            label_selector=MANAGED_SELECTOR,
+                            resource_version=version,
+                            timeout_seconds=WATCH_SECONDS,
+                            _request_timeout=WATCH_CLIENT_SECONDS,
+                        ),
+                    )
+                    async for event in events:
+                        happened = obj(event)
+                        kind_of = str(happened.get("type", ""))
+                        if kind_of == "ERROR":  # its version too old: listed again
+                            break
+                        yield kind_of, self.plain(happened.get("object"))
+                finally:
+                    await watcher.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # a broken watch is started again
+                log.warning("the %s watch broke: %s; again in a second", kind, e)
+                await asyncio.sleep(1)
+
+    async def follow_logs(self, pod: str) -> AsyncIterator[bytes]:
+        """A pod's log as it comes, to its end."""
+        # Not read in: the client hands the response itself back.
+        raw = await self.core.read_namespaced_pod_log(
+            pod, self.namespace, follow=True, _preload_content=False
+        )
+        response = cast("aiohttp.ClientResponse", cast("object", raw))
+        async with response:
+            # Not raised by the client unread (agy's review): a refused log is an error.
+            if not 200 <= response.status < 300:  # noqa: PLR2004 (HTTP's success range)
+                body = (await response.text())[:500]
+                raise RuntimeError(f"the pod's log: HTTP {response.status}: {body}")
+            while chunk := await response.content.read(LOG_CHUNK):
+                yield chunk
+
+    async def last_line(self, pod: str, limit: int) -> str:
+        """An ended pod's last log line, at most `limit` bytes read of it."""
+        text = await self.core.read_namespaced_pod_log(
+            pod, self.namespace, tail_lines=1, limit_bytes=limit
+        )
+        return str(text).rstrip("\n")
+
+
+# ---------------------------------------------------------------- the service
+
+
+class Watched:
+    """schedr's objects of one kind as the watch last said, by name, and their changes."""
+
+    def __init__(self) -> None:
+        """Empty until the watch says."""
+        self.objects: dict[str, dict[str, ExtensionJson]] = {}
+        # Those deleted lately: a call about one ends at once (agy's review: it waited for ever).
+        self.deleted: OrderedDict[str, None] = OrderedDict()
+        self.changed: asyncio.Condition = asyncio.Condition()
+        self.version: int = 0
+
+    def gone(self, name: str) -> None:
+        """`name` deleted: remembered, the oldest forgotten past `REMEMBERED`."""
+        self.deleted[name] = None
+        self.deleted.move_to_end(name)
+        while len(self.deleted) > REMEMBERED:
+            self.deleted.popitem(last=False)
+
+    async def follow(self, events: AsyncIterator[tuple[str, dict[str, ExtensionJson]]]) -> None:
+        """Keeps up with `events`."""
+        async for kind, value in events:
+            async with self.changed:
+                if kind == "SYNC":
+                    listed = [obj(item) for item in items(value.get("items"))]
+                    now = {str(obj(item.get("metadata")).get("name", "")): item for item in listed}
+                    for name in self.objects.keys() - now.keys():
+                        self.gone(name)
+                    self.objects = now
+                else:
+                    name = str(obj(value.get("metadata")).get("name", ""))
+                    if kind == "DELETED":
+                        self.objects.pop(name, None)
+                        self.gone(name)
+                    elif name:
+                        self.objects[name] = value
+                        self.deleted.pop(name, None)
+                self.version += 1
+                self.changed.notify_all()
+
+
+def stuck(pod: Mapping[str, ExtensionJson]) -> None:
     """Raises `PodFailedError` for a pod that will never start (its image can't be pulled)."""
-    for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
+    for container in items(obj(pod.get("status")).get("containerStatuses")):
         waiting = obj(obj(obj(container).get("state")).get("waiting"))
         if waiting.get("reason") in STUCK:
             reason = str(waiting["reason"])
             raise PodFailedError(f"{reason}: {waiting.get('message', '')}", waiting=reason)
 
 
-async def started_pod(kubectl: Kubectl, job: str) -> str:
-    """The Job's pod, once it runs or has ended.
-
-    Waited for here: `kubectl logs` waits only for a pod to run, never for one that has ended.
-    """
-    while True:
-        pods = items((await kubectl.json("get", "pods", "-l", f"job-name={job}")).get("items"))
-        for pod in pods:
-            stuck(pod)
-            if obj(obj(pod).get("status")).get("phase") in ("Running", "Succeeded", "Failed"):
-                return str(obj(obj(pod).get("metadata")).get("name"))
-        if obj((await kubectl.json("get", "job", job)).get("status")).get("failed"):
-            raise PodFailedError("the Job failed before its pod started")
-        await asyncio.sleep(POLL)
+def job_pods(
+    pods: Mapping[str, dict[str, ExtensionJson]], job: str
+) -> list[dict[str, ExtensionJson]]:
+    """The pods of Job `job`."""
+    return [
+        pod
+        for pod in pods.values()
+        if obj(obj(pod.get("metadata")).get("labels")).get("job-name") == job
+    ]
 
 
-async def stream_logs(kubectl: Kubectl, pod: str) -> None:
-    """The pod's log into the attempt's as it comes, byte for byte (no line is too long).
-
-    Only a view: the output is read from the pod once it ended (`output`), so a stream that
-    breaks loses lines of the log, never the result.
-    """
-    process = await asyncio.create_subprocess_exec(
-        *kubectl.base,
-        "logs",
-        "-f",
-        f"pod/{pod}",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert process.stdout is not None
-    assert process.stderr is not None
-    # Read beside the log: a full error pipe would stop `kubectl` and so the log.
-    errors = asyncio.create_task(process.stderr.read())
-    while chunk := await process.stdout.read(65536):
-        sys.stdout.buffer.write(chunk)
-        sys.stdout.buffer.flush()
-    error = (await errors).decode(errors="replace").strip()
-    if await process.wait() != 0:
-        print(f"kubectl logs stopped: {error}", file=sys.stderr, flush=True)
+def failure(failed: PodFailedError) -> dict[str, ExtensionJson]:
+    """A failure as a call's answer: its plugin tells its event from `waiting`."""
+    return {"failed": str(failed), "waiting": failed.waiting}
 
 
-async def output(kubectl: Kubectl, pod: str) -> ExtensionJson:
-    """The task's output: the ended pod's last log line `SCHEDR_OUTPUT: <json>`, else `None`.
+class LogTail:
+    """A pod's log followed for its plugin, at most `LOG_HELD` chunks ahead of it."""
 
-    Raises `RuntimeError` when the log can't be read: no output is guessed.
-    """
-    last = (await kubectl.run("logs", f"pod/{pod}", "--tail=1")).rstrip("\n")
-    if last.startswith(OUTPUT_PREFIX):
-        return decoded(last[len(OUTPUT_PREFIX) :])
-    return None
+    def __init__(self, chunks: AsyncIterator[bytes]) -> None:
+        """Followed from now."""
+        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue(LOG_HELD)
+        self.ended: bool = False
+        self.task: asyncio.Future[None] = asyncio.ensure_future(self._follow(chunks))
+
+    def close(self) -> None:
+        """Stops following: its stream closed."""
+        self.task.cancel()
+
+    async def _follow(self, chunks: AsyncIterator[bytes]) -> None:
+        try:
+            async for chunk in chunks:
+                await self.queue.put(chunk)
+        except Exception as e:  # only a view: the output is read apart
+            log.warning("a pod's log stopped: %s", e)
+        await self.queue.put(None)
+
+    async def next(self) -> tuple[bytes, bool]:
+        """What came since, at most `LOG_CHUNK` bytes, and whether the log has ended.
+
+        It waits `LOG_WAIT` for some, then answers with none.
+        """
+        if self.ended:
+            return b"", True
+        try:
+            chunk = await asyncio.wait_for(self.queue.get(), LOG_WAIT)
+        except TimeoutError:
+            return b"", False
+        data = bytearray()
+        while chunk is not None:
+            data += chunk
+            if len(data) >= LOG_CHUNK or self.queue.empty():
+                break
+            chunk = self.queue.get_nowait()
+        if chunk is None:
+            self.ended = True
+        return bytes(data), self.ended
 
 
-async def outcome(kubectl: Kubectl, job: str) -> None:
-    """Waits for the Job's end: returns on success, raises `PodFailedError` on failure."""
-    while True:
-        status = obj((await kubectl.json("get", "job", job)).get("status"))
-        if status.get("succeeded"):
-            return
-        pods = items((await kubectl.json("get", "pods", "-l", f"job-name={job}")).get("items"))
-        for pod in pods:
-            stuck(pod)
-            for container in items(obj(obj(pod).get("status")).get("containerStatuses")):
-                ended = obj(obj(obj(container).get("state")).get("terminated"))
-                if status.get("failed") and ended:
-                    reason, code = ended.get("reason", "Error"), ended.get("exitCode")
-                    raise PodFailedError(f"the pod ended {reason} with exit code {code}")
-        if status.get("failed"):
-            raise PodFailedError("the Job failed")
-        await asyncio.sleep(POLL)
+class KubernetesService:
+    """The service: the cluster, its watches and the plugins' calls."""
+
+    def __init__(self, cluster: Cluster) -> None:
+        """Of `cluster`, connected at its start."""
+        self.cluster: Cluster = cluster
+        self.pods: Watched = Watched()
+        self.jobs: Watched = Watched()
+        self.logs: dict[str, LogTail] = {}
+        # Which attempt follows which pods' logs: closed with its connection (agy's review: a
+        # plugin gone left its log followed for ever).
+        self.followed: dict[str, set[str]] = {}
+        # One `submit` or `delete` of a Job at a time; a Job deleted is never created after.
+        self.locks: dict[str, asyncio.Lock] = {}
+        self.deleted: OrderedDict[str, None] = OrderedDict()
+        self.tasks: set[asyncio.Future[None]] = set()
+        self.context: ServiceContext | None = None
+
+    def _keep(self, work: Awaitable[None]) -> None:
+        task = asyncio.ensure_future(work)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def start(self, context: ServiceContext) -> None:
+        """Connects and starts watching, before it says it is ready."""
+        self.context = context
+        await self.cluster.open()
+        self._keep(self.pods.follow(self.cluster.watch("pods")))
+        self._keep(self.jobs.follow(self.cluster.watch("jobs")))
+        self._keep(self.gauges())
+        await context.status("watching", f"namespace {self.cluster.namespace}")
+
+    async def stop(self) -> None:
+        """SIGTERM: its log streams and watches stopped, then its connections closed."""
+        for tail in self.logs.values():
+            tail.close()
+        stopping = [tail.task for tail in self.logs.values()]
+        for task in list(self.tasks):
+            task.cancel()
+            stopping.append(task)
+        await asyncio.gather(*stopping, return_exceptions=True)
+        self.logs.clear()
+        await self.cluster.close()
+
+    async def on_closed(self, attempt: ServiceAttempt) -> None:
+        """An attempt's connection closed: the logs it followed are let go."""
+        for pod in self.followed.pop(attempt.attempt_id, set()):
+            tail = self.logs.pop(pod, None)
+            if tail is not None:
+                tail.close()
+
+    def lock(self, job: str) -> asyncio.Lock:
+        """Job `job`'s lock; those not held are forgotten past `REMEMBERED`."""
+        if len(self.locks) > REMEMBERED:
+            self.locks = {name: held for name, held in self.locks.items() if held.locked()}
+        return self.locks.setdefault(job, asyncio.Lock())
+
+    async def gauges(self) -> None:
+        """The namespace's pods as gauges, told when they change.
+
+        Every worker sees the same pods, so the panels combine them with `max`.
+        """
+        told: dict[str, float] = {}
+        seen = -1
+        while True:
+            async with self.pods.changed:
+                while self.pods.version == seen:
+                    await self.pods.changed.wait()
+                seen = self.pods.version
+                phases: dict[str, float] = {}
+                for pod in self.pods.objects.values():
+                    phase = str(obj(pod.get("status")).get("phase", "Unknown"))
+                    phases[phase] = phases.get(phase, 0) + 1
+            now = {
+                "pods_running": phases.get("Running", 0.0),
+                "pods_pending": phases.get("Pending", 0.0),
+            }
+            now.update({f"pods:{phase}": count for phase, count in phases.items()})
+            # A phase gone is told as 0 once.
+            now.update({key: 0.0 for key in told if key.startswith("pods:") and key not in now})
+            if self.context is None:
+                continue
+            for key, value in now.items():
+                if told.get(key) == value:
+                    continue
+                if key.startswith("pods:"):
+                    await self.context.metric("pods", value, phase=key.removeprefix("pods:"))
+                else:
+                    await self.context.metric(key, value)
+                told[key] = value
+
+    async def on_call(self, attempt: ServiceAttempt, method: str, args: object) -> object:
+        """A plugin's call."""
+        given = obj(args)
+        if method == "submit":
+            return await self.submit(given)
+        if method == "started":
+            return await self.started(str(given.get("job")))
+        if method == "ended":
+            return await self.ended(str(given.get("job")))
+        if method == "logs":
+            pod = str(given.get("pod"))
+            self.followed.setdefault(attempt.attempt_id, set()).add(pod)
+            return await self.log_chunk(pod)
+        if method == "output":
+            # Read whole, so capped (Grok's review: one huge line took the shared service past
+            # its memory): one byte past the task's `max_output_size` says it is over.
+            limit = min(int(str(given.get("max_output_size", MAX_OUTPUT_READ))), MAX_OUTPUT_READ)
+            last = await self.cluster.last_line(str(given.get("pod")), limit + 1)
+            if len(last.encode()) > limit:
+                raise ValueError(f"the output line is over {limit} bytes")
+            return decoded(last[len(OUTPUT_PREFIX) :]) if last.startswith(OUTPUT_PREFIX) else None
+        if method == "delete":
+            namespace = str(given.get("namespace") or self.cluster.namespace)
+            job = str(given.get("job"))
+            # After a `submit` in flight, and before any later one (agy's review: a stop during
+            # `submit` deleted nothing, the Job created after).
+            async with self.lock(job):
+                self.deleted[job] = None
+                while len(self.deleted) > REMEMBERED:
+                    self.deleted.popitem(last=False)
+                await self.cluster.delete_job(job, namespace)
+                await self.cluster.delete_secret(secret_name(job), namespace)
+            return {"deleted": job}
+        raise ValueError(f"unknown method `{method}`")
+
+    async def submit(self, given: Mapping[str, ExtensionJson]) -> object:
+        """The task's Secret and Job.
+
+        The Secret holds its secret variables (if any); made the Job's once the Job exists, it is
+        deleted with it. A step failing undoes what it made (agy's review: a Secret, or a running
+        Job, was left behind); a Job already deleted is never created.
+        """
+        job = str(given.get("job"))
+        payload = checked(given.get("payload"))
+        values = {str(k): str(v) for k, v in obj(given.get("secrets")).items()}
+        async with self.lock(job):
+            if job in self.deleted:
+                raise PodFailedError("the Job was deleted before it was created")
+            namespace = self.cluster.namespace
+            if values:
+                await self.cluster.create_secret(secret_name(job), values)
+            try:
+                uid = await self.cluster.create_job(manifest(job, payload, sorted(values)))
+            except BaseException:
+                if values:
+                    with contextlib.suppress(Exception):
+                        await self.cluster.delete_secret(secret_name(job), namespace)
+                raise
+            if values:
+                try:
+                    await self.cluster.own_secret(secret_name(job), job, uid)
+                except BaseException:
+                    with contextlib.suppress(Exception):
+                        await self.cluster.delete_job(job, namespace)
+                        await self.cluster.delete_secret(secret_name(job), namespace)
+                    raise
+        return {"job": job}
+
+    async def started(self, job: str) -> object:
+        """Its pod's name once it runs or has ended; a failure when it never will."""
+
+        def found() -> str | None:
+            if job in self.jobs.deleted:
+                raise PodFailedError("the Job was deleted")
+            for pod in job_pods(self.pods.objects, job):
+                stuck(pod)
+                if obj(pod.get("status")).get("phase") in ("Running", "Succeeded", "Failed"):
+                    return str(obj(pod.get("metadata")).get("name"))
+            if obj(self.jobs.objects.get(job, {}).get("status")).get("failed"):
+                raise PodFailedError("the Job failed before its pod started")
+            return None
+
+        try:
+            return {"pod": await self.watched(found)}
+        except PodFailedError as e:
+            return failure(e)
+
+    async def ended(self, job: str) -> object:
+        """Its end: succeeded, or its failure."""
+        failed_at: list[float] = []
+
+        def found() -> bool | None:
+            if job in self.jobs.deleted:
+                raise PodFailedError("the Job was deleted")
+            status = obj(self.jobs.objects.get(job, {}).get("status"))
+            if status.get("succeeded"):
+                return True
+            for pod in job_pods(self.pods.objects, job):
+                stuck(pod)
+                for container in items(obj(pod.get("status")).get("containerStatuses")):
+                    ended = obj(obj(obj(container).get("state")).get("terminated"))
+                    if status.get("failed") and ended:
+                        reason, code = ended.get("reason", "Error"), ended.get("exitCode")
+                        raise PodFailedError(f"the pod ended {reason} with exit code {code}")
+            if status.get("failed"):
+                # Its pod's reason may come a moment later, on the other watch (agy's review).
+                if not failed_at:
+                    failed_at.append(time.monotonic())
+                if time.monotonic() - failed_at[0] >= FAILURE_DETAIL_SECONDS:
+                    raise PodFailedError("the Job failed")
+            return None
+
+        try:
+            await self.watched(found)
+        except PodFailedError as e:
+            return failure(e)
+        return {"succeeded": True}
+
+    async def watched[T](self, found: Callable[[], T | None]) -> T:
+        """`found` against the pods and the Jobs, looked at again after each change of either."""
+        seen = (-1, -1)
+        while True:
+            now = (self.pods.version, self.jobs.version)
+            if now != seen:
+                seen = now
+                answer = found()
+                if answer is not None:
+                    return answer
+            waits = [
+                asyncio.ensure_future(self._changed(self.pods, seen[0])),
+                asyncio.ensure_future(self._changed(self.jobs, seen[1])),
+            ]
+            try:
+                # Looked at again each second as well: some answers wait on time, not a change.
+                await asyncio.wait(waits, timeout=1.0, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for wait in waits:
+                    wait.cancel()
+            seen = (-1, -1)
+
+    @staticmethod
+    async def _changed(watched: Watched, since: int) -> None:
+        async with watched.changed:
+            while watched.version == since:
+                await watched.changed.wait()
+
+    async def log_chunk(self, pod: str) -> object:
+        """The pod's log since the last call, base64."""
+        tail = self.logs.get(pod)
+        if tail is None:
+            tail = self.logs[pod] = LogTail(self.cluster.follow_logs(pod))
+        data, ended = await tail.next()
+        if ended:
+            self.logs.pop(pod, None)
+        return {"data": base64.b64encode(data).decode(), "eof": ended}
 
 
-# Its metrics and page (decision 513), declared in its hello: the page shows these panels, a
-# metric no panel shows in a row of its own below them.
+# ---------------------------------------------------------------- the plugin
+
+
+# Its metrics and page (decision 513), declared in its hello: every chart kind on its figures.
 METRICS: list[MetricDeclaration] = [
     {
         "name": "jobs_started",
@@ -295,12 +793,17 @@ METRICS: list[MetricDeclaration] = [
         "labels": [{"name": "namespace"}],
     },
     {
+        "name": "jobs_by_image",
+        "kind": "counter",
+        "help": "Jobs created, by image",
+        "labels": [{"name": "image"}],
+    },
+    {
         "name": "jobs_ended",
         "kind": "counter",
         "help": "Jobs ended, by outcome",
         "labels": [{"name": "outcome", "values": ["succeeded", "failed", "stopped"]}],
     },
-    {"name": "pods_running", "kind": "gauge", "help": "schedr's pods running in the namespace"},
     {
         "name": "start_seconds",
         "kind": "histogram",
@@ -315,6 +818,15 @@ METRICS: list[MetricDeclaration] = [
         "unit": "seconds",
         "buckets": [1, 5, 15, 60, 300, 900, 3600],
     },
+    # The service's, from its watch of the namespace.
+    {"name": "pods_running", "kind": "gauge", "help": "schedr's pods running in the namespace"},
+    {"name": "pods_pending", "kind": "gauge", "help": "schedr's pods waiting to start"},
+    {
+        "name": "pods",
+        "kind": "gauge",
+        "help": "schedr's pods in the namespace, by phase",
+        "labels": [{"name": "phase"}],
+    },
 ]
 # Its notification events (M5.2i8): told to the channels of a DAG subscribed to
 # `Notify.EXTENSION_EVENT`, its attempt failing as before.
@@ -324,7 +836,7 @@ NOTIFICATIONS: list[NotificationDeclaration] = [
 ]
 
 PANELS: list[PanelDeclaration] = [
-    # Every worker counts the namespace's pods (decision 516): the highest, not their sum.
+    # Every worker watches the same namespace (decision 516): the highest, not their sum.
     {
         "title": "Pods running",
         "metric": "pods_running",
@@ -363,23 +875,31 @@ PANELS: list[PanelDeclaration] = [
         "row": 2,
         "cell": "right",
     },
-    {"title": "Workers", "chart": "events", "row": 3, "cell": "full"},
+    {
+        "title": "Pods pending",
+        "metric": "pods_pending",
+        "chart": "line",
+        "row": 3,
+        "cell": "left",
+        "combine": "max",
+    },
+    {
+        "title": "Pods by phase",
+        "metric": "pods",
+        "chart": "table",
+        "row": 3,
+        "cell": "right",
+        "combine": "max",
+    },
+    {
+        "title": "Jobs by image",
+        "metric": "jobs_by_image",
+        "chart": "bars",
+        "row": 4,
+        "cell": "full",
+    },
+    {"title": "Workers", "chart": "events", "row": 5, "cell": "full"},
 ]
-
-log = logging.getLogger("schedr-ext-kubernetes")
-
-
-async def running_pods(kubectl: Kubectl, channel: ExtensionChannel) -> None:
-    """The gauge: schedr's pods running in the namespace now, as the cluster says."""
-    with contextlib.suppress(RuntimeError, ValueError):
-        pods = await kubectl.json(
-            "get",
-            "pods",
-            "-l",
-            "app.kubernetes.io/managed-by=schedr",
-            "--field-selector=status.phase=Running",
-        )
-        await channel.metric("pods_running", float(len(items(pods.get("items")))))
 
 
 class Ui:
@@ -400,61 +920,100 @@ class Ui:
         return f"{self.address}/#/{kind}/{namespace}/{name}?namespace={namespace}"
 
 
-def make_run(kubectl: Kubectl, ui: Ui | None) -> Run:
-    """The attempt: a Job created, its log streamed, its end taken as the task's."""
+async def secret_values(
+    payload: Mapping[str, ExtensionJson], channel: ExtensionChannel
+) -> dict[str, str]:
+    """The task's declared secrets its variables name, read through the worker."""
+    values: dict[str, str] = {}
+    for variable, reference in obj(payload.get("secret_env")).items():
+        path, _, key = str(reference).partition("#")
+        values[str(variable)] = str(await channel.secret(path, key or None))
+    return values
 
-    def links_for(kind: str, name: str) -> str | None:
+
+async def write_log(channel: ExtensionChannel, pod: str) -> None:
+    """The pod's log into the attempt's as it comes, byte for byte (no line is too long).
+
+    Only a view: the output is read once the pod ended, so a log that breaks loses lines of the
+    log, never the result.
+    """
+    while True:
+        chunk = obj(await channel.service.call("logs", {"pod": pod}))
+        sys.stdout.buffer.write(base64.b64decode(str(chunk.get("data", ""))))
+        sys.stdout.buffer.flush()
+        if chunk.get("eof"):
+            return
+
+
+async def never_started(
+    channel: ExtensionChannel, where: tuple[str, str], started: Mapping[str, ExtensionJson]
+) -> None:
+    """A pod that never started: its event told, the Job counted as failed; raises."""
+    job, namespace = where
+    waiting = started.get("waiting")
+    # Told to the DAG's channels subscribed to EXTENSION_EVENT (M5.2i8).
+    if isinstance(waiting, str):
+        event = "image_pull_failed" if "Image" in waiting else "pod_stuck"
+        await channel.notify(
+            event,
+            f"job {job}: {started['failed']}",
+            {"job": job, "namespace": namespace, "reason": waiting},
+        )
+    # Counted as ended too (agy's review: started, it never ended on the page).
+    await channel.metric("jobs_ended", 1, outcome="failed")
+    await channel.status("failed", progress=1.0)
+    raise PodFailedError(str(started["failed"]))
+
+
+def make_run(namespace: str, ui: Ui | None) -> Run:
+    """The attempt: a Job through the service, its log written, its end taken as the task's."""
+
+    def link_to(kind: str, name: str) -> str | None:
         # The UI's page of a Job or a pod, when its address is given.
-        if ui is None:
-            return None
-        return ui.page_url(kind, kubectl.namespace, name)
+        return None if ui is None else ui.page_url(kind, namespace, name)
 
     async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
         payload = checked(request.payload)
         job = job_name(request)
-        env = await environment(payload, channel)
+        secrets = await secret_values(payload, channel)
+        service = channel.service
         # Registered before the Job exists: a worker lost right after creating it leaves a
         # handle its cleanup deletes the Job by.
-        await channel.add_handle("job", {"name": job, "namespace": kubectl.namespace})
+        await channel.add_handle("job", {"name": job, "namespace": namespace})
         await channel.status("creating", f"job {job}", progress=0.0)
         try:
-            await kubectl.run("create", "-f", "-", stdin=json.dumps(manifest(job, payload, env)))
+            await service.call("submit", {"job": job, "payload": payload, "secrets": secrets})
             created = time.monotonic()
-            log.info("created job %s", job, extra={"namespace": kubectl.namespace})
-            await channel.metric("jobs_started", 1, namespace=kubectl.namespace)
-            if (url := links_for("job", job)) is not None:
+            log.info("created job %s", job, extra={"namespace": namespace})
+            await channel.metric("jobs_started", 1, namespace=namespace)
+            await channel.metric("jobs_by_image", 1, image=str(payload["image"]))
+            if (url := link_to("job", job)) is not None:
                 await channel.link("Job", url)
             await channel.status("pending", "waiting for its pod", progress=0.1)
-            try:
-                pod = await started_pod(kubectl, job)
-            except PodFailedError as e:
-                # Told to the DAG's channels subscribed to EXTENSION_EVENT (M5.2i8).
-                if e.waiting is not None:
-                    event = "image_pull_failed" if "Image" in e.waiting else "pod_stuck"
-                    await channel.notify(
-                        event,
-                        f"job {job}: {e}",
-                        {"job": job, "namespace": kubectl.namespace, "reason": e.waiting},
-                    )
-                raise
-            started = time.monotonic()
-            await channel.metric("start_seconds", started - created)
+            started = obj(await service.call("started", {"job": job}))
+            if "failed" in started:
+                await never_started(channel, (job, namespace), started)
+            pod = str(started["pod"])
+            begun = time.monotonic()
+            await channel.metric("start_seconds", begun - created)
             await channel.status("running", f"pod {pod}", progress=0.5)
-            if (url := links_for("pod", pod)) is not None:
+            if (url := link_to("pod", pod)) is not None:
                 await channel.link("Pod", url)
-            await running_pods(kubectl, channel)
-            await stream_logs(kubectl, pod)
-            try:
-                await outcome(kubectl, job)
-            except PodFailedError:
+            await write_log(channel, pod)
+            ended = obj(await service.call("ended", {"job": job}))
+            if "failed" in ended:
                 await channel.metric("jobs_ended", 1, outcome="failed")
                 await channel.status("failed", progress=1.0)
-                raise
-            await channel.metric("job_seconds", time.monotonic() - started)
+                raise PodFailedError(str(ended["failed"]))
+            # Its output read before it is told succeeded (agy's review: one that couldn't be read
+            # failed the attempt after "succeeded").
+            output = await service.call(
+                "output", {"pod": pod, "max_output_size": request.max_output_size}
+            )
+            await channel.metric("job_seconds", time.monotonic() - begun)
             await channel.metric("jobs_ended", 1, outcome="succeeded")
             await channel.status("succeeded", progress=1.0)
-            await running_pods(kubectl, channel)
-            return await output(kubectl, pod)
+            return output
         except asyncio.CancelledError:
             # SIGTERM (decision 513): asked why. A cancel, a timeout or a drain: the Job goes
             # with the attempt (a drained one runs again elsewhere). A lost master: left to the
@@ -462,7 +1021,7 @@ def make_run(kubectl: Kubectl, ui: Ui | None) -> Run:
             reason, left = await channel.stop_reason()
             log.warning("stopped: %s", reason, extra={"grace_seconds": round(left, 1)})
             if reason != "master_lost":
-                kubectl.delete_now(job)
+                await service.call("delete", {"job": job, "namespace": namespace})
                 log.info("deleted job %s", job)
             await channel.metric("jobs_ended", 1, outcome="stopped")
             raise
@@ -470,30 +1029,29 @@ def make_run(kubectl: Kubectl, ui: Ui | None) -> Run:
     return run
 
 
-def make_cleanup(kubectl: Kubectl) -> Run:
-    """After each attempt: its Job deleted, whatever its end (a lost worker's too)."""
+async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
+    """After each attempt: its Job deleted, whatever its end (a lost worker's too).
 
-    async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
-        del channel
-        deleted: list[ExtensionJson] = []
-        for handle in request.handles:
-            value = obj(handle.value)
-            name, namespace = value.get("name"), value.get("namespace")
-            if handle.type == "job" and isinstance(name, str):
-                # In the namespace the attempt created it in, which this worker's may not be
-                # (a cleanup moved to another worker).
-                where = kubectl.in_namespace(namespace) if isinstance(namespace, str) else kubectl
-                await where.run("delete", "job", name, "--ignore-not-found", "--wait=false")
-                print(f"deleted job {name} in {where.namespace}", flush=True)
-                deleted.append(name)
-        return {"deleted": deleted}
+    In the namespace the attempt created it in, which this worker's may not be.
+    """
+    deleted: list[ExtensionJson] = []
+    for handle in request.handles:
+        value = obj(handle.value)
+        name, namespace = value.get("name"), value.get("namespace")
+        if handle.type == "job" and isinstance(name, str):
+            await channel.service.call("delete", {"job": name, "namespace": namespace})
+            print(f"deleted job {name} in {namespace}", flush=True)
+            deleted.append(name)
+    return {"deleted": deleted}
 
-    return cleanup
+
+# ---------------------------------------------------------------- the program
 
 
 class Options(argparse.Namespace):
     """Its options, typed."""
 
+    service: bool = False
     namespace: str = "default"
     context: str | None = None
     kubeconfig: str | None = None
@@ -502,9 +1060,10 @@ class Options(argparse.Namespace):
     headlamp_cluster: str = "main"
 
 
-def parsed(argv: list[str]) -> tuple[Kubectl, Ui | None]:
-    """Its options: the `kubectl` it drives and the UI its links go to."""
+def parsed(argv: list[str]) -> Options:
+    """Its options."""
     parser = argparse.ArgumentParser(prog="schedr-ext-kubernetes")
+    parser.add_argument("--service", action="store_true", help="run as the extension's service")
     parser.add_argument("--namespace", default="default")
     parser.add_argument("--context")
     parser.add_argument("--kubeconfig")
@@ -512,28 +1071,43 @@ def parsed(argv: list[str]) -> tuple[Kubectl, Ui | None]:
     where.add_argument("--headlamp", help="Headlamp's address, for links to Jobs and pods")
     where.add_argument("--dashboard", help="the Kubernetes Dashboard's address, for links")
     parser.add_argument("--headlamp-cluster", default="main", help="the cluster's name in Headlamp")
-    options = parser.parse_args(argv, namespace=Options())
-    kubectl = Kubectl(options.namespace, options.context, options.kubeconfig)
+    return parser.parse_args(argv, namespace=Options())
+
+
+def ui_of(options: Options) -> Ui | None:
+    """The UI its links go to, if one is given."""
     if options.headlamp is not None:
-        return kubectl, Ui("headlamp", options.headlamp, options.headlamp_cluster)
+        return Ui("headlamp", options.headlamp, options.headlamp_cluster)
     if options.dashboard is not None:
-        return kubectl, Ui("dashboard", options.dashboard)
-    return kubectl, None
+        return Ui("dashboard", options.dashboard)
+    return None
 
 
-def entry(argv: list[str]) -> int:
-    """Its options, then the helper's loop (`--describe` alone is the helper's)."""
-    ui = None
+def entry(argv: list[str], cluster: Cluster | None = None) -> int:
+    """The service (`--service`) or the plugin, of its options.
+
+    `--describe` alone is the plugin helper's; `cluster` stands in for the real one in tests.
+    """
     if argv == ["--describe"]:
-        kubectl = Kubectl("default", None, None)
+        options, argv = Options(), ["--describe"]
     else:
-        kubectl, ui = parsed(argv)
-        argv = []
+        options, argv = parsed(argv), []
+    if options.service:
+        kube = cluster or KubeCluster(options.namespace, options.context, options.kubeconfig)
+        service = KubernetesService(kube)
+        return serve(
+            service.on_call,
+            name="kubernetes",
+            versions=["1.0"],
+            start=service.start,
+            stop=service.stop,
+            on_closed=service.on_closed,
+        )
     return main(
-        make_run(kubectl, ui),
+        make_run(options.namespace, ui_of(options)),
         name="kubernetes",
         versions=["1.0"],
-        cleanup=make_cleanup(kubectl),
+        cleanup=cleanup,
         metrics=METRICS,
         panels=PANELS,
         notifications=NOTIFICATIONS,
@@ -542,4 +1116,5 @@ def entry(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(entry(sys.argv[1:]))
+    with contextlib.suppress(KeyboardInterrupt):
+        raise SystemExit(entry(sys.argv[1:]))

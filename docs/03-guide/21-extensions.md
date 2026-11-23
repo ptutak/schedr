@@ -641,15 +641,20 @@ ways. `python/schedr/_service.py` is a complete service in about 300 lines, to r
 ## The Kubernetes plugin
 
 `examples/extensions/kubernetes/schedr-ext-kubernetes` runs each attempt as a Kubernetes Job,
-driving `kubectl`. It is short enough to read whole, and shows what a plugin should do:
+with [a service](#building-a-service-in-python) beside its plugin (M5.2i11): one program, run as
+the service with `--service`. The service holds the one `kubernetes_asyncio` client and watches
+the namespace's Jobs and pods; the plugin calls it for everything in the cluster. It shows what
+a plugin and a service should do:
 
 | | |
 |---|---|
 | The attempt | a Job named after the task, its run and its try, one pod, never restarted (`backoffLimit: 0`: schedr retries), with no API token (`automountServiceAccountToken: false`) |
 | The payload | each field's type checked before anything is created; an unknown field or a mistyped one fails the attempt |
 | Before creating it | registers the Job's name as a cleanup handle, so a worker lost right after still leaves it findable |
-| While it runs | the pod's log streamed into the attempt's log (`kubectl logs -f`); its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and links to its Job and pod in Headlamp (`--headlamp <address>`) or the Kubernetes Dashboard (`--dashboard <address>`) |
-| Its metrics | `jobs_started` by namespace, `jobs_ended` by outcome, `pods_running` (as the cluster counts schedr's), `start_seconds` (to a running pod) and `job_seconds`, with a page of six panels declared in its hello |
+| Its secrets | the task's secret variables (`secret_env`) put in a Kubernetes Secret of the Job's own (owned by it, deleted with it), the Job reading them from it: never written in the Job |
+| Its pod | its start and end answered by the service's watch on the namespace, never polled |
+| While it runs | the pod's log followed by the service and written into the attempt's log; its own lines through `logging`, structured; its phases (`creating`, `pending`, `running`, `succeeded` or `failed`) and links to its Job and pod in Headlamp (`--headlamp <address>`) or the Kubernetes Dashboard (`--dashboard <address>`) |
+| Its metrics | the plugin's: `jobs_started` by namespace, `jobs_by_image`, `jobs_ended` by outcome, `start_seconds` (to a running pod) and `job_seconds`; the service's, from its watch: `pods_running`, `pods_pending` and `pods` by phase, the same on every worker, so their panels combine them with `max`. A page of nine panels declared in its hello, one of each chart kind |
 | The output | the ended pod's last log line `SCHEDR_OUTPUT: <json>`, read once the Job succeeded, never from the stream; without it, `null`; a log that can't be read fails the attempt |
 | A failure | the pod's reason and exit code; a pod stuck on its image (`ErrImagePull`) fails at once, told first as its declared event `image_pull_failed` (`pod_stuck` for another reason it never starts) to channels subscribed to `EXTENSION_EVENT` |
 | Being stopped | SIGTERM: it asks why; on a cancel, a timeout or a drain it deletes its Job, on a lost master it leaves it to the cleanup |
@@ -676,16 +681,15 @@ ExtensionTask(
 )
 ```
 
-A secret given as a variable is visible to anyone who can read the Job: that is for the
-example; a real plugin would put it in a Kubernetes Secret.
-
-On a worker, `kubectl` must work for the worker's user (its kubeconfig in `HOME`, or the pod's
-service account), allowed to create, get and delete Jobs and to get pods and their logs in the
-namespace:
+On a worker, the service's user needs a kubeconfig (in `HOME`, or `--kubeconfig`; in a
+cluster, the pod's service account) allowed to create, get, watch, patch and delete Jobs, pods,
+pods' logs and Secrets in the namespace; `kubernetes_asyncio` installed beside schedr (the
+example's own dependency, never schedr's). The same options for both:
 
 ```toml
 [extensions.kubernetes]
 command = ["/opt/schedr/schedr-ext-kubernetes", "--namespace", "batch"]  # also --context, --kubeconfig
+service = ["/opt/schedr/schedr-ext-kubernetes", "--service", "--namespace", "batch"]
 versions = ["1.0"]
 ```
 

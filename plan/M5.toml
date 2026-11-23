@@ -625,7 +625,8 @@ scope = '''
 done_when = '''
 `make demo-kind` runs the widened plugin: its Jobs succeed and fail as before (the existing standalone and kind tests pass), its pod watched, not polled; two workers show a cluster-wide gauge once with `combine: max`; each chart kind drawn with points on its page
 '''
-status = "planned"
+status = "done"
+done = 2026-11-23
 
 [[steps]]
 id = "M5.2i12"

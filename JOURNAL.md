@@ -3170,3 +3170,27 @@ hide them. Then: "the hide option might stay, just different naming"; Claude off
 `builtin_service_metrics`, not collected when off; the user: "builtin_service_metrics, stops
 collecting, someone might want to keep only one of the three (two)?": `true`, `false`, or a list
 of the metrics' names.
+
+### 2026-11-23: M5.2i11's choices (the Kubernetes extension with its service)
+
+Claude's, building M5.2i11 alone (the user asleep, the night pre-accepted):
+
+- The service owns the cluster: the one `kubernetes_asyncio` client and the watches of the
+  namespace's Jobs and pods; the plugin calls it for everything there (`submit`, `started`,
+  `ended`, `logs`, `output`, `delete`). Not chosen: a client in each plugin too, beside the
+  service's (the shared client was the point of the step).
+- The task's secret variables go in a Secret of the Job's own, created before the Job and made
+  its owner's once the Job exists, so it goes with it; the Job reads them by `secretKeyRef`.
+- The pod's log reaches the attempt's log through `logs` calls, base64 chunks of at most 64 KiB,
+  the service holding at most 64 chunks ahead (the log followed no faster).
+- Its pod template is labelled `app.kubernetes.io/managed-by=schedr` too: the old plugin labelled
+  only the Job, so its pods-running count, selecting pods by that label, never found one.
+- Tests against an in-memory fake cluster behind a `Cluster` interface (the plugin, the real
+  service and the fake in one process); the real client proved on kind
+  (`scripts/kind-extension.sh`, all its cases passing), where a client made outside the event
+  loop was found and fixed.
+- `kubernetes_asyncio` is in the dev group only (the tests and the type checks import it; schedr
+  never does).
+- The plan's "two workers show a cluster-wide gauge once with `combine: max`" isn't shown on kind:
+  `make demo-kind` runs one standalone, and standalone's in-memory TLS (M5.2i14) admits no outside
+  worker. The panels declare `combine: max`; M5.2i10's tests show the combining.

@@ -67,6 +67,8 @@ mkdir -p "$WORK/dags"
 cp "$ROOT/examples/extensions/kubernetes_extension.py" "$WORK/dags/"
 # The Dashboard's address only names the links (decision 513): none needs to answer here.
 export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__COMMAND="[\"$PLUGIN\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\", \"--dashboard\", \"https://dashboard.example\"]"
+# Its service (M5.2i11): the client and the namespace's watches the attempts share.
+export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__SERVICE="[\"$PLUGIN\", \"--service\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\"]"
 # Its metrics' figures sent at once, not once a minute.
 export SCHEDR_HIDDEN__WORKER__EXTENSION_FIGURES_INTERVAL=2s
 export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__VERSIONS='["1.0"]'
@@ -153,17 +155,26 @@ import json, sys
 a = json.load(sys.stdin)["attempts"][0]
 print(" ".join(s["phase"] for s in a["statuses"]), "|", " ".join(l["label"] for l in a["links"]))')
 [ "$reported" = "creating pending running succeeded | Job Pod" ] || fail "pod_runs's reports: $reported"
+# Every chart kind on its page (M5.2i11).
+kinds='bars events histogram line number quantiles rate stacked table'
 for _ in $(seq 1 30); do
     panels=$(curl -s http://127.0.0.1:8080/api/v1/extensions/kubernetes \
-        | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("panels", [])))' 2>/dev/null || true)
-    [ "$panels" = 6 ] && break
+        | python3 -c 'import json,sys; print(" ".join(sorted(p["chart"] for p in json.load(sys.stdin).get("panels", []))))' 2>/dev/null || true)
+    [ "$panels" = "$kinds" ] && break
     sleep 1
 done
-[ "$panels" = 6 ] || fail "the extension's page has $panels panels, not 6"
+[ "$panels" = "$kinds" ] || fail "the extension's page's charts: $panels, not $kinds"
 ops=$(grep -o 'ops on http://[0-9.:]*' "$WORK/standalone.log" | tail -1 | sed 's|ops on ||; s|0.0.0.0|127.0.0.1|')
 curl -s "$ops/metrics" | grep -q '^schedr_extension_kubernetes_jobs_started_total{namespace="'"$NAMESPACE"'"' \
     || fail "the worker's /metrics has no jobs_started"
-echo "ok: phases and links on the attempt, six panels, jobs_started on /metrics"
+# The service's gauge, from its watch of the namespace.
+for _ in $(seq 1 30); do
+    curl -s "$ops/metrics" | grep -q '^schedr_extension_kubernetes_pods{' && break
+    sleep 1
+done
+curl -s "$ops/metrics" | grep -q '^schedr_extension_kubernetes_pods{' \
+    || fail "the worker's /metrics has no pods gauge from the service"
+echo "ok: phases and links on the attempt, every chart kind, jobs_started and the service's pods gauge on /metrics"
 
 say "pod_fails: the pod's reason"
 "$SCHEDR" runs trigger pod_fails >/dev/null

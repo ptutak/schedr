@@ -72,6 +72,7 @@ dev = [
     # Their type stubs (neither ships its own); the newest at least two weeks old.
     "types-paramiko==5.0.0.20261006",
     "types-PyMySQL==1.2.0.20260923",
+    "kubernetes-asyncio>=32",
 ]
 # The web UI's browser tests (`make test-ui`, decision 27A); not in `uv sync`'s default.
 ui-test = [

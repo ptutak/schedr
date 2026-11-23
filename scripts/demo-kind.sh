@@ -153,6 +153,8 @@ up() {
     ui
     cp "$ROOT/examples/extensions/kubernetes_demo.py" "$DIR/dags/"
     export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__COMMAND="[\"$PLUGIN\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\", \"--headlamp\", \"http://127.0.0.1:$UI_PORT\"]"
+    # Its service (M5.2i11): the client and the namespace's watches the attempts share.
+    export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__SERVICE="[\"$PLUGIN\", \"--service\", \"--namespace\", \"$NAMESPACE\", \"--context\", \"$CONTEXT\"]"
     export SCHEDR_CONFIG__EXTENSIONS__KUBERNETES__VERSIONS='["1.0"]'
     cat <<EOF
 

@@ -4,7 +4,7 @@
 updated = 2026-11-23
 
 in_progress = [
-    "M5.2i9 (D518, DN29-DN33) finished, being pushed: an extension's service, its supervisor in the worker, Python's serve() and channel.service.call(), the Rust crate's service_call, task-ctx extension call, the maintenance drain told (DN33); agy's 11 and Grok's 4 findings fixed; docs accepted by the user. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i11, i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split).",
+    "M5.2i11 finished, being pushed: the Kubernetes plugin on kubernetes_asyncio through its extension's service (watches of Jobs and pods, a Secret per Job, every chart kind, the service's pods gauge); agy's 8 findings fixed; kind passes. Its done-when's two-worker gauge can't be shown on kind (standalone's in-memory mTLS admits no outside worker), journaled. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split). For the user in the morning: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).",
 ]
 
 waiting = []

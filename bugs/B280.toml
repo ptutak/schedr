@@ -8,6 +8,7 @@ suspected = false
 details = '''
 - **Found:** 2026-11-22, by Claude, in M5.2i14's second `make check` (the third passed: 339 of
   339). The stress target already starts its Postgres with `max_connections=500`.
+- **Again:** 2026-11-23, in M5.2i11's first `make check` (one roles test).
 - **A fix:** the same `-c max_connections=500` for `make test-integration`'s Postgres (and CI's),
   or a nextest group limiting the roles tests that run at once.
 '''
