@@ -143,6 +143,8 @@ pub async fn get_deployment(
                 queues: worker.queues.clone(),
                 slots: worker.slots,
                 running: worker.running,
+                watcher_slots: worker.watcher_slots,
+                running_wait_steps: worker.running_wait_steps,
                 state: worker.state.to_string(),
                 schedr_version: worker.schedr_version,
                 master_id: node.as_ref().and_then(|n| n.master_id.clone()),

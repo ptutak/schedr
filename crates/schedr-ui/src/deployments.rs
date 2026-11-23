@@ -1009,6 +1009,9 @@ pub struct StatusRow {
     pub running: u32,
     /// Its active workers' task slots.
     pub slots: u32,
+    /// The wait steps running on its active workers, against their watcher slots apart
+    /// (B254).
+    pub wait_steps: u32,
     /// Its nodes' problems, errors first.
     pub problems: Vec<StatusProblem>,
     /// Its schedr versions, each with how many processes run it (webserver, masters and the
@@ -1088,6 +1091,7 @@ fn status_row(asked: &Asked) -> StatusRow {
         workers: Vec::new(),
         running: 0,
         slots: 0,
+        wait_steps: 0,
         problems: Vec::new(),
         versions: Vec::new(),
         memory: String::new(),
@@ -1136,6 +1140,7 @@ fn status_row(asked: &Asked) -> StatusRow {
         if worker.state == "active" {
             row.running += worker.running;
             row.slots += worker.slots;
+            row.wait_steps += worker.running_wait_steps;
         }
         if !matches!(worker.state.as_str(), "offline" | "lost") {
             *versions.entry(&worker.schedr_version).or_default() += 1;

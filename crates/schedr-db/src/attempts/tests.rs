@@ -437,6 +437,47 @@ async fn only_the_unschedulable_instances_named_are_queued_again() {
     );
 }
 
+/// B254: a worker's tasks and wait steps running are counted apart, each against its slots.
+#[tokio::test]
+async fn a_workers_tasks_and_wait_steps_running_are_counted_apart() {
+    let (db, _run_id) = with_run().await;
+    db.register_worker(
+        &crate::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "0190a0a0-0000-7000-8000-000000000001",
+            protocol_version: "2.2",
+            schedr_version: "1.0.0",
+            queues: &[],
+            slots: 4,
+            watcher_slots: 2,
+            log_endpoint: "",
+        },
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let crate::database::Pool::Sqlite(pool) = db.pool() else {
+        panic!("expected SQLite")
+    };
+    // Both instances ready, `load` a wait step.
+    sqlx::query(
+        "UPDATE task_instances SET state = 'queued', ready_at = '2026-01-01T00:00:00Z', \
+         wait_step = (task_id = 'load')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    for ready in db.ready_instances(ts(NOW)).await.unwrap() {
+        db.assign_attempt(&ready.instance_id, "w1", ts(NOW))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let workers = db.workers().await.unwrap();
+    let w1 = workers.iter().find(|w| w.id == "w1").unwrap();
+    assert_eq!((w1.running, w1.running_wait_steps), (1, 1));
+}
+
 #[tokio::test]
 async fn attempts_start_and_end_once() {
     let (db, run_id) = with_run().await;

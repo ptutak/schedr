@@ -55,6 +55,7 @@ async fn a_registration_is_recorded_and_listed() {
             last_heartbeat_at: ts("2026-10-22T08:00:00Z"),
             offline_at: None,
             running: 0,
+            running_wait_steps: 0,
             drained: false,
             warnings: vec![],
             watcher_slots: 2,

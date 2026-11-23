@@ -56,11 +56,10 @@ step touches their code or the user schedules them.
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
 | 3 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 4 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 5 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 6 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 7 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 8 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 4 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 5 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 6 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 7 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B281: a worker's memory split leaves out its extensions' services
 
@@ -116,20 +115,6 @@ step touches their code or the user schedules them.
   past the cutoff, and may find more there), or have the agent end its stream at the cutoff for
   every worker (a behaviour change: a worker cut one way re-registers instead of waiting for the
   master's word; decisions 252, 281, 445).
-
-## B254: a worker's RUNNING count includes its wait steps, against its task slots
-
-- **Rating:** severity **low**, probability **likely**, usability (score 3): `workers list` shows `9/8` running: 8 tasks and a wait step, over 8 task slots.
-- **Found:** 2026-11-16, by Claude, running `examples/metrics_load.py` on `make
-  standalone-separate-ui` (`WORKER_SLOTS=8`): `schedr workers list` showed `9/8` while 8 tasks
-  and the run's `delay` wait step ran.
-- **Why:** the count is every open attempt of the worker (`Database::workers`,
-  `crates/schedr-db/src/workers.rs`: `attempts ... a.status IS NULL`), wait steps' included,
-  while the slots shown are its task slots only; wait steps have their own
-  (`[watchers] slots`, `watcher_slots`). Nothing is over capacity.
-- **Fix:** count the two apart (the attempts don't record whether a step is a wait step: from
-  the DAG version's steps, or a column), and show wait steps against `watcher_slots` beside
-  the tasks, in the CLI, the API's `running` and the Workers page.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 

@@ -1091,8 +1091,11 @@ pub struct WorkerView {
     pub queues: Vec<String>,
     /// Its task slots.
     pub slots: u32,
-    /// Its attempts still running.
+    /// Its tasks still running, against `slots` (its wait steps apart).
     pub running: u32,
+    /// Its wait steps still running, against `watcher_slots` (0 from an older webserver).
+    #[serde(default)]
+    pub running_wait_steps: u32,
     /// Its schedr version.
     pub schedr_version: String,
     /// Its protocol version (`major.minor`).
@@ -1197,6 +1200,7 @@ impl From<&WorkerRecord> for WorkerView {
             queues: worker.queues.clone(),
             slots: worker.slots,
             running: worker.running,
+            running_wait_steps: worker.running_wait_steps,
             schedr_version: worker.schedr_version.clone(),
             protocol_version: worker.protocol_version.clone(),
             log_endpoint: worker.log_endpoint.clone(),
@@ -1557,9 +1561,15 @@ pub struct WorkerNodeView {
     /// Its task slots (decision 462; 0 from an older webserver).
     #[serde(default)]
     pub slots: u32,
-    /// Its attempts still running.
+    /// Its tasks still running, against `slots` (its wait steps apart).
     #[serde(default)]
     pub running: u32,
+    /// Its watcher slots, for wait steps.
+    #[serde(default)]
+    pub watcher_slots: u32,
+    /// Its wait steps still running, against `watcher_slots`.
+    #[serde(default)]
+    pub running_wait_steps: u32,
     /// What it uses, by part, as it last said (decision 463); none from an older worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<WorkerUsageView>,

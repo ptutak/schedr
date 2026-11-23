@@ -767,7 +767,8 @@ async fn workers_are_listed_with_their_state_and_running_attempts() {
             "watcher_slots": 0, "watcher_hosts": [],
             "worker_id": "w1", "state": "lost",
             "incarnation_id": "0190a0a0-0000-7000-8000-000000000001",
-            "queues": ["large"], "slots": 4, "running": 0, "schedr_version": "1.0.0",
+            "queues": ["large"], "slots": 4, "running": 0, "running_wait_steps": 0,
+            "schedr_version": "1.0.0",
             "protocol_version": "1.0", "log_endpoint": "",
             "registered_at": "2026-10-22T08:00:00Z",
             "last_heartbeat_at": "2026-10-22T08:00:00Z",
@@ -938,8 +939,8 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
         body["workers"],
         json!([
             {"worker_id": "w1", "state": "active", "schedr_version": "1.0.0",
-             "master_id": "m-b", "process_id": "p-2", "config": worker,
-             "queues": ["default", "large"], "slots": 2, "running": 0,
+             "master_id": "m-b", "process_id": "p-2", "config": worker, "watcher_slots": 0,
+             "queues": ["default", "large"], "slots": 2, "running": 0, "running_wait_steps": 0,
              "usage": {"process": {"resident_bytes": 50, "cpu_seconds": 1.0,
                                    "container_bytes": 900},
                        "fork_servers_bytes": 100, "watcher_hosts_bytes": 200,
@@ -950,11 +951,13 @@ async fn the_deployment_shows_its_nodes_with_their_configurations() {
             {"worker_id": "w2", "state": "lost", "schedr_version": "1.0.0",
              "master_id": null, "process_id": null, "config": null,
              "queues": ["default", "large"], "slots": 2, "running": 0,
+             "watcher_slots": 0, "running_wait_steps": 0,
              "problems": [{"error": true,
                            "message": "lost: it stopped answering, its attempts were given up"}]},
             {"worker_id": "w3", "state": "offline", "schedr_version": "1.0.0",
-             "master_id": null, "process_id": null, "config": null,
-             "queues": ["default", "large"], "slots": 2, "running": 0, "problems": []},
+             "master_id": null, "process_id": null, "config": null, "problems": [],
+             "queues": ["default", "large"], "slots": 2, "running": 0,
+             "watcher_slots": 0, "running_wait_steps": 0},
         ])
     );
     assert_eq!(body["user"], "anonymous");

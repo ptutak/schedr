@@ -3214,7 +3214,13 @@
             "type": "array"
           },
           "running": {
-            "description": "Its attempts still running.",
+            "description": "Its tasks still running, against `slots` (its wait steps apart).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running_wait_steps": {
+            "description": "Its wait steps still running, against `watcher_slots`.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -3243,6 +3249,12 @@
                 "type": "null"
               }
             ]
+          },
+          "watcher_slots": {
+            "description": "Its watcher slots, for wait steps.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
           },
           "worker_id": {
             "description": "Its ID.",
@@ -3402,7 +3414,13 @@
             "type": "string"
           },
           "running": {
-            "description": "Its attempts still running.",
+            "description": "Its tasks still running, against `slots` (its wait steps apart).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running_wait_steps": {
+            "description": "Its wait steps still running, against `watcher_slots` (0 from an older webserver).",
             "format": "int32",
             "minimum": 0,
             "type": "integer"

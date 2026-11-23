@@ -62,8 +62,11 @@ pub struct WorkerRecord {
     pub last_heartbeat_at: Timestamp,
     /// When it went offline or was lost.
     pub offline_at: Option<Timestamp>,
-    /// Its attempts still running (no end recorded).
+    /// Its tasks still running (no end recorded), against its task slots; its wait steps apart
+    /// (B254).
     pub running: u32,
+    /// Its wait steps still running, against its watcher slots (B254).
+    pub running_wait_steps: u32,
     /// Whether it is drained for maintenance (no new tasks until resumed).
     pub drained: bool,
     /// What is wrong with it now, as it last reported.
@@ -336,11 +339,18 @@ impl Database {
     ///
     /// [`DbError`] if the query fails or stored data doesn't read.
     pub async fn workers(&self) -> Result<Vec<WorkerRecord>, DbError> {
+        // Its wait steps running, apart (B254): a tuple of the row's size is the most read.
+        const WAIT_STEPS: &str = "SELECT a.worker_id, COUNT(*) FROM attempts a \
+            JOIN task_instances ti ON ti.id = a.task_instance_id \
+            WHERE a.status IS NULL AND ti.wait_step AND a.worker_id IS NOT NULL \
+            GROUP BY a.worker_id";
         const WORKERS: &str = "SELECT w.worker_id, w.incarnation_id{text}, w.state, \
             w.protocol_version, w.schedr_version, w.queues{text}, w.slots, w.log_endpoint, \
             {ts<}w.registered_at{>ts}, {ts<}w.last_heartbeat_at{>ts}, {ts<}w.offline_at{>ts}, \
-            (SELECT COUNT(*) FROM attempts a WHERE a.worker_id = w.worker_id \
-             AND a.status IS NULL), w.drained, w.warnings{text}, w.watcher_slots, \
+            (SELECT COUNT(*) FROM attempts a JOIN task_instances ti \
+             ON ti.id = a.task_instance_id WHERE a.worker_id = w.worker_id \
+             AND a.status IS NULL AND NOT ti.wait_step), \
+            w.drained, w.warnings{text}, w.watcher_slots, \
             w.watcher_hosts{text} \
             FROM workers w ORDER BY w.worker_id";
         let rows: Vec<WorkerRow> = on_pool!(self, |pool, backend| {
@@ -348,7 +358,21 @@ impl Database {
                 .fetch_all(pool)
                 .await?
         });
-        rows.into_iter().map(worker_record).collect()
+        let waiting: Vec<(String, i64)> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql(backend, WAIT_STEPS))
+                .fetch_all(pool)
+                .await?
+        });
+        let waiting: std::collections::BTreeMap<String, i64> = waiting.into_iter().collect();
+        rows.into_iter()
+            .map(|row| {
+                let mut record = worker_record(row)?;
+                record.running_wait_steps = waiting
+                    .get(&record.id)
+                    .map_or(0, |n| u32::try_from(*n).unwrap_or(0));
+                Ok(record)
+            })
+            .collect()
     }
 }
 
@@ -384,6 +408,7 @@ fn worker_record(row: WorkerRow) -> Result<WorkerRecord, DbError> {
         last_heartbeat_at: parse_time("workers.last_heartbeat_at", &heartbeat)?,
         offline_at: optional_time("workers.offline_at", offline)?,
         running: u32::try_from(running).unwrap_or(0),
+        running_wait_steps: 0,
         drained,
         warnings: from_json("workers.warnings", &warnings)?,
         watcher_slots: u32::try_from(watcher_slots).unwrap_or(0),

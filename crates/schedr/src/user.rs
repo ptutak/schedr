@@ -655,7 +655,15 @@ fn worker_row(worker: &WorkerView, local: &TimeZone) -> Vec<String> {
         } else {
             worker.state.clone()
         },
-        format!("{}/{}", worker.running, worker.slots),
+        // Tasks against task slots; wait steps against watcher slots, when any run (B254).
+        if worker.running_wait_steps > 0 {
+            format!(
+                "{}/{} +{} waiting",
+                worker.running, worker.slots, worker.running_wait_steps
+            )
+        } else {
+            format!("{}/{}", worker.running, worker.slots)
+        },
         worker.queues.join(","),
         show(worker.last_heartbeat_at, local),
         worker.warnings.len().to_string(),

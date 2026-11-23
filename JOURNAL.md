@@ -3381,3 +3381,11 @@ that scans the refusals, and at least once a minute while any are kept. Not only
 `unschedulable` are kept: a moved cleanup's instance (`cleaning_up`) routes by `rejections`
 (a first version keeping only those two broke it; its test caught it), and one being assigned
 is `running`.
+
+### 2026-11-24: M5.2k, B254: tasks and wait steps running counted apart
+
+A worker's `running` (the API's worker views, `schedr workers list`, the Deployments and Workers
+pages) is its tasks only, against its task slots; its wait steps running are
+`running_wait_steps`, against its watcher slots (`task_instances.wait_step`, counted by a second
+query: the worker row's tuple is at its size limit). The CLI shows `8/8 +1 waiting`, the
+Deployments page `· 1 wait step`. `running_wait_steps` defaults to 0 for an older webserver.
