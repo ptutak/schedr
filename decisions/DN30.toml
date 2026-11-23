@@ -1,0 +1,13 @@
+title = "No stall check for a service: a hung one shows as its attempts timing out"
+date = 2026-11-22
+by = "user"
+on = "D518"
+kind = "corrects"
+summary = '''
+The worker doesn't check a service for stalls: no ping, no liveness message from it, no stall
+event. A service that hangs is seen through its attempts: their calls go unanswered, and each
+attempt runs into its own timeout (`timed_out`, retries as usual). A crash, its memory and its
+restarts stay watched as decision 518 says. Not chosen: the worker pinging it; the service
+reporting its loop's lag, as a watcher host does.
+'''
+history = "JOURNAL.md#DN30"

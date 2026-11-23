@@ -737,3 +737,32 @@ fn a_request_over_the_channels_limit_is_refused_before_it_is_sent() {
     assert!(got.is_err_and(|e| e.contains("over the task context's limit")));
     assert_eq!(sent, Vec::<u8>::new());
 }
+
+/// M5.2i9: `task-ctx extension call` sends its call; outside a shell plugin the agent refuses
+/// it, said as the error; bad `--args` is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_extension_call_outside_a_shell_plugin_is_refused() {
+    let (ours, theirs) = channel().unwrap();
+    let _serving = serve(ours, info("1.0"));
+    let env = BTreeMap::from([(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string())]);
+    let got = tokio::task::spawn_blocking(move || {
+        let call = |args: Option<&str>| TaskCtxCommand::Extension {
+            command: ExtensionCtxCommand::Call {
+                method: "submit".to_owned(),
+                args: args.map(ToOwned::to_owned),
+            },
+        };
+        let bad = run_task_ctx_report(&call(Some("{not json")), &env, "1.0", &mut Vec::new());
+        let refused = run_task_ctx_report(&call(Some("[1]")), &env, "1.0", &mut Vec::new());
+        drop(theirs);
+        (bad, refused)
+    })
+    .await
+    .unwrap();
+    assert!(got.0.is_err_and(|e| e.contains("--args")), "bad args");
+    assert!(
+        got.1.as_ref().is_err_and(|e| e.contains("shell plugin")),
+        "{:?}",
+        got.1
+    );
+}

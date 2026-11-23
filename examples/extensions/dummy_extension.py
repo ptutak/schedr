@@ -83,6 +83,13 @@ with Dag(
     together(counted.output, greeted.output)
 
 with Dag(
+    "extension_service",
+    description="Three attempts at once calling the dummy's service: one counter they share.",
+):
+    for name in ["first", "second", "third"]:
+        ExtensionTask(name, name="dummy", version="1.0", payload=[{"service": ["count", None]}])
+
+with Dag(
     "extension_metrics",
     description="Made-up work every 2 minutes: what fills the dummy's Extensions page.",
     trigger=Cron("*/2 * * * *"),

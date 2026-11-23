@@ -137,6 +137,15 @@ pub enum CtxRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<serde_json::Value>,
     },
+    /// A call to the extension's service (`schedr task-ctx extension call`, decision 518): only
+    /// within an extension's shell plugin; answered [`CtxAnswer::ServiceAnswer`] or an error.
+    ServiceCall {
+        /// What is asked for.
+        method: String,
+        /// Its arguments, JSON.
+        #[serde(default)]
+        args: serde_json::Value,
+    },
     /// Why the task is being stopped (`schedr task-ctx extension stop-reason`): only within an
     /// extension's shell plugin (decision 519).
     StopReasonGet,
@@ -246,6 +255,11 @@ pub enum CtxAnswer {
         reason: Option<String>,
         /// The seconds left before `SIGKILL`.
         seconds_left: f64,
+    },
+    /// The extension's service's result of a [`CtxRequest::ServiceCall`].
+    ServiceAnswer {
+        /// The result, JSON.
+        result: serde_json::Value,
     },
     /// A request the agent can't answer (one it doesn't know, out of order); the connection
     /// is closed after it.

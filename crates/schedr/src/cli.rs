@@ -755,6 +755,15 @@ pub enum ExtensionCtxCommand {
         #[arg(long, value_name = "JSON")]
         data: Option<String>,
     },
+    /// Calls the extension's service (decision 518): only in a shell plugin. Prints the
+    /// service's result as JSON; exits 1 with its error.
+    Call {
+        /// What is asked for.
+        method: String,
+        /// Its arguments: JSON, or `@file.json`.
+        #[arg(long, value_name = "JSON")]
+        args: Option<String>,
+    },
     /// Why the task is being stopped, after `SIGTERM`: only in a shell plugin (decision 519, DN27).
     /// Prints `{"reason": ..., "seconds_left": ...}`; the reason is `cancel`, `timeout`,
     /// `drain`, `master_lost`, or null while it isn't stopped.

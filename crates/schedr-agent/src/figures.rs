@@ -278,6 +278,13 @@ impl Figures {
         Ok(())
     }
 
+    /// Whether `extension` `version` has declarations kept.
+    #[must_use]
+    pub fn is_declared(&self, extension: &str, version: &str) -> bool {
+        self.lock()
+            .contains_key(&(extension.to_owned(), version.to_owned()))
+    }
+
     /// Whether an undeclared `metric` of `extension` is warned of now: once each.
     #[must_use]
     pub fn warn_once(&self, extension: &str, version: &str, metric: &str) -> bool {

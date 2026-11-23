@@ -4717,3 +4717,243 @@ fn another_process_cant_reach_standalones_grpc_port() {
         }
     }
 }
+
+/// The dummy extension with its service (decision 518), `more` keys added to its table; its
+/// restarts quick for the tests.
+fn dummy_with_service(more: &str) -> String {
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/dummy/schedr-ext-dummy")
+        .canonicalize()
+        .unwrap();
+    format!(
+        "{}service = [\"{}\", \"{}\", \"--service\"]\n{more}",
+        dummy_plugin(),
+        python(),
+        plugin.display()
+    )
+}
+
+const QUICK_RESTARTS: [(&str, &str); 2] = [
+    ("SCHEDR_HIDDEN__WORKER__SERVICE_BACKOFF_FIRST", "100ms"),
+    ("SCHEDR_HIDDEN__WORKER__SERVICE_BACKOFF_MAX", "200ms"),
+];
+
+/// Waits for standalone's log to hold `text`.
+fn wait_log(standalone: &Standalone, text: &str) {
+    standalone.wait(text, || standalone.log().contains(text));
+}
+
+/// M5.2i9 (decision 518): attempts at once share one service, its counter giving each its own
+/// number; a crash fails its attempt and the retry lands once the service is ready again; on
+/// SIGTERM it is stopped after the last attempt.
+#[test]
+fn attempts_share_a_service_and_one_crashing_it_is_retried_once_it_is_ready() {
+    const DAG: &str = r#"
+from datetime import timedelta
+
+from schedr import Dag, ExtensionTask
+
+with Dag("shared"):
+    for name in ["a", "b", "c"]:
+        ExtensionTask(name, name="dummy", version="1.0", payload=[{"service": ["count", None]}])
+
+with Dag("crashing"):
+    ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[{"service": ["crash_once", None]}],
+        retries=2,
+        retry_delay=timedelta(seconds=1),
+    )
+"#;
+    let mut standalone = Standalone::start_configured(
+        &[("service.py", DAG)],
+        None,
+        &[],
+        &dummy_with_service(""),
+        &QUICK_RESTARTS,
+    );
+    wait_log(&standalone, "the extension's service is ready");
+    assert!(
+        standalone.log().contains("service started with 0 secrets"),
+        "{}",
+        standalone.log()
+    );
+    standalone.wait("the DAGs", || standalone.dag_ids().len() == 2);
+    let run = standalone.trigger("shared");
+    standalone.wait_for_state(&run, "success");
+    let mut counted: Vec<i64> = ["a", "b", "c"]
+        .iter()
+        .map(|task| {
+            standalone
+                .get(&format!("/api/v1/runs/{run}/tasks/{task}/output"))
+                .unwrap()["value"]
+                .as_i64()
+                .unwrap()
+        })
+        .collect();
+    counted.sort_unstable();
+    assert_eq!(counted, [1, 2, 3], "one service, its counter shared");
+    let run = standalone.trigger("crashing");
+    let done = standalone.wait_for_state(&run, "success");
+    assert_eq!(done["tasks"][0]["try_number"], 2, "{done}");
+    let log = standalone.log();
+    assert!(log.contains("the extension's service crashed"), "{log}");
+    // SIGTERM: drained, its service stopped after the last attempt.
+    let pid = standalone.child.id().to_string();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while standalone.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "standalone didn't stop\n{}",
+            standalone.log()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        standalone.log().contains("service stopped by the worker"),
+        "{}",
+        standalone.log()
+    );
+}
+
+/// M5.2i9 (decision 518, DN31): a service past its memory is killed and its attempt fails; past
+/// `service_restarts`, the extension is turned off, and its tasks wait for it as for code.
+#[test]
+fn a_service_past_its_memory_is_killed_and_past_its_restarts_turned_off() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask
+
+with Dag("greedy"):
+    ExtensionTask(
+        "job", name="dummy", version="1.0", payload=[{"service": ["grow", 64]}], retries=0
+    )
+
+with Dag("crash"):
+    ExtensionTask(
+        "job", name="dummy", version="1.0", payload=[{"service": ["crash", None]}], retries=0
+    )
+"#;
+    let standalone = Standalone::start_configured(
+        &[("service.py", DAG)],
+        None,
+        &[],
+        &dummy_with_service("service_memory = \"32MiB\"\nservice_restarts = 1\n"),
+        &QUICK_RESTARTS,
+    );
+    wait_log(&standalone, "the extension's service is ready");
+    standalone.wait("the DAGs", || standalone.dag_ids().len() == 2);
+    let run = standalone.trigger("greedy");
+    standalone.wait_for_state(&run, "failed");
+    wait_log(&standalone, "past its service_memory of 32 MiB");
+    // A second end within the settle: one more than its one restart, turned off.
+    standalone.wait("the service ready again", || {
+        standalone
+            .log()
+            .matches("the extension's service is ready")
+            .count()
+            >= 2
+    });
+    let run = standalone.trigger("crash");
+    standalone.wait_for_state(&run, "failed");
+    wait_log(
+        &standalone,
+        "the extension's service turned off on this worker",
+    );
+    // Its next task waits for it, no try used.
+    let run = standalone.trigger("crash");
+    standalone.wait("the task waiting for the service", || {
+        let job = &standalone.run(&run)["tasks"][0];
+        job["state"] == "queued" && job["try_number"] == 0
+    });
+}
+
+/// M5.2i9 (DN32): a service whose loop is stuck leaves attempts' connections unanswered; each
+/// such attempt fails at once, and `service_timeouts` of them in a row take it for hung.
+#[test]
+fn a_stuck_service_leaves_attempts_unanswered_and_is_taken_for_hung() {
+    const DAG: &str = r#"
+from schedr import Dag, ExtensionTask
+
+with Dag("stuck"):
+    ExtensionTask("staller", name="dummy", version="1.0", payload=[{"service": ["stall", 60]}])
+
+with Dag("waiting"):
+    ExtensionTask(
+        "job", name="dummy", version="1.0", payload=[{"service": ["count", None]}], retries=0
+    )
+"#;
+    let standalone = Standalone::start_configured(
+        &[("service.py", DAG)],
+        None,
+        &[],
+        &dummy_with_service("service_accept_timeout = \"1s\"\nservice_timeouts = 2\n"),
+        &QUICK_RESTARTS,
+    );
+    wait_log(&standalone, "the extension's service is ready");
+    standalone.wait("the DAGs", || standalone.dag_ids().len() == 2);
+    standalone.trigger("stuck");
+    // The staller's call is in once the service says so: its loop is blocked from here (agy's
+    // review: a blind wait raced it under load).
+    wait_log(&standalone, "service: stalling its loop");
+    for _ in 0..2 {
+        let run = standalone.trigger("waiting");
+        standalone.wait_for_state(&run, "failed");
+        let attempts = standalone
+            .get(&format!("/api/v1/runs/{run}/tasks/job/attempts"))
+            .unwrap();
+        let message = attempts["attempts"][0]["error_summary"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            message.contains("didn't accept the attempt within its service_accept_timeout"),
+            "{attempts}"
+        );
+    }
+    wait_log(
+        &standalone,
+        "connections unanswered in a row: taken for hung",
+    );
+}
+
+/// DN33: a maintenance drain is told to the worker's services, which keep running, and so is
+/// the resume.
+#[test]
+fn a_maintenance_drain_and_resume_are_told_to_a_service() {
+    let standalone = Standalone::start_configured(
+        &[("chain.py", CHAIN)],
+        None,
+        &[],
+        &dummy_with_service(""),
+        &QUICK_RESTARTS,
+    );
+    wait_log(&standalone, "the extension's service is ready");
+    let workers = standalone.get("/api/v1/workers").unwrap();
+    let worker = workers["workers"][0]["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (code, _, err) = standalone.cli(&["workers", "drain", &worker]);
+    assert_eq!(code, 0, "{err}");
+    wait_log(&standalone, "service told: drained");
+    let (code, _, err) = standalone.cli(&["workers", "resume", &worker]);
+    assert_eq!(code, 0, "{err}");
+    wait_log(&standalone, "service told: resumed");
+    assert_eq!(
+        standalone
+            .log()
+            .matches("the extension's service is ready")
+            .count(),
+        1,
+        "kept running"
+    );
+}

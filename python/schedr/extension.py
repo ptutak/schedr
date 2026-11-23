@@ -38,6 +38,14 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from schedr._serialization import CodecError, check_size
+from schedr._service import (
+    SERVICE_FD_ENV,
+    ServiceAttempt,
+    ServiceCalls,
+    ServiceContext,
+    ServiceError,
+    serve,
+)
 from schedr.log import install as install_structured_logging
 from schedr.runner.main import FD_ENV
 from schedr.runner.parse import import_error
@@ -55,7 +63,12 @@ __all__ = [
     "MetricDeclaration",
     "NotificationDeclaration",
     "PanelDeclaration",
+    "ServiceAttempt",
+    "ServiceCalls",
+    "ServiceContext",
+    "ServiceError",
     "main",
+    "serve",
 ]
 
 PROTOCOL = 1
@@ -249,14 +262,18 @@ class ExtensionChannel:
     Each call waits for the worker's answer (in a thread: the event loop stays free).
     """
 
-    def __init__(self, channel: Channel, request: Mapping[str, Any]) -> None:
+    def __init__(
+        self, channel: Channel, request: Mapping[str, Any], service: ServiceCalls | None = None
+    ) -> None:
         """Wraps the worker's channel.
 
         Args:
             channel: The channel.
             request: The request, for the secrets it already brought.
+            service: The attempt's connection to its extension's service, if it has one.
         """
         self._channel = channel
+        self._service = service
         self._given = {
             (s["name"].get("storage"), s["name"]["path"], s["name"].get("key")): s["value"]
             for s in request.get("secrets", ())
@@ -416,6 +433,21 @@ class ExtensionChannel:
         if answer["type"] != "handle_added":
             raise ExtensionError("handle_refused", answer.get("message", str(answer)))
 
+    @property
+    def service(self) -> ServiceCalls:
+        """The attempt's connection to its extension's service (decision 518).
+
+        Call it with ``await channel.service.call("method", {...})``.
+
+        Raises:
+            ExtensionError: When the extension has no service on this worker.
+        """
+        if self._service is None:
+            raise ExtensionError(
+                "no_service", "this extension has no service ([extensions.<name>] service)"
+            )
+        return self._service
+
     async def api(
         self, method: str, path: str, body: Json = None, *, idempotency_key: str | None = None
     ) -> tuple[int, ExtensionJson]:
@@ -512,7 +544,9 @@ def main(
             declared["notifications"] = [dict(n) for n in notifications]
         # Its `logging` as structured lines (decision 514), unless it configures its own.
         install_structured_logging()
-        return _serve(channel, run, cleanup, declared)
+        service = environ.get(SERVICE_FD_ENV, "")
+        calls = ServiceCalls(int(service)) if service.isdigit() else None
+        return _serve(channel, run, cleanup, (declared, calls))
     except ProtocolError as e:
         print(f"worker channel: {e}", file=sys.stderr)
         return _EXIT_FAILED
@@ -520,7 +554,13 @@ def main(
         channel.close()
 
 
-def _serve(channel: Channel, run: Run, cleanup: Run | None, declared: Mapping[str, Json]) -> int:
+def _serve(
+    channel: Channel,
+    run: Run,
+    cleanup: Run | None,
+    given: tuple[Mapping[str, Json], ServiceCalls | None],
+) -> int:
+    declared, service = given
     hello: dict[str, Json] = {
         "type": "hello",
         "schedr_version": _plugin_version(),
@@ -540,7 +580,7 @@ def _serve(channel: Channel, run: Run, cleanup: Run | None, declared: Mapping[st
     if message["type"] != "extension_task":
         raise ProtocolError(f"expected `extension_task`, got `{message['type']}`")
     request = ExtensionRequest.from_message(message)
-    result = _result(request, ExtensionChannel(channel, message), run, cleanup)
+    result = _result(request, ExtensionChannel(channel, message, service), run, cleanup)
     channel.send(result)
     return _EXIT_OK if result["type"] == "task_succeeded" else _EXIT_FAILED
 

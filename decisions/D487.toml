@@ -21,4 +21,4 @@ code = [
     "crates/schedr-master/src/dispatch.rs::wait_for_runs",
     "crates/schedr-db/migrations/postgres/0002_next_looks.sql",
 ]
-checked = 2026-11-19
+checked = 2026-11-23

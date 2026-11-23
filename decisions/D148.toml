@@ -14,4 +14,4 @@ history = "archive/PROJECT.md#D148"
 step = "M4.5b"
 also = ["protocol"]
 code = ["python/schedr/script.py", "crates/schedr-agent/src/ctx.rs::converse", "crates/schedr-model/src/ctx.rs::CTX_PROTOCOL"]
-checked = 2026-11-22
+checked = 2026-11-23

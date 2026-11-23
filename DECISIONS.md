@@ -33,6 +33,11 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN33 | 2026-11-23 | user | adds to D518 | A maintenance drain is told to a worker's services, which keep running |
+| DN32 | 2026-11-22 | user | adds to D518 | A service answers each attempt's connection in time, timed by the worker |
+| DN31 | 2026-11-22 | user | adds to D518 | A service whose attempts time out a few times in a row counts as crashed |
+| DN30 | 2026-11-22 | user | corrects D518 | No stall check for a service: a hung one shows as its attempts timing out |
+| DN29 | 2026-11-22 | user | adds to D518 | A service's calls by ID, its memory off the task budgets, its secrets in the welcome, a retry after the settle; Rust and shell plugins call it |
 | DN28 | 2026-11-22 | user | adds to D515 | A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run |
 | DN27 | 2026-11-22 | user | corrects D519 | A shell plugin's own commands sit under `task-ctx extension` |
 | DN26 | 2026-11-22 | user | corrects D516 | A gauge's default point is its mean |
@@ -66,9 +71,10 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D521 | 2026-11-23 | user | planned (M5.2i12) | task-processes | Extensions never hold the master up: their reports are dropped first |
 | D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
-| D518 | 2026-11-21 | user | planned (M5.2i9) | task-processes | An extension's service: one long-running process per worker beside its plugins |
+| D518 | 2026-11-21 | user | built M5.2i9 | task-processes | An extension's service: one long-running process per worker beside its plugins |
 | D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
 | D516 | 2026-11-21 | user | built M5.2i10 | task-processes | Chart functions: point, combine, group_by and limit |
 | D515 | 2026-11-21 | user | built M5.2i8 | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
@@ -1013,6 +1019,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-processes
 
+- D521: Extensions never hold the master up: their reports are dropped first
 - D519: Shell plugins: declarations in config, configured only; status and link for command tasks
 - D518: An extension's service: one long-running process per worker beside its plugins
 - D516: Chart functions: point, combine, group_by and limit

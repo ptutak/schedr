@@ -1275,6 +1275,12 @@ impl MasterCore {
             decisions,
             max_message_size: u64::try_from(self.settings.max_message_size).unwrap_or(u64::MAX),
             script_uses: root_uses(&self.script_uses_at(now)),
+            // Read by `report_roots` just above (DN33).
+            drained: self
+                .dispatcher
+                .workers()
+                .get(&register.worker_id)
+                .is_some_and(|worker| worker.drained),
         };
         Ok((registered, outgoing))
     }
@@ -2016,6 +2022,16 @@ impl MasterCore {
                 .insert(job.job_id, (job.worker_id, deadline));
         }
         for (worker_id, drained) in std::mem::take(&mut applied.drained) {
+            // The worker told, for its extensions' services (DN33).
+            outgoing.push(Outgoing {
+                worker_id: worker_id.clone(),
+                message: pb::MasterMessage {
+                    message: Some(master_message::Message::MaintenanceDrained(
+                        pb::MaintenanceDrained { drained },
+                    )),
+                    clock: None,
+                },
+            });
             self.follow_up(worker_id, drained, outgoing, now).await;
         }
         result.map_err(CoreError::from)

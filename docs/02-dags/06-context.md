@@ -280,7 +280,7 @@ events](22-events.md#posting-from-a-task):
 | `link LABEL URL` | A link shown on the task, `http` or `https` (a job's page, a dashboard). |
 
 `extension metric`, `extension stop-reason` and `extension output set` belong to an extension's
-shell plugin ([Extensions](../03-guide/21-extensions.md#a-shell-script-as-a-plugin)), so they sit
+shell plugin ([Extensions](../03-guide/21-extensions.md#building-a-shell-script-plugin)), so they sit
 under `extension` (DN27); a command task is told so.
 
 ## The running task's own context: `task_ctx`

@@ -1,0 +1,16 @@
+title = "A service whose attempts time out a few times in a row counts as crashed"
+date = 2026-11-22
+by = "user"
+on = "D518"
+kind = "adds"
+summary = '''
+With no stall check (DN30), a hung service would stay ready, each attempt timing out in turn.
+So `[extensions.<name>] service_timeouts` (3 by default; 0 off) attempts connected to it timing
+out in a row on a worker count as its crash: it is killed and started again as after any crash,
+counting towards `service_restarts`, so one that keeps hanging is turned off. An attempt ending
+any other way starts the count over. A crash, a memory kill and a run of timeouts all count towards the same
+`service_restarts` (the user: "The same goes when after a restart the service goes OOM a few
+times -> turn off"). Not chosen: timeouts never counting (a side agent's note:
+nothing would restart a hung service).
+'''
+history = "JOURNAL.md#DN31"

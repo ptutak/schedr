@@ -59,7 +59,23 @@ pub fn run(command: &[OsString], env: &BTreeMap<String, String>, err: &mut impl 
             return 2;
         }
     };
-    match serve(command, env, stream) {
+    // The attempt's connection to its extension's service (decision 518), the bridge's alone.
+    let service = match env
+        .get(schedr_extension::SERVICE_FD_ENV)
+        .and_then(|fd| fd.parse::<i32>().ok())
+        .map(schedr_extension::socket::inherited)
+    {
+        None => None,
+        Some(Ok(service)) => Some(service),
+        Some(Err(error)) => {
+            let _ = writeln!(
+                err,
+                "error: can't use the extension's service connection: {error}"
+            );
+            return 2;
+        }
+    };
+    match serve(command, env, (stream, service)) {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(Error::Refused(reason)) => {
@@ -77,7 +93,10 @@ pub fn run(command: &[OsString], env: &BTreeMap<String, String>, err: &mut impl 
 fn serve(
     command: &[OsString],
     env: &BTreeMap<String, String>,
-    mut stream: std::os::unix::net::UnixStream,
+    (mut stream, service): (
+        std::os::unix::net::UnixStream,
+        Option<std::os::unix::net::UnixStream>,
+    ),
 ) -> Result<bool, Error> {
     write(
         &mut stream,
@@ -113,7 +132,7 @@ fn serve(
     let max_output_size = raw.task.settings.max_output_size;
     let request = Request::of(raw)?;
     let run: ShellRun = serde_json::from_value(request.raw.run.clone())?;
-    let channel = Channel::new(stream, &request.raw);
+    let channel = Channel::new(stream, &request.raw).with_service(service);
     let bridge = Arc::new(Bridge::new(&request, &run, channel, max_output_size));
     let ran = run_script(command, env, &request, &run, &bridge);
     let result = schedr_extension::result_of(ran, max_output_size);
@@ -221,7 +240,9 @@ fn run_script(
             .args(args)
             .env_clear()
             .envs(env.iter().filter(|(name, _)| {
-                name.as_str() != schedr_extension::FD_ENV && name.as_str() != CTX_FD_ENV
+                name.as_str() != schedr_extension::FD_ENV
+                    && name.as_str() != schedr_extension::SERVICE_FD_ENV
+                    && name.as_str() != CTX_FD_ENV
             }))
             .envs(script_variables(request, run))
             .env("PATH", script_path(env.get("PATH").map(String::as_str)))
@@ -285,6 +306,9 @@ fn ended(status: std::process::ExitStatus, output: Option<Value>) -> Result<Valu
 /// channel.
 pub struct Bridge {
     channel: Mutex<Channel>,
+    /// The attempt's connection to its service, apart from the channel (agy's review: a call
+    /// to a hung service held the channel, and the script's end waited on it for ever).
+    service: Mutex<Option<schedr_extension::ServiceCalls>>,
     run: CtxRun,
     params: Value,
     cleanup: Option<Vec<CleanupHandle>>,
@@ -298,8 +322,14 @@ pub struct Bridge {
 impl Bridge {
     /// The bridge of `request`'s run, talking to the worker over `channel`.
     #[must_use]
-    pub fn new(request: &Request, run: &ShellRun, channel: Channel, max_output_size: u64) -> Self {
+    pub fn new(
+        request: &Request,
+        run: &ShellRun,
+        mut channel: Channel,
+        max_output_size: u64,
+    ) -> Self {
         Self {
+            service: Mutex::new(channel.take_service()),
             channel: Mutex::new(channel),
             run: CtxRun {
                 dag_id: run.dag_id.clone(),
@@ -349,6 +379,10 @@ impl Bridge {
     /// The answer to `request`: the worker asked, one request at a time, blocking.
     #[must_use]
     pub fn answered(&self, request: CtxRequest) -> CtxAnswer {
+        let request = match self.answered_apart(request) {
+            Ok(answer) => return answer,
+            Err(request) => request,
+        };
         let _turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
         if self.is_closed() {
             return CtxAnswer::Error {
@@ -393,28 +427,12 @@ impl Bridge {
                 path,
                 body,
                 idempotency_key,
-            } => {
-                let call = PluginMessage::ApiCall {
-                    method,
-                    path,
-                    body,
-                    idempotency_key,
-                };
-                let mut channel = self.channel();
-                match channel.send(&call).and_then(|()| channel.receive()) {
-                    // Bounded as a command task's, its masking note kept (agy's review of M5.2i6).
-                    Ok(WorkerMessage::ApiAnswer { status, body, note }) => {
-                        schedr_agent::ctx::api_answer(status, body, note)
-                    }
-                    Ok(_) => CtxAnswer::Error {
-                        reason: "the worker answered with something else than the API's answer"
-                            .to_owned(),
-                    },
-                    Err(error) => CtxAnswer::Error {
-                        reason: error.to_string(),
-                    },
-                }
-            }
+            } => self.api_call(&PluginMessage::ApiCall {
+                method,
+                path,
+                body,
+                idempotency_key,
+            }),
             CtxRequest::HandleAdd { handle } => {
                 if self.cleanup.is_some() {
                     return CtxAnswer::HandleRefused {
@@ -445,8 +463,60 @@ impl Bridge {
             | CtxRequest::ExtensionNotify { .. }
             | CtxRequest::StopReasonGet
             | CtxRequest::OutputSet { .. }) => self.reported(request),
+            CtxRequest::ServiceCall { .. } => CtxAnswer::Error {
+                reason: "answered apart".to_owned(),
+            },
             CtxRequest::Hello { .. } => CtxAnswer::Error {
                 reason: "`hello` was said already".to_owned(),
+            },
+        }
+    }
+
+    /// The worker's answer to the script's API call.
+    fn api_call(&self, call: &PluginMessage) -> CtxAnswer {
+        let mut channel = self.channel();
+        match channel.send(call).and_then(|()| channel.receive()) {
+            // Bounded as a command task's, its masking note kept (agy's review of M5.2i6).
+            Ok(WorkerMessage::ApiAnswer { status, body, note }) => {
+                schedr_agent::ctx::api_answer(status, body, note)
+            }
+            Ok(_) => CtxAnswer::Error {
+                reason: "the worker answered with something else than the API's answer".to_owned(),
+            },
+            Err(error) => CtxAnswer::Error {
+                reason: error.to_string(),
+            },
+        }
+    }
+
+    /// A service call's answer, taking no turn: the worker's requests go on beside it; any
+    /// other request back.
+    fn answered_apart(&self, request: CtxRequest) -> Result<CtxAnswer, CtxRequest> {
+        let CtxRequest::ServiceCall { method, args } = request else {
+            return Err(request);
+        };
+        if self.is_closed() {
+            return Ok(CtxAnswer::Error {
+                reason: "the script has ended".to_owned(),
+            });
+        }
+        Ok(self.service_call(&method, args))
+    }
+
+    /// The extension's service's answer to a call of the script's (decision 518).
+    fn service_call(&self, method: &str, args: serde_json::Value) -> CtxAnswer {
+        let mut service = self.service.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(service) = service.as_mut() else {
+            return CtxAnswer::Error {
+                reason: "the extension's service: this extension has no service \
+                         ([extensions.<name>] service)"
+                    .to_owned(),
+            };
+        };
+        match service.call(method, args) {
+            Ok(result) => CtxAnswer::ServiceAnswer { result },
+            Err(error) => CtxAnswer::Error {
+                reason: error.to_string(),
             },
         }
     }

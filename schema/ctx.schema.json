@@ -378,6 +378,23 @@
           "type": "object"
         },
         {
+          "description": "The extension's service's result of a [`CtxRequest::ServiceCall`].",
+          "properties": {
+            "result": {
+              "description": "The result, JSON."
+            },
+            "type": {
+              "const": "service_answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
           "description": "A request the agent can't answer (one it doesn't know, out of order); the connection\nis closed after it.",
           "properties": {
             "reason": {
@@ -716,6 +733,28 @@
           "required": [
             "type",
             "event"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A call to the extension's service (`schedr task-ctx extension call`, decision 518): only\nwithin an extension's shell plugin; answered [`CtxAnswer::ServiceAnswer`] or an error.",
+          "properties": {
+            "args": {
+              "default": null,
+              "description": "Its arguments, JSON."
+            },
+            "method": {
+              "description": "What is asked for.",
+              "type": "string"
+            },
+            "type": {
+              "const": "service_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "method"
           ],
           "type": "object"
         },

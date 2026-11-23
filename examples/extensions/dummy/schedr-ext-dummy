@@ -16,6 +16,15 @@ The payload is a list of steps, done in order; the output is what the last ``ret
     {"hang": true}                     wait until stopped, then print why (``stop_reason``)
     {"simulate": 5}                    five rounds of made-up work, each reported in every metric
                                        below and logged as a structured line: what fills its page
+    {"service": ["count", {...}]}      call its service (below): its result is logged, and it is
+                                       the step's output if the next step is no ``return``
+
+Run as ``schedr-ext-dummy --service`` it is the extension's service (decision 518): one process per
+worker, ``[extensions.dummy] service = [..., "--service"]``. Its methods: ``count`` (a counter its
+attempts share: the next number), ``crash`` (it exits, as a crash), ``crash_once`` (it exits the
+first time it is called in its folder, then answers), ``grow`` (it takes ``args`` MiB of memory,
+keeps them and answers 10 s later), ``stall`` (it blocks its loop for ``args`` seconds, accepting
+nothing meanwhile).
 
 Its own lines go through ``logging``, structured (decision 514): the Logs tab shows their level.
 
@@ -25,8 +34,12 @@ Configure it on a worker as ``[extensions.dummy] command = ["/path/to/schedr-ext
 
 import asyncio
 import logging
+import os
 import random
+import sys
+import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from schedr.extension import (
     ExtensionChannel,
@@ -35,7 +48,10 @@ from schedr.extension import (
     MetricDeclaration,
     NotificationDeclaration,
     PanelDeclaration,
+    ServiceAttempt,
+    ServiceContext,
     main,
+    serve,
 )
 from schedr.types import Json
 
@@ -146,6 +162,16 @@ async def _simulate(channel: ExtensionChannel, value: ExtensionJson) -> None:
     await channel.status("done", f"{rounds} rounds", progress=1.0)
 
 
+LAST_CALLED: list[ExtensionJson] = []
+
+
+async def _service(channel: ExtensionChannel, value: ExtensionJson) -> None:
+    method, args = _parts(value, 2, "service")
+    result = await channel.service.call(_text(method, "service"), args)
+    LAST_CALLED[:] = [result]
+    print(f"service {method}: {result}", flush=True)
+
+
 async def _fail(channel: ExtensionChannel, value: ExtensionJson) -> None:
     del channel
     raise RuntimeError(str(value))
@@ -163,6 +189,7 @@ STEPS: dict[str, Callable[[ExtensionChannel, ExtensionJson], Awaitable[None]]] =
     "fail": _fail,
     "hang": _hang,
     "simulate": _simulate,
+    "service": _service,
 }
 
 
@@ -178,6 +205,8 @@ async def run(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
             output = value
         elif what in STEPS:
             await STEPS[what](channel, value)
+            if what == "service":
+                output = LAST_CALLED[0]
         else:
             raise ValueError(f"unknown step `{what}`")
     return output
@@ -282,6 +311,71 @@ PANELS: list[PanelDeclaration] = [
 NOTIFICATIONS: list[NotificationDeclaration] = [
     {"name": "job_done", "help": "A made-up job ended"},
 ]
+
+# Its service (decision 518): what its attempts share.
+COUNTED = [0]
+GROWN: list[bytearray] = []
+
+
+async def on_call(attempt: ServiceAttempt, method: str, args: object) -> object:
+    """A call of an attempt's plugin."""
+    if method == "count":
+        COUNTED[0] += 1
+        return COUNTED[0]
+    if method == "crash":
+        os._exit(3)
+    if method == "crash_once":
+        marker = Path("crashed-once")
+        if not marker.exists():
+            marker.write_text(attempt.attempt_id)
+            os._exit(3)
+        return "crashed once already"
+    if method == "grow":
+        GROWN.append(bytearray(int(str(args)) * 1024 * 1024))
+        for chunk in GROWN:
+            chunk[::4096] = b"x" * len(chunk[::4096])
+        # Kept while it works on: what the worker's memory check sees.
+        await asyncio.sleep(10)
+        return len(GROWN)
+    if method == "stall":
+        print("stalling its loop", flush=True)
+        time.sleep(float(str(args)))
+        return "stalled"
+    raise ValueError(f"unknown method `{method}`")
+
+
+async def start(context: ServiceContext) -> None:
+    """Its start: what it was given."""
+    print(f"service started with {len(context.secrets)} secrets", flush=True)
+
+
+async def stop() -> None:
+    """Its stop (SIGTERM)."""
+    print("service stopped by the worker", flush=True)
+
+
+async def on_drained() -> None:
+    """The worker drained for maintenance: a service acting on its own would pause here."""
+    print("service told: drained", flush=True)
+
+
+async def on_resumed() -> None:
+    """The worker resumed."""
+    print("service told: resumed", flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--service"]:
+    raise SystemExit(
+        serve(
+            on_call,
+            name="dummy",
+            versions=["1.0"],
+            start=start,
+            stop=stop,
+            on_drained=on_drained,
+            on_resumed=on_resumed,
+        )
+    )
 
 if __name__ == "__main__":
     raise SystemExit(

@@ -36,6 +36,8 @@ pub struct Plugin {
     pub declarations: schedr_model::extension::Declarations,
     /// The most series each of its metrics keeps.
     pub max_series: u32,
+    /// Its service (decision 518); none for a discovered plugin.
+    pub service: Option<crate::service::ServiceConfig>,
 }
 
 /// A worker's plugins, by extension name.
@@ -241,6 +243,7 @@ pub async fn plugins(
                         // Its own come in its hello (decision 513).
                         declarations: schedr_model::extension::Declarations::default(),
                         max_series: schedr_model::extension::DEFAULT_MAX_SERIES,
+                        service: None,
                     },
                 );
             }

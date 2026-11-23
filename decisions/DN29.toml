@@ -1,0 +1,20 @@
+title = "A service's calls by ID, its memory off the task budgets, its secrets in the welcome, a retry after the settle; Rust and shell plugins call it"
+date = 2026-11-22
+by = "user"
+on = "D518"
+kind = "adds"
+summary = '''
+A plugin's calls to its service carry an `id`, the answer the same: several in flight in one
+attempt. Each service's `service_memory` is taken off the limit before the task budgets are
+split over the slots, so tasks and services fit the pod. The service's declared secrets are read
+by the worker at each start and sent in its answer to the service's `hello`, never in the
+environment; the service may ask `secret_get` for a declared one again. Turned off past the
+restart limit, the extension is tried again once `service_settle` has passed since the first of
+those restarts. Routing stays by queue (decision 510); a worker whose service isn't ready rejects an assignment with
+`EXTENSION_NOT_READY` (protocol 2.2), handled as code not there yet: no try, the queue's other
+workers tried, unschedulable only after `[master] code_wait`. The Rust crate's `Channel` gains `service_call` (a Rust service later); a shell
+plugin's script calls its service with `schedr task-ctx extension call`. Not chosen: one call at
+a time; holding the task until ready; the memory inside the reserve; secrets only by asking; off until the worker restarts;
+a Rust service now, or no Rust side; no shell side.
+'''
+history = "JOURNAL.md#DN29"

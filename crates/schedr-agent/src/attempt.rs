@@ -392,6 +392,11 @@ pub struct WorkerTimeouts {
     pub fork_answer: Duration,
     /// How a fork server's restarts are spaced.
     pub fork_backoff: crate::fork::ForkBackoff,
+    /// How an extension's service is restarted (decision 518).
+    pub service: crate::service::ServiceTimings,
+    /// How long the worker waits for its services to stop once it has drained: their grace
+    /// and a moment (the drain's `terminate_period` and 5 s).
+    pub service_stop: Duration,
     /// How often old logs are swept (`log_sweep_interval`).
     pub log_sweep: Duration,
     /// How an orphan is stopped.
@@ -472,6 +477,9 @@ impl Default for WorkerTimeouts {
             output_drain: crate::launch::OUTPUT_DRAIN_TIMEOUT,
             fork_answer: crate::fork::FORK_ANSWER_TIMEOUT,
             fork_backoff: crate::fork::ForkBackoff::default(),
+            service: crate::service::ServiceTimings::default(),
+            service_stop: crate::drain::DrainPeriods::default().terminate_period
+                + Duration::from_secs(5),
             log_sweep: crate::retention::SWEEP_INTERVAL,
             orphan: crate::journal::OrphanWaits::default(),
             orphan_grace: crate::agent::ORPHAN_GRACE,

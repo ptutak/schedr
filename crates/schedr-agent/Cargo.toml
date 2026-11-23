@@ -18,6 +18,7 @@ prost-types.workspace = true
 rustix.workspace = true
 schedr-config.workspace = true
 schedr-db.workspace = true
+schedr-extension.workspace = true
 schedr-model.workspace = true
 schedr-proto.workspace = true
 serde.workspace = true

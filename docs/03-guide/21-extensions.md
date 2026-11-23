@@ -347,32 +347,49 @@ A plugin that only waits for something has another way: a `@sensor` in a Python 
 a watcher slot. A sensor has no cleanup and no handles, which is why an extension that starts
 something to undo is a plugin.
 
-## Writing a plugin
+## Building a plugin in Python
 
-**In Python**, `schedr.extension` is the loop: a plugin gives it a coroutine.
+A plugin is a program the worker runs for each attempt. In Python, `schedr.extension` is its whole
+loop: you write a coroutine that does the task, and `main` speaks the protocol around it.
 
-```python
-from schedr.extension import ExtensionChannel, ExtensionRequest, main
+1. Write the program (`schedr-ext-spark`, executable, `schedr` installed beside it):
 
-async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
-    token = await channel.secret("spark/api", "token")
-    job_id = submit(request.payload, token)
-    await channel.add_handle("job", {"id": job_id})
-    return {"total": wait_for(job_id)}
+   ```python
+   from schedr.extension import ExtensionChannel, ExtensionRequest, main
 
-async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
-    for handle in request.handles:
-        cancel(handle.value["id"])
-    return None
+   async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+       token = await channel.secret("spark/api", "token")
+       job_id = submit(request.payload, token)
+       await channel.add_handle("job", {"id": job_id})
+       return {"total": wait_for(job_id)}
 
-if __name__ == "__main__":
-    raise SystemExit(main(run, name="spark", versions=["1.0"], cleanup=cleanup))
-```
+   async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> object:
+       for handle in request.handles:
+           cancel(handle.value["id"])
+       return None
 
-`main` also answers `--describe`. An exception fails the attempt; an output that isn't JSON, or
-is over the task's `max_output_size`, fails it too.
+   if __name__ == "__main__":
+       raise SystemExit(main(run, name="spark", versions=["1.0"], cleanup=cleanup))
+   ```
 
-**In Rust**, the `schedr-extension` crate holds the messages a plugin speaks and the same loop
+2. Configure it on the workers that should run it (see [A worker's side](#a-workers-side)):
+
+   ```toml
+   [extensions.spark]
+   command  = ["/opt/acme/schedr-ext-spark"]
+   versions = ["1.0"]
+   ```
+
+3. Use it in a DAG: `ExtensionTask("submit", name="spark", version="1.0", payload={...},
+   secrets=[secrets["spark/api"]["token"]], cleanup=True)`.
+
+What `run` returns is the task's output; an exception fails the attempt, and so does an output
+that isn't JSON or is over the task's `max_output_size`. `channel` has what a Python task may do
+(secrets, connections, handles, the API, the stop reason) and the reports of
+[Reporting](#reporting): `status`, `link`, `metric`, `notify`. `main` also answers `--describe`
+for discovery.
+
+**In Rust**, or any language: a plugin speaks [the plugin protocol](22-plugin-protocol.md). The `schedr-extension` crate holds the messages a plugin speaks and the same loop
 (`schedr_extension::main`, a `Plugin` trait with `run` and `cleanup`); its example,
 `hello-plugin`, greets the payload's `name`. The crate stands on its own: it depends on no other
 schedr crate, and its version follows the protocol (1.x speaks protocol 1), not schedr's
@@ -387,21 +404,36 @@ own types (decision note 17).
 cleanup after a failure, a timeout, a version no worker serves, and plugins in two languages side
 by side (the dummy and the Rust `hello-plugin`, which those targets build and configure by path).
 
-## A shell script as a plugin
+## Building a shell script plugin
 
 `schedr extension shell -- <script> [args]` makes any script an extension's plugin: it speaks the
-protocol with the worker and runs the script for each attempt. Configure it as the extension's
-command, its metrics, panels and notifications beside it (a script sends no `hello`, so they are
-declared here):
+protocol with the worker and runs the script for each attempt; the script talks back through
+`schedr task-ctx`.
 
-```toml
-[extensions.backup]
-command  = ["schedr", "extension", "shell", "--", "/opt/ops/backup.sh"]
-versions = ["1.0"]
-metrics  = [{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]
-panels   = [{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]
-notifications = [{name = "backup_done", help = "A backup's snapshot was taken"}]
-```
+1. Write the script:
+
+   ```sh
+   #!/bin/sh
+   set -eu
+   payload=$(cat)                                   # the payload, JSON
+   schedr task-ctx status copying --progress 0.1
+   token=$(schedr task-ctx secret get "backup/target#token")
+   count=$(copy_files "$payload" "$token")          # the work
+   schedr task-ctx extension metric files_copied "$count" --label kind=data
+   schedr task-ctx extension output set "{\"files\": $count}"
+   ```
+
+2. Configure it as the extension's command, its metrics, panels and notifications beside it (a
+   script sends no `hello`, so they are declared here):
+
+   ```toml
+   [extensions.backup]
+   command  = ["schedr", "extension", "shell", "--", "/opt/ops/backup.sh"]
+   versions = ["1.0"]
+   metrics  = [{name = "files_copied", kind = "counter", help = "Files copied", labels = [{name = "kind"}]}]
+   panels   = [{title = "Files copied", metric = "files_copied", chart = "bars", row = 1, cell = "full"}]
+   notifications = [{name = "backup_done", help = "A backup's snapshot was taken"}]
+   ```
 
 The script gets:
 
@@ -424,6 +456,7 @@ on its `PATH`, so the commands are that build's:
 | `extension metric NAME VALUE [--label NAME=VALUE]...` | A point of a metric declared in the config |
 | `extension notify EVENT [--text TEXT] [--data JSON]` | One of the notification events declared in the config (`notifications = [{name = ..., help = ...}]`), to the DAG's channels subscribed to `EXTENSION_EVENT` |
 | `extension stop-reason [--field reason]` | After `SIGTERM`: `cancel`, `timeout`, `drain` or `master_lost`, and the seconds left |
+| `extension call METHOD [--args JSON]` | A call to the extension's service; prints its result as JSON, exits 1 with its error |
 | `api METHOD PATH`, `events post` | schedr's API and events, as the task |
 
 A cleanup (`ExtensionTask(..., cleanup=True)`) runs the same script with `SCHEDR_CLEANUP=1`. A
@@ -433,6 +466,177 @@ of `schedr-ext-*` programs, which a script isn't.
 
 `examples/extensions/backup/backup.sh` is one, configured by `make standalone`;
 `examples/extensions/backup_extension.py` has its DAGs, one that succeeds and one that fails.
+
+## Building a service in Python
+
+A plugin lives for one attempt. What its attempts share (a client logged in once, a watch on the
+system it controls, a warm session) goes in the extension's **service**: one long-running
+process per worker (decision 518). Configure it beside `command`:
+
+```toml
+[extensions.spark]
+command  = ["/opt/acme/schedr-ext-spark"]
+versions = ["1.0"]
+service  = ["/opt/acme/schedr-ext-spark", "--service"]
+service_secrets = [{path = "spark/api", key = "token"}]
+```
+
+| Key | Default | What |
+|---|---|---|
+| `service` | none | Its program and arguments, as `command`'s. Without it, nothing changes |
+| `service_ready_timeout` | `60s` | How long it has to say `ready` after it starts |
+| `service_memory` | `256MiB` | What its processes may use together; past it, it is killed. Taken off the memory the worker's task budgets are split from, but not off a `[worker] memory_budget` you set: leave room for it there ([Workers](05-workers.md#memory)) |
+| `service_accept_timeout` | `10s` | How long it has to accept an attempt's connection |
+| `service_timeouts` | `3` | Attempts timing out, or connections unanswered, in a row that take it for hung; `0` never |
+| `service_restarts` | `5` | Restarts within `service_settle` before the extension is turned off on the worker |
+| `service_settle` | `24h` | The window restarts count in, and how long it stays off |
+| `service_secrets` | none | The secrets it is given at each start, never in its environment |
+
+**Its life on a worker:**
+
+1. The worker starts it when it starts. It listens on nothing: its one link to the worker is an
+   inherited socket, `SCHEDR_SERVICE_FD`.
+2. It says `hello` (the extension, the versions it serves), gets its secrets in the answer, and
+   says `ready`. Only then does the worker take the extension's tasks, and only at the versions
+   it serves of the configured ones.
+3. Each attempt gets a private connection to it: a socket pair, one end the plugin's (its
+   `SCHEDR_SERVICE_FD`), the other passed to the service. The service accepts it, and the plugin
+   starts. The worker isn't in the middle: the plugin calls the service directly
+   (`await channel.service.call("submit", {...})`), several calls at once if it likes.
+4. When it crashes (it exits, breaks the protocol, isn't ready in time) or goes past its memory,
+   its attempts' connections close with it and their plugins fail them, retries applying. It is
+   started again after 1 s, then 2, up to 1 min.
+5. Nothing pings it. A service that hangs shows as attempts timing out, or connections it doesn't
+   accept in time (each such attempt fails at once); `service_timeouts` of either in a row count
+   as a crash.
+6. Past `service_restarts` within `service_settle`, the extension is turned off on that worker
+   until the settle has passed since the first of them, then tried again. Meanwhile, and whenever
+   it isn't ready, the worker gives the extension's tasks back with `EXTENSION_NOT_READY`: no try
+   is used, the queue's other workers get them, and the task waits as for code on its way,
+   `unschedulable` only after `[master] code_wait` (10 min) with every worker saying so.
+7. When the worker stops, its drain done (no attempt connected any more), the service gets
+   `SIGTERM`, and `SIGKILL` after the grace. A worker drained for maintenance keeps it running.
+
+Its output goes to the worker's log, a line at a time, tagged with the extension, its secrets
+masked. Its starts, readiness, crashes, memory kills, turn-offs, statuses and stops are events on
+the extension's page. It may send points of the extension's declared metrics, kept under the
+newest version it serves.
+
+**Building one in Python**: a handler and `serve`, in the same program as the plugin or its own.
+
+1. Write it:
+
+   ```python
+   from schedr.extension import ServiceAttempt, ServiceContext, serve
+
+   # What the attempts share: one client, logged in once, and a watch it keeps.
+   state = {"client": None, "context": None, "paused": False, "jobs": {}}
+
+
+   async def start(context: ServiceContext) -> None:
+       """Once, before `ready`: its secrets are given here, never in its environment."""
+       state["context"] = context
+       state["client"] = SparkClient(token=context.secret_value("spark/api", "token"))
+       await context.status("connected", "logged in to the cluster")
+
+
+   async def on_call(attempt: ServiceAttempt, method: str, args: object) -> object:
+       """Each call of an attempt's plugin; what it returns is the answer, an exception the error."""
+       client = state["client"]
+       if method == "submit":
+           job = await client.submit(args, tag=attempt.attempt_id)
+           state["jobs"][attempt.attempt_id] = job.id
+           await state["context"].metric("jobs_submitted", 1, queue=job.queue)
+           return {"job_id": job.id}
+       if method == "status":
+           return await client.status(state["jobs"][attempt.attempt_id])
+       raise ValueError(f"unknown method {method}")
+
+
+   async def on_closed(attempt: ServiceAttempt) -> None:
+       """An attempt's connection closed: its attempt ended, however it ended."""
+       state["jobs"].pop(attempt.attempt_id, None)
+
+
+   async def on_drained() -> None:
+       """The worker drained for maintenance: no attempts come; stop acting on your own."""
+       state["paused"] = True
+
+
+   async def on_resumed() -> None:
+       """The worker resumed: go on."""
+       state["paused"] = False
+
+
+   async def stop() -> None:
+       """SIGTERM, when the worker stops: close what it holds, within the grace."""
+       await state["client"].close()
+
+
+   if __name__ == "__main__":
+       raise SystemExit(
+           serve(
+               on_call,
+               name="spark",
+               versions=["1.0"],
+               start=start,
+               on_closed=on_closed,
+               on_drained=on_drained,
+               on_resumed=on_resumed,
+               stop=stop,
+           )
+       )
+   ```
+
+2. Configure it beside the plugin (`service = [...]`, above).
+
+3. Call it from the plugin's `run`:
+
+   ```python
+   job = await channel.service.call("submit", request.payload)
+   ```
+
+   An exception in the handler fails that call with `ServiceError`, and so does a service gone;
+   several calls may be in flight at once. A Rust plugin calls with
+   `channel.service_call(method, args)`, a shell plugin's script with `schedr task-ctx extension
+   call METHOD --args JSON` (it prints the result).
+
+Its hooks, all but `on_call` optional:
+
+| Hook | Called |
+|---|---|
+| `start(context)` | Once, before it says `ready`; `context.secret_value(...)` reads a secret given at the start |
+| `on_call(attempt, method, args)` | For each call of an attempt's plugin, several at once; returns the answer (JSON), raises to fail the call |
+| `on_closed(attempt)` | An attempt's connection closed: its attempt ended |
+| `on_drained()`, `on_resumed()` | The worker drained for maintenance, and resumed: no attempts meanwhile; it keeps running |
+| `stop()` | On `SIGTERM`, when the worker stops, before it exits |
+
+Its context also reads a secret again (`await context.secret(...)`) and reports as a plugin does
+(`await context.status(...)`, `await context.metric(...)`, a metric declared for the
+extension). The dummy extension's
+service is a counter its attempts share (`examples/extensions/dummy/schedr-ext-dummy
+--service`, configured by `make standalone`; `extension_service` in
+`examples/extensions/dummy_extension.py` runs three attempts against it).
+
+## Building a service in another language
+
+A service in any language speaks the service part of [the plugin
+protocol](22-plugin-protocol.md#a-service): length-prefixed JSON over the inherited socket
+`SCHEDR_SERVICE_FD`. What it must do:
+
+1. Send `hello` (`"mode": "service"`, `"protocol": 1`, its extension's `name` and `versions`),
+   read `welcome` (its secrets), then send `ready` within `service_ready_timeout`.
+2. Read messages from the control socket. On `attempt_connected`, take the descriptor that comes
+   with it (`SCM_RIGHTS`, `recvmsg`), answer `attempt_accepted` within
+   `service_accept_timeout`, and serve that connection: `call` in, `answer` or `call_failed`
+   out, by the call's `id`, several at once. A connection closing is its attempt ending.
+3. Keep serving the control socket while attempts run: a loop blocked on one attempt leaves the
+   next unaccepted. Answer `drained` and `resumed` as it needs (no answer is expected), and exit
+   on `SIGTERM`.
+
+The protocol page's [messages](22-plugin-protocol.md#every-message) list every message both
+ways. `python/schedr/_service.py` is a complete service in about 300 lines, to read beside it.
+
 
 ## The Kubernetes plugin
 

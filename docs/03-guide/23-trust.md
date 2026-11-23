@@ -68,6 +68,8 @@ for one process and passed to it as an inherited descriptor:
 | `task-ctx` | a task's process and the worker |
 | An extension's channel (`SCHEDR_AGENT_FD`) | the worker and a plugin it started |
 | A shell plugin's script | `schedr extension shell` and its script's `task-ctx` |
+| An extension's service's control socket (`SCHEDR_SERVICE_FD`) | the worker and the service it started |
+| An attempt's connection to its service | the attempt's plugin and the service, the service's end passed by the worker |
 
 Nothing listens, so no other process can connect: it would need the descriptor itself. A
 plugin should make its end close-on-exec first, so processes it starts don't inherit it

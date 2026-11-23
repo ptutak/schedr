@@ -27,7 +27,7 @@ use schedr_agent::fork::{ForkConfig, ForkServers};
 use schedr_agent::journal::Journal;
 use schedr_agent::logs::LogEndpoint;
 use schedr_agent::memory::{
-    MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, budget, ceiling, cgroup_limit, show_size,
+    MIN_BUDGET, MemoryWatch, Reserve, WORKER_RESERVE, ceiling, cgroup_limit, show_size,
 };
 use schedr_agent::metrics::AgentMetrics;
 use schedr_agent::parse::ParseLimits;
@@ -115,6 +115,11 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
             max: config.timings.fork_backoff_max,
             reset_after: config.timings.fork_backoff_reset_after,
         },
+        service: schedr_agent::service::ServiceTimings {
+            backoff_first: config.timings.service_backoff_first,
+            backoff_max: config.timings.service_backoff_max,
+        },
+        service_stop: config.worker.drain_terminate_period + Duration::from_secs(5),
         log_sweep: config.timings.log_sweep_interval,
         orphan: schedr_agent::journal::OrphanWaits {
             poll: config.timings.orphan_poll,
@@ -521,6 +526,18 @@ fn configured_plugins(config: &Config) -> schedr_agent::extensions::Plugins {
                     notifications: plugin.notifications.clone(),
                 },
                 max_series: plugin.max_series,
+                service: (!plugin.service.is_empty()).then(|| {
+                    schedr_agent::service::ServiceConfig {
+                        command: plugin.service.clone(),
+                        ready_timeout: plugin.service_ready_timeout,
+                        memory: plugin.service_memory,
+                        restarts: plugin.service_restarts,
+                        timeouts: plugin.service_timeouts,
+                        accept_timeout: plugin.service_accept_timeout,
+                        settle: plugin.service_settle,
+                        secrets: plugin.service_secrets.clone(),
+                    }
+                }),
             };
             (name.clone(), plugin)
         })
@@ -551,8 +568,20 @@ pub(crate) fn fork_config(config: &Config) -> Option<ForkConfig> {
     })
 }
 
+/// The memory the configured extensions' services may use together (`service_memory`, DN29).
+#[must_use]
+pub fn services_memory(config: &Config) -> u64 {
+    config
+        .extensions
+        .plugins
+        .values()
+        .filter(|plugin| !plugin.service.is_empty())
+        .map(|plugin| plugin.service_memory)
+        .sum()
+}
+
 /// How the memory watchdog watches tasks: `[worker] memory_budget`, else (`limit` − the
-/// reserve) ÷ slots, the reserve `[worker] memory_reserve` or `default_reserve`; without a
+/// reserve − the services' memory) ÷ slots, the reserve `[worker] memory_reserve` or `default_reserve`; without a
 /// budget or a limit it only measures.
 #[must_use]
 pub fn memory_watch(config: &Config, limit: Option<u64>, default_reserve: Reserve) -> MemoryWatch {
@@ -563,14 +592,15 @@ pub fn memory_watch(config: &Config, limit: Option<u64>, default_reserve: Reserv
             MemoryReserve::Percent(percent) => Reserve::Percent(percent),
             MemoryReserve::Size(bytes) => Reserve::Bytes(bytes),
         });
+    // Its extensions' services hold theirs all the time (DN29): off what the tasks split.
+    let services = services_memory(config);
     MemoryWatch {
-        budget: budget(
-            config.worker.memory_budget,
-            limit,
-            config.worker.slots,
-            reserve,
-        ),
-        ceiling: limit.map(|limit| ceiling(limit, reserve)),
+        budget: config.worker.memory_budget.or_else(|| {
+            let ceiling = ceiling(limit?, reserve).saturating_sub(services);
+            Some(ceiling / u64::from(config.worker.slots.max(1)))
+        }),
+        // What one task may ask for (`memory=`) leaves the services' room too (agy's review).
+        ceiling: limit.map(|limit| ceiling(limit, reserve).saturating_sub(services)),
         // The binary running the agent: `schedr task-exec` (decision 50).
         task_exec: std::env::current_exe().ok(),
         interval: config.timings.memory_check_interval,
@@ -1404,8 +1434,21 @@ pub async fn run_worker(
     {
         tracing::warn!("{warning}");
     }
+    // Its extensions' services (decision 518), kept up while it runs.
+    let (stop_services, services_stopping) = watch::channel(false);
+    let services = schedr_agent::service::Services::start(
+        service_specs(&agent),
+        &schedr_agent::service::ServiceDeps {
+            secrets: std::sync::Arc::clone(&agent.secrets),
+            figures: observed.metrics.extensions.clone(),
+            proc_root: PathBuf::from("/proc"),
+            memory_interval: agent.setup.memory.interval,
+        },
+        &services_stopping,
+    );
     let executor = ProcessExecutor {
         setup: agent.setup.clone(),
+        services: services.clone(),
         parse,
         metrics: observed.metrics.clone(),
         drain_terminate_period: agent.drain.terminate_period,
@@ -1436,6 +1479,9 @@ pub async fn run_worker(
             stop,
         )
         .await;
+    // Drained: no attempt is connected any more; each service gets its stop.
+    let _ = stop_services.send(true);
+    services.stopped(timeouts.service_stop).await;
     let _ = done.send(1);
     let _ = sweeping.await;
     if let Some(Ok(Err(error))) = match logs {
@@ -1444,6 +1490,60 @@ pub async fn run_worker(
     } {
         tracing::warn!(%error, "the log endpoint failed");
     }
+}
+
+/// The services of `agent`'s extensions (decision 518): each in its own folder under the data
+/// directory (`services/<worker>/<extension>`, only the worker's user's), with the worker's
+/// allow-listed environment.
+fn service_specs(agent: &AgentSettings) -> Vec<schedr_agent::service::ServiceSpec> {
+    // `<data>/code/<worker>`: the data directory two levels up.
+    let data = agent
+        .code_dir
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(&agent.code_dir);
+    let worker = agent.code_dir.file_name().unwrap_or_default();
+    let env: BTreeMap<String, String> = agent
+        .setup
+        .agent_env
+        .iter()
+        .filter(|(name, _)| {
+            schedr_agent::env::is_allowed(name) || agent.setup.pass_env.contains(name)
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    agent
+        .setup
+        .extensions
+        .iter()
+        .filter_map(|(name, plugin)| {
+            let config = plugin.service.clone()?;
+            let working_dir = data.join("services").join(worker).join(file_name(name));
+            if let Err(error) = private_dir(&working_dir) {
+                tracing::error!(extension = name, %error, "the extension's service has no folder");
+            }
+            Some(schedr_agent::service::ServiceSpec {
+                extension: name.clone(),
+                config,
+                versions: plugin.versions.clone(),
+                env: env.clone(),
+                working_dir,
+                grace: agent.drain.terminate_period,
+                timings: agent.setup.timeouts.service,
+                declarations: plugin.declarations.clone(),
+                max_series: plugin.max_series,
+            })
+        })
+        .collect()
+}
+
+/// Creates `dir` and the folders above it it needs, for the worker's user alone.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
 }
 
 /// Whether a worker's configuration asks for the `db` secret storage (decision 511): a storage

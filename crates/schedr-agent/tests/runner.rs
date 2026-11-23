@@ -586,6 +586,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
     )
     .unwrap();
     let executor = ProcessExecutor {
+        services: schedr_agent::service::Services::default(),
         setup: WorkerSetup {
             roots: BTreeMap::from([("etl".to_owned(), configured)]),
             parse_only: BTreeMap::new(),

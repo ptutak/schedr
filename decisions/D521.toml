@@ -1,0 +1,21 @@
+title = "Extensions never hold the master up: their reports are dropped first"
+date = 2026-11-23
+by = "user"
+status = "active"
+topic = "task-processes"
+section = "Extensions"
+summary = '''
+Extensions rank below native tasks: they get the same features, but an extension's reports
+(figures, events, notifications' bookkeeping) never slow or stop the master. Under pressure the
+master drops them, counted and warned of, rather than wait on them; an extension behaves or loses
+its reports. So the master takes them off its round: a heartbeat hands them to a bounded queue
+(full: dropped), a writer of its own writes them in batches with a short timeout (failed or slow:
+dropped), and their volume is cut where it adds nothing (seen times written at most once a
+minute; events batched and capped per extension). Their queries are timed on the master. Built
+and measured in M5.2i12. The five changes (statuses and links, events, the minute
+merge, the seen times batched; all through the queue and writer) are kept even if this machine's
+measurements show no gain: its throughput has not always shown such gains.
+'''
+history = "JOURNAL.md#D521"
+step = "M5.2i12"
+code = []

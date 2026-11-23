@@ -1,5 +1,88 @@
 {
   "$defs": {
+    "CallMessage": {
+      "description": "A message on an attempt's connection to its service, either way (DN29): calls by `id`,\nseveral in flight, each answered once.",
+      "oneOf": [
+        {
+          "description": "From the plugin: a call.",
+          "properties": {
+            "args": {
+              "default": null,
+              "description": "Its arguments."
+            },
+            "id": {
+              "description": "Its number, unique on the connection.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "method": {
+              "description": "What is asked for.",
+              "type": "string"
+            },
+            "type": {
+              "const": "call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "method"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "From the service: a call's result.",
+          "properties": {
+            "id": {
+              "description": "The call's number.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "result": {
+              "default": null,
+              "description": "The result."
+            },
+            "type": {
+              "const": "answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "From the service: a call that failed.",
+          "properties": {
+            "id": {
+              "description": "The call's number.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "message": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "call_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ErrorSummary": {
       "description": "Why a task failed.",
       "properties": {
@@ -453,6 +536,167 @@
       ],
       "type": "object"
     },
+    "ServiceMessage": {
+      "description": "A message from an extension's service to its worker, on its control socket\n(`SCHEDR_SERVICE_FD`, decision 518).",
+      "oneOf": [
+        {
+          "description": "The first message, naming the extension and the versions it serves.",
+          "properties": {
+            "mode": {
+              "description": "Always `service`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The extension.",
+              "type": "string"
+            },
+            "protocol": {
+              "description": "[`SERVICE_PROTOCOL`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schedr_version": {
+              "description": "The service's own version, not checked.",
+              "type": "string"
+            },
+            "type": {
+              "const": "hello",
+              "type": "string"
+            },
+            "versions": {
+              "description": "The versions of it the service serves; the worker offers only those of its\nconfigured ones.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "schedr_version",
+            "mode",
+            "protocol",
+            "name",
+            "versions"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Started and serving, after the welcome: attempts may connect from now on.",
+          "properties": {
+            "type": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to [`ToService::AttemptConnected`]: the attempt's connection taken, its plugin\nmay start. Unanswered within `service_accept_timeout`, the attempt fails, and a few in a\nrow take the service for hung (DN32).",
+          "properties": {
+            "attempt_id": {
+              "description": "The attempt.",
+              "type": "string"
+            },
+            "type": {
+              "const": "attempt_accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One of its declared secrets, again (`service_secrets`); answered [`ToService::ServiceSecret`] or\n[`ToService::ServiceSecretFailed`].",
+          "properties": {
+            "secret": {
+              "$ref": "#/$defs/SecretName",
+              "description": "Which secret."
+            },
+            "type": {
+              "const": "secret_get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "secret"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What it is doing, for people (an event when it changes).",
+          "properties": {
+            "message": {
+              "description": "More about it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "description": "A short name for the phase, e.g. `watching`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Points of its extension's declared metrics, as a plugin's.",
+          "properties": {
+            "points": {
+              "description": "The points.",
+              "items": {
+                "$ref": "#/$defs/MetricPoint"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "points"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ServiceTask": {
+      "description": "The task an attempt connected to a service runs.",
+      "properties": {
+        "name": {
+          "description": "The extension.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The exact version the task is written for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
     "Settings": {
       "additionalProperties": true,
       "description": "A task's settings.",
@@ -531,6 +775,139 @@
         "settings"
       ],
       "type": "object"
+    },
+    "ToService": {
+      "description": "A message from the worker to an extension's service, on its control socket.",
+      "oneOf": [
+        {
+          "description": "The answer to its hello: go on, with its declared secrets, read for this start.",
+          "properties": {
+            "secrets": {
+              "default": [],
+              "description": "The secrets of `service_secrets`.",
+              "items": {
+                "$ref": "#/$defs/SecretValue"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "welcome",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to its hello: it can't run here (another protocol, another extension); it\nexits.",
+          "properties": {
+            "reason": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An attempt's private connection: the descriptor of its end of a socket pair comes with\nthis message (`SCM_RIGHTS`, on its first byte). The other end is the attempt's plugin's\n`SCHEDR_SERVICE_FD`; its closing is the attempt's end.",
+          "properties": {
+            "attempt_id": {
+              "description": "The attempt.",
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/ServiceTask",
+              "description": "The task it runs."
+            },
+            "type": {
+              "const": "attempt_connected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt_id",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The worker drained for maintenance (`schedr workers drain`, DN33): it gets no attempts\nmeanwhile; a service that acts on its own pauses itself. It keeps running.",
+          "properties": {
+            "type": {
+              "const": "drained",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The worker resumed after [`Self::Drained`]: attempts come again.",
+          "properties": {
+            "type": {
+              "const": "resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The secret asked for.",
+          "properties": {
+            "type": {
+              "const": "secret",
+              "type": "string"
+            },
+            "value": {
+              "description": "A key's value, or a whole secret's object."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The secret asked for can't be given.",
+          "properties": {
+            "kind": {
+              "description": "`secret_denied` (not declared), `secret_not_found`, `secret_unavailable`.",
+              "type": "string"
+            },
+            "message": {
+              "description": "Why.",
+              "type": "string"
+            },
+            "type": {
+              "const": "secret_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "WorkerMessage": {
       "description": "A message from the worker to the plugin.",
@@ -768,8 +1145,20 @@
     {
       "$ref": "#/$defs/WorkerMessage",
       "description": "From the worker."
+    },
+    {
+      "$ref": "#/$defs/ServiceMessage",
+      "description": "From a service."
+    },
+    {
+      "$ref": "#/$defs/ToService",
+      "description": "To a service."
+    },
+    {
+      "$ref": "#/$defs/CallMessage",
+      "description": "On an attempt's connection to its service."
     }
   ],
-  "description": "Any message on a plugin's channel, either way: what `schema/extension.schema.json` describes\n(M5.2i4). Only for the schema.",
+  "description": "Any message on a plugin's channel, either way, or a service's (control or calls): what\n`schema/extension.schema.json` describes (M5.2i4, M5.2i9). Only for the schema.",
   "title": "ChannelMessage"
 }

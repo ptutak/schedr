@@ -5,6 +5,7 @@ object tagged by ``type`` (the shapes are ``schema/runner.schema.json``, generat
 ``schedr-model``, ``runner.rs``).
 """
 
+import array
 import json
 import os
 import socket
@@ -112,11 +113,13 @@ class Channel:
         """
         return self.receive_with_fds(0)[0]
 
-    def receive_with_fds(self, max_fds: int) -> tuple[dict[str, Any], list[int]]:
+    def receive_with_fds(self, max_fds: int, flags: int = 0) -> tuple[dict[str, Any], list[int]]:
         """Receives one message and the descriptors sent with it (``SCM_RIGHTS``).
 
         Args:
             max_fds: The most descriptors accepted.
+            flags: ``recvmsg`` flags (``socket.MSG_CMSG_CLOEXEC``: the descriptors close-on-exec
+                as they arrive).
 
         Returns:
             The message and the received descriptors, which the caller owns.
@@ -127,13 +130,13 @@ class Channel:
                 received ones are closed).
         """
         try:
-            header, fds, flags, _ = socket.recv_fds(self._sock, _HEADER, max_fds)
+            header, fds, got = _recv_fds(self._sock, max_fds, flags)
         except ConnectionResetError as e:  # closed with our messages unread
             raise ChannelClosedError("the other side closed the connection") from e
         if not header:
             raise ChannelClosedError("the other side closed the connection")
         try:
-            if flags & socket.MSG_CTRUNC:
+            if got & socket.MSG_CTRUNC:
                 raise ProtocolError(f"more than {max_fds} descriptors came with a message")
             return self._receive_body(header + self._read(_HEADER - len(header))), fds
         except BaseException:
@@ -177,6 +180,21 @@ class Channel:
             chunks.append(chunk)
             remaining -= len(chunk)
         return b"".join(chunks)
+
+
+def _recv_fds(sock: socket.socket, max_fds: int, flags: int) -> tuple[bytes, list[int], int]:
+    """A message's first bytes and the descriptors that came with them.
+
+    ``recvmsg`` itself: ``socket.recv_fds`` doesn't pass ``MSG_CMSG_CLOEXEC`` on (CPython 3.14,
+    seen in Grok's review of M5.2i9).
+    """
+    item = array.array("i").itemsize
+    data, ancillary, got, _ = sock.recvmsg(_HEADER, socket.CMSG_SPACE(max_fds * item), flags)
+    fds = array.array("i")
+    for level, kind, payload in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            fds.frombytes(payload[: len(payload) - (len(payload) % item)])
+    return data, list(fds), got
 
 
 def from_fd(fd: int) -> Channel:

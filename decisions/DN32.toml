@@ -1,0 +1,18 @@
+title = "A service answers each attempt's connection in time, timed by the worker"
+date = 2026-11-22
+by = "user"
+on = "D518"
+kind = "adds"
+summary = '''
+A service answers each `attempt_connected` with `attempt_accepted` within `[extensions.<name>]
+service_accept_timeout` (10 s by default), timed by the worker; the attempt's plugin starts only
+then. Unanswered in time, the attempt fails at once (a try used, retries apply) and counts
+towards `service_timeouts` as an attempt timing out does (DN31): a few in a row and the service
+is taken for hung, killed and started again. Unanswered connections and timed-out attempts are counted apart, each against
+`service_timeouts`: an accepted connection starts only the first over, an attempt ending other
+than timed out only the second (a side agent's note: one count, reset by every accept, never
+reached its limit for a service accepting connections and hanging on the work). The
+worker stays out of the calls between plugin and service. Not chosen: the plugin's helpers
+timing each call (`service_timeout`), alone or with this.
+'''
+history = "JOURNAL.md#DN32"

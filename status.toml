@@ -1,10 +1,10 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-22
+updated = 2026-11-23
 
 in_progress = [
-    "M5.2i6, i10, i7, i8 and i14 done and pushed. M5.2i14 (D520): a worker's certificate names its role, `[tls] worker_identity = \"certificate\"` its ID too (the chart's `tls.workerIdentity`, cert-manager's CSI driver, not tried on a real cluster); parse uploads only of reported code; starts and triggers per worker; standalone's links under in-memory mTLS, its files private, its open local API warned of; the trust page (docs/03-guide/23-trust.md, accepted by the user). B279 (an unknown trigger instance holds wait_for triggers) and B280 (the integration Postgres out of connections) logged. Next: M5.2i9 (the extension's service, decision 518: its lifecycle like a fork server's, the user agreeing), then i11, i12, i13 (extension stress), i4, j, k.",
+    "M5.2i9 (D518, DN29-DN33) finished, being pushed: an extension's service, its supervisor in the worker, Python's serve() and channel.service.call(), the Rust crate's service_call, task-ctx extension call, the maintenance drain told (DN33); agy's 11 and Grok's 4 findings fixed; docs accepted by the user. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i11, i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split).",
 ]
 
 waiting = []

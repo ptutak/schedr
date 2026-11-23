@@ -3226,6 +3226,7 @@ dependencies = [
  "rustix",
  "schedr-config",
  "schedr-db",
+ "schedr-extension",
  "schedr-master",
  "schedr-model",
  "schedr-proto",

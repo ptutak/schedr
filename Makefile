@@ -277,14 +277,18 @@ STANDALONE_PREPARE = prepare() { \
 	done; \
 }
 
-# The dummy extension (examples/extensions/dummy, decision 510) found by discovery: its folder
-# first on the workers' PATH (`uv run` puts the environment's python3 before it).
-# And the Rust example plugin (crates/schedr-extension/examples/hello-plugin.rs), configured by
-# path: two plugins in two languages, found two ways. And a shell script's (M5.2i6,
+# The dummy extension (examples/extensions/dummy, decision 510), configured with its service
+# (decision 518, M5.2i9: a discovered plugin has none); discovery stays on, its folder first on
+# the workers' PATH (`uv run` puts the environment's python3 before it), the configured one
+# winning. And the Rust example plugin (crates/schedr-extension/examples/hello-plugin.rs),
+# configured by path: two plugins in two languages. And a shell script's (M5.2i6,
 # examples/extensions/backup/backup.sh), run by `schedr extension shell`, its metrics and panel
 # declared in config.
 HELLO_PLUGIN = $(abspath target/debug/examples/hello-plugin)
 EXT_ENV = SCHEDR_CONFIG__EXTENSIONS__DISCOVER=true PATH="$(abspath examples/extensions/dummy):$$PATH" \
+	SCHEDR_CONFIG__EXTENSIONS__DUMMY__COMMAND='["$(abspath examples/extensions/dummy/schedr-ext-dummy)"]' \
+	SCHEDR_CONFIG__EXTENSIONS__DUMMY__VERSIONS='["1.0"]' \
+	SCHEDR_CONFIG__EXTENSIONS__DUMMY__SERVICE='["$(abspath examples/extensions/dummy/schedr-ext-dummy)", "--service"]' \
 	SCHEDR_CONFIG__EXTENSIONS__HELLO__COMMAND='["$(HELLO_PLUGIN)"]' \
 	SCHEDR_CONFIG__EXTENSIONS__HELLO__VERSIONS='["1.0"]' \
 	SCHEDR_CONFIG__EXTENSIONS__BACKUP__COMMAND='["$(abspath target/debug/schedr)", "extension", "shell", "--", "$(abspath examples/extensions/backup/backup.sh)"]' \

@@ -735,6 +735,20 @@ pub enum EventKind {
     Dropped,
     /// Its plugin sent one of its declared notifications (DN19, M5.2i8).
     Notified,
+    /// Its service started (decision 518).
+    ServiceStarted,
+    /// Its service said `ready`: its versions are offered.
+    ServiceReady,
+    /// Its service ended, didn't get ready in time, or failed its protocol: its attempts' connections closed, a restart planned.
+    ServiceCrashed,
+    /// Its service went past `service_memory` and was killed.
+    ServiceMemoryKilled,
+    /// Past `service_restarts` within `service_settle`: the extension turned off on the worker until the settle has passed.
+    ServiceTurnedOff,
+    /// Its service told a new status.
+    ServiceStatus,
+    /// Its service stopped, the worker draining.
+    ServiceStopped,
 }
 
 impl EventKind {
@@ -747,6 +761,13 @@ impl EventKind {
             Self::Refused => "refused",
             Self::Dropped => "dropped",
             Self::Notified => "notified",
+            Self::ServiceStarted => "service_started",
+            Self::ServiceReady => "service_ready",
+            Self::ServiceCrashed => "service_crashed",
+            Self::ServiceMemoryKilled => "service_memory_killed",
+            Self::ServiceTurnedOff => "service_turned_off",
+            Self::ServiceStatus => "service_status",
+            Self::ServiceStopped => "service_stopped",
         }
     }
 
@@ -759,6 +780,13 @@ impl EventKind {
             "refused" => Self::Refused,
             "dropped" => Self::Dropped,
             "notified" => Self::Notified,
+            "service_started" => Self::ServiceStarted,
+            "service_ready" => Self::ServiceReady,
+            "service_crashed" => Self::ServiceCrashed,
+            "service_memory_killed" => Self::ServiceMemoryKilled,
+            "service_turned_off" => Self::ServiceTurnedOff,
+            "service_status" => Self::ServiceStatus,
+            "service_stopped" => Self::ServiceStopped,
             _ => return None,
         })
     }

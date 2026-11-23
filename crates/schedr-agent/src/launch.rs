@@ -94,7 +94,7 @@ pub async fn start_runner(
     mode: RunnerMode,
     spawned: impl FnOnce(i32),
 ) -> Result<Runner, LaunchError> {
-    let (process, mut stream, starting) = spawn_runner(spec, spawned).await?;
+    let (process, mut stream, starting) = spawn_runner(spec, None, spawned).await?;
     match handshake(&mut stream, mode, spec.start_timeout, None).await {
         Handshake::Said(Ok(_)) => Ok(Runner {
             process,
@@ -115,6 +115,7 @@ pub async fn start_runner(
 /// socket, and when it was started.
 async fn spawn_runner(
     spec: &ProcessSpec,
+    service: Option<OwnedFd>,
     spawned: impl FnOnce(i32),
 ) -> Result<(OsProcess, UnixStream, Instant), LaunchError> {
     let start = |what: &str, source| LaunchError::Start {
@@ -126,8 +127,17 @@ async fn spawn_runner(
     let mut spec = spec.clone();
     spec.env
         .insert(FD_ENV.to_owned(), theirs.as_raw_fd().to_string());
+    let mut pass = vec![OwnedFd::from(theirs)];
+    // A plugin's end of its attempt's connection to its service (decision 518).
+    if let Some(service) = service {
+        spec.env.insert(
+            crate::service::SERVICE_FD_ENV.to_owned(),
+            service.as_raw_fd().to_string(),
+        );
+        pass.push(service);
+    }
     let starting = Instant::now();
-    let process = spawn_passing(&spec, Some(OwnedFd::from(theirs)))
+    let process = spawn_passing(&spec, pass)
         .await
         .map_err(|e| start("the runner", e))?;
     spawned(process.id());
@@ -293,7 +303,7 @@ enum Start {
 /// handshake isn't spawned again: it ran.
 async fn start_task_runner(
     spec: &ProcessSpec,
-    mode: RunnerMode,
+    (mode, service): (RunnerMode, Option<OwnedFd>),
     forks: Option<&ForkServers>,
     preload: bool,
     hold: &mut Option<GroupHold>,
@@ -327,7 +337,7 @@ async fn start_task_runner(
         spawned(process.id(), true);
         (TaskProcess::Forked(process), stream)
     } else {
-        let (process, stream, _) = spawn_runner(spec, |pid| spawned(pid, false)).await?;
+        let (process, stream, _) = spawn_runner(spec, service, |pid| spawned(pid, false)).await?;
         (TaskProcess::Spawned(process), stream)
     };
     let error = match handshake(&mut stream, mode, spec.start_timeout, stops).await {
@@ -359,6 +369,9 @@ pub struct PythonTask {
     pub api: Option<crate::api::ApiCaller>,
     /// Where its status and links are kept (decision 513); none: they are dropped.
     pub reports: Option<Arc<crate::reports::AttemptReports>>,
+    /// An extension attempt's connection to its service (decision 518): its plugin's end,
+    /// passed as `SCHEDR_SERVICE_FD`; none without a service.
+    pub service: Option<crate::service::Link>,
 }
 
 impl From<TaskRequest> for PythonTask {
@@ -370,6 +383,7 @@ impl From<TaskRequest> for PythonTask {
             events: None,
             api: None,
             reports: None,
+            service: None,
         }
     }
 }
@@ -662,7 +676,10 @@ pub async fn run_python(
         events: _,
         api,
         reports,
+        service,
     } = task.into();
+    // Its service connection counted until the attempt has ended (decision 518).
+    let (service, _service_hold) = service.map(crate::service::Link::split).unzip();
     let started = Instant::now();
     // The remaining timeout includes the runner's start (B56, B160).
     let deadline = limits
@@ -674,7 +691,15 @@ pub async fn run_python(
     let (mode, forks) = runner_mode(&request.task, forks);
     let preload = settings.preload;
     let stops = Some((&mut stop, deadline));
-    let start = start_task_runner(process, mode, forks, preload, hold, stops, spawned);
+    let start = start_task_runner(
+        process,
+        (mode, service),
+        forks,
+        preload,
+        hold,
+        stops,
+        spawned,
+    );
     let start = match start.await {
         Err(LaunchError::Channel(ChannelError::Refused(why))) => {
             // An extension's events (DN19): its plugin speaks another protocol.
@@ -813,7 +838,7 @@ pub async fn run_command(
             spec.env
                 .insert(CTX_FD_ENV.to_owned(), theirs.as_raw_fd().to_string());
             let serving = crate::ctx::serve(ours, info);
-            let process = spawn_passing(&spec, Some(theirs)).await.map_err(start)?;
+            let process = spawn_passing(&spec, vec![theirs]).await.map_err(start)?;
             (process, Some(serving))
         }
         None => (spawn(spec).await.map_err(start)?, None),
@@ -929,7 +954,7 @@ impl ParseRunner for ProcessParseRunner {
         let forks = self.forks.as_ref();
         let started = start_task_runner(
             &self.process,
-            RunnerMode::Parse,
+            (RunnerMode::Parse, None),
             forks,
             true,
             &mut hold,

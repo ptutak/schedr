@@ -111,6 +111,11 @@ pub struct Timings {
     pub fork_backoff_max: Duration,
     /// A fork server up for this long starts its restarts' waits over.
     pub fork_backoff_reset_after: Duration,
+    /// The first wait before a crashed extension's service (decision 518) is started again; it
+    /// doubles up to `service_backoff_max`.
+    pub service_backoff_first: Duration,
+    /// The longest wait before a crashed service is started again.
+    pub service_backoff_max: Duration,
     /// How often old task logs are swept.
     pub log_sweep_interval: Duration,
     /// How often an orphan found at start is looked at while it stops.
@@ -296,6 +301,8 @@ impl Default for Timings {
             fork_backoff_first: Duration::from_secs(1),
             fork_backoff_max: Duration::from_mins(5),
             fork_backoff_reset_after: Duration::from_mins(10),
+            service_backoff_first: Duration::from_secs(1),
+            service_backoff_max: Duration::from_mins(1),
             log_sweep_interval: Duration::from_hours(1),
             orphan_poll: Duration::from_millis(50),
             orphan_kill_wait: Duration::from_secs(5),
@@ -1850,10 +1857,86 @@ pub struct ExtensionPlugin {
     /// The most series each of its metrics keeps before new ones are folded into `other`.
     #[serde(default = "default_max_series")]
     pub max_series: u32,
+    /// Its service (decision 518): one long-running process per worker for what its attempts
+    /// share (a client, a watch, a warm session), its program and arguments as `command`'s;
+    /// none, no service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service: Vec<String>,
+    /// How long the service has to say `ready` after it starts; past it, it counts as crashed.
+    #[serde(
+        default = "default_service_ready_timeout",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub service_ready_timeout: Duration,
+    /// The memory the service's process group may use; past it, it is killed and restarted.
+    /// Taken off the memory the worker's task budgets are split from (DN29).
+    #[serde(
+        default = "default_service_memory",
+        deserialize_with = "deserialize_size",
+        serialize_with = "serialize_size"
+    )]
+    #[schemars(with = "SizeText")]
+    pub service_memory: u64,
+    /// How many restarts within `service_settle` the service may have; one more and the
+    /// extension is turned off on that worker until `service_settle` has passed since the first.
+    #[serde(default = "default_service_restarts")]
+    pub service_restarts: u32,
+    /// How long the service has to answer an attempt's connection (`attempt_accepted`, DN32);
+    /// unanswered, the attempt fails and counts towards `service_timeouts`.
+    #[serde(
+        default = "default_service_accept_timeout",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub service_accept_timeout: Duration,
+    /// How many of its attempts timing out in a row, or their connections going unanswered,
+    /// count as the service's crash (DN31, DN32): it is killed and started again, counting
+    /// towards `service_restarts`. 0: never.
+    #[serde(default = "default_service_timeouts")]
+    pub service_timeouts: u32,
+    /// The window `service_restarts` counts in, and how long the extension stays turned off.
+    #[serde(
+        default = "default_service_settle",
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub service_settle: Duration,
+    /// The secrets the service is given: read by the worker at each start and sent in its
+    /// welcome, never in its environment; the service may ask for one of them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_secrets: Vec<schedr_model::secret::SecretName>,
 }
 
 const fn default_max_series() -> u32 {
     schedr_model::extension::DEFAULT_MAX_SERIES
+}
+
+const fn default_service_ready_timeout() -> Duration {
+    Duration::from_mins(1)
+}
+
+const fn default_service_memory() -> u64 {
+    256 * 1024 * 1024
+}
+
+const fn default_service_restarts() -> u32 {
+    5
+}
+
+const fn default_service_accept_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+const fn default_service_timeouts() -> u32 {
+    3
+}
+
+const fn default_service_settle() -> Duration {
+    Duration::from_hours(24)
 }
 
 /// `[secret_storage]`: where a worker's tasks get their secrets (only workers fetch them; see

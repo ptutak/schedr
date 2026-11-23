@@ -346,6 +346,11 @@ enum RejectReason {
   // No plugin for the task's extension at its exact version on this worker (decision 510;
   // protocol 2.2): another worker is tried, the task unschedulable once each has said so.
   REJECT_REASON_EXTENSION_UNDEFINED = 13;
+  // The task's extension has a service on this worker that isn't ready (starting, restarting
+  // after a crash, or turned off past its restarts; decision 518, DN29; protocol 2.2): as code
+  // not there yet, the queue's other workers tried, no retry used, unschedulable only after
+  // `[master] code_wait`.
+  REJECT_REASON_EXTENSION_NOT_READY = 14;
 }
 
 message Rejected {
@@ -512,6 +517,7 @@ message MasterMessage {
     TriggerEventAck trigger_event_ack = 11;
     ApiAnswer api_answer = 12;
     CleanupGo cleanup_go = 13;
+    MaintenanceDrained maintenance_drained = 14;
   }
   // When the master sent it, on its own clock (B225): every message carries it.
   MasterClock clock = 20;
@@ -622,6 +628,15 @@ message Registered {
   uint64 max_message_size = 3;
   // Which script roots each DAG root uses (decision 304), as ScriptUses.
   repeated RootUses script_uses = 4;
+  // Whether it is drained for maintenance (`schedr workers drain`, stored across restarts;
+  // DN33, protocol 2.2): it tells its extensions' services.
+  bool drained = 5;
+}
+
+// The worker drained for maintenance, or resumed (DN33; protocol 2.2): it gets no new work
+// meanwhile, its services told and kept running.
+message MaintenanceDrained {
+  bool drained = 1;
 }
 
 // The script roots a DAG root's current parse used (decision 304): a worker folds their hashes

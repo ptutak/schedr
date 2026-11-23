@@ -572,6 +572,8 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "WORKER__FORK_BACKOFF_FIRST" => &mut timings.fork_backoff_first,
         "WORKER__FORK_BACKOFF_MAX" => &mut timings.fork_backoff_max,
         "WORKER__FORK_BACKOFF_RESET_AFTER" => &mut timings.fork_backoff_reset_after,
+        "WORKER__SERVICE_BACKOFF_FIRST" => &mut timings.service_backoff_first,
+        "WORKER__SERVICE_BACKOFF_MAX" => &mut timings.service_backoff_max,
         "WORKER__LOG_SWEEP_INTERVAL" => &mut timings.log_sweep_interval,
         "WORKER__ORPHAN_POLL" => &mut timings.orphan_poll,
         "WORKER__ORPHAN_KILL_WAIT" => &mut timings.orphan_kill_wait,
@@ -870,6 +872,54 @@ fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), Co
                 "[extensions.{name}] max_series: at least 1"
             )));
         }
+        check_service(name, plugin)?;
+    }
+    Ok(())
+}
+
+/// `[extensions.<name>]`'s service keys (decision 518): a program as `command`'s, a ready
+/// timeout and a settle window that aren't zero, some memory, declared secrets that are names.
+fn check_service(name: &str, plugin: &crate::config::ExtensionPlugin) -> Result<(), ConfigError> {
+    let bad = |message: String| {
+        Err(ConfigError::Extensions(format!(
+            "[extensions.{name}] {message}"
+        )))
+    };
+    let set = !plugin.service.is_empty();
+    if !set {
+        if !plugin.service_secrets.is_empty() {
+            return bad("service_secrets: given without a service".to_owned());
+        }
+        return Ok(());
+    }
+    let program = plugin.service.first().map_or("", String::as_str);
+    if program.is_empty() || (program.contains('/') && !program.starts_with('/')) {
+        return bad(format!(
+            "service: the service's program, an absolute path or a name found on PATH, then its \
+             arguments, e.g. [\"/opt/acme/schedr-ext-{name}\", \"--service\"]"
+        ));
+    }
+    if plugin.service_ready_timeout.is_zero() {
+        return bad("service_ready_timeout: longer than 0s (e.g. \"60s\")".to_owned());
+    }
+    if plugin.service_accept_timeout.is_zero() {
+        return bad("service_accept_timeout: longer than 0s (e.g. \"10s\")".to_owned());
+    }
+    if plugin.service_settle.is_zero() {
+        return bad("service_settle: longer than 0s (e.g. \"24h\")".to_owned());
+    }
+    if plugin.service_memory < 16 * 1024 * 1024 {
+        return bad("service_memory: at least 16MiB (e.g. \"256MiB\")".to_owned());
+    }
+    for secret in &plugin.service_secrets {
+        if secret.default.is_some() {
+            return bad(format!(
+                "service_secrets: `{secret}` has a default; a secret is named only"
+            ));
+        }
+        secret.check().map_err(|error| {
+            ConfigError::Extensions(format!("[extensions.{name}] service_secrets: {error}"))
+        })?;
     }
     Ok(())
 }

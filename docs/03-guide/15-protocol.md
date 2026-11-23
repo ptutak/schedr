@@ -550,6 +550,7 @@ No deadline reads the wall clock it carries.
 | `TriggerEventAck` | Master when an event is stored, or is an old instance's | Let the trigger go on to the next one | Yes | — |
 | `FinishedAck` | Master after storing `Finished` | Forget journaled result | Yes | — |
 | `CleanupGo` | Master on `CleanupStart` (protocol 2.2) | `go`: let the waiting process through, the cleanup started; else nothing runs here, as for `Kill`. One for no waiting try is dropped | Yes | A late one finds the process gone; the try is made again |
+| `MaintenanceDrained` | Master on `schedr workers drain` or `resume` (protocol 2.2; DN33); `Registered.drained` says the same after a reconnect | The worker tells its extensions' services `drained` or `resumed`; they keep running. Its work stops or resumes as before, by the master not assigning it | Yes | A lost one is said again by `Registered.drained` at the next session |
 | `ApiAnswer` | Master when an `ApiCall` ran or was refused (403 off the list or not this worker's) | Hand the status and body to the call of that `request_id`; one for no pending call is dropped | Yes | An answer over the message limit is a 502 |
 | `ConnectionJob` | Master for a check or test | Run one job, return reports | Do not rely on repeated execution being harmless for a test | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) |
 

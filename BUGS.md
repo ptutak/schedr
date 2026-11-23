@@ -57,14 +57,22 @@ step touches their code or the user schedules them.
 | 2 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 3 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
 | 4 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 5 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 6 | B280: the integration tests' Postgres runs out of connections when roles tests overlap | 2 | low | possible | tests |
-| 7 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 8 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 9 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 10 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 5 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
+| 6 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 7 | B280: the integration tests' Postgres runs out of connections when roles tests overlap | 2 | low | possible | tests |
+| 8 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 9 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 10 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 11 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B281: a worker's memory split leaves out its extensions' services
+
+- **Rating:** severity **low**, probability **likely**, usability (score 3): a worker's heartbeat splits its memory into the agent, its fork servers, its watcher hosts and its running tasks (decision 463); an extension's service (decision 518), up to its `service_memory` each, is in none of them, so the Deployments page shows less than the worker uses.
+- **Found:** 2026-11-23, by Claude, reading decision 463 against M5.2i9's diff.
+- **A fix:** the services' measured memory (the supervisor measures each one every memory check)
+  as one more part of the split, with M5.2i12's built-in `service_memory_bytes`.
 
 ## B280: the integration tests' Postgres runs out of connections when roles tests overlap
 

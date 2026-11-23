@@ -1,0 +1,16 @@
+title = "A maintenance drain is told to a worker's services, which keep running"
+date = 2026-11-23
+by = "user"
+on = "D518"
+kind = "adds"
+summary = '''
+A worker drained for maintenance (`schedr workers drain`) keeps its services running, and tells
+them: the master tells the worker (`MaintenanceDrained`, and `Registered.drained` after a
+restart; protocol 2.2), and the worker sends each service `drained`, then `resumed` on
+`schedr workers resume`, on its control socket (one started while drained hears it after its
+`ready`). A service that acts on its own (a controller watching its system) pauses itself; one
+that only answers calls ignores it. Python's `serve` takes `on_drained=` and `on_resumed=`. Only
+a worker stopping stops its services. Not chosen: the services kept running untold; stopped on a
+maintenance drain and started on resume (their warm state lost, a resume waiting for `ready`).
+'''
+history = "JOURNAL.md#DN33"

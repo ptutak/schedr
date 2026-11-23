@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use pretty_assertions::assert_eq;
 
 use super::*;
@@ -239,4 +241,102 @@ fn a_script_leaving_a_large_payload_unread_ends_the_run_all_the_same() {
         "{:?}",
         started.elapsed()
     );
+}
+
+/// M5.2i9 (agy's review): a call to a hung service holds neither the worker's requests nor the
+/// plugin's result; the service's answer reaches the script.
+#[test]
+fn a_hung_service_call_holds_neither_other_requests_nor_the_result() {
+    let (ours, mut worker) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (service_end, mut service) = std::os::unix::net::UnixStream::pair().unwrap();
+    let request = Request::of(raw(None, &serde_json::json!({}))).unwrap();
+    let run: ShellRun = serde_json::from_value(request.raw.run.clone()).unwrap();
+    let channel = Channel::new(ours, &request.raw).with_service(Some(service_end));
+    let bridge = Arc::new(Bridge::new(&request, &run, channel, 64));
+    // A service that reads the call and never answers.
+    let (got, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut size = [0; 4];
+        let _ = std::io::Read::read_exact(&mut service, &mut size);
+        let _ = got.send(());
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let calling = Arc::clone(&bridge);
+    std::thread::spawn(move || {
+        let _ = calling.answered(CtxRequest::ServiceCall {
+            method: "slow".to_owned(),
+            args: serde_json::Value::Null,
+        });
+    });
+    heard.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Meanwhile: another request, and the result to the worker.
+    assert!(matches!(
+        bridge.answered(CtxRequest::ParamsGet),
+        CtxAnswer::Params { .. }
+    ));
+    bridge.close();
+    let result = schedr_extension::result_of(Ok(serde_json::json!(1)), 64);
+    bridge.channel().send(&result).unwrap();
+    worker
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    assert!(matches!(
+        read_plugin_message(&mut worker).unwrap(),
+        PluginMessage::TaskSucceeded { .. }
+    ));
+}
+
+/// M5.2i9: a script's `task-ctx extension call` reaches the service and prints its result;
+/// without a service, or after the script ended, it is told why.
+#[test]
+fn a_scripts_service_call_is_answered_or_told_why_not() {
+    let (ours, _worker) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (service_end, mut service) = std::os::unix::net::UnixStream::pair().unwrap();
+    let request = Request::of(raw(None, &serde_json::json!({}))).unwrap();
+    let run: ShellRun = serde_json::from_value(request.raw.run.clone()).unwrap();
+    let channel = Channel::new(ours, &request.raw).with_service(Some(service_end));
+    let bridge = Bridge::new(&request, &run, channel, 64);
+    std::thread::spawn(move || {
+        let mut size = [0; 4];
+        std::io::Read::read_exact(&mut service, &mut size).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(size) as usize];
+        std::io::Read::read_exact(&mut service, &mut body).unwrap();
+        let call: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // Another call's answer first (skipped), then its own.
+        for id in [99, call["id"].as_u64().unwrap()] {
+            let answer = serde_json::to_vec(&serde_json::json!(
+                {"type": "answer", "id": id, "result": {"echo": call["args"]}}
+            ))
+            .unwrap();
+            service
+                .write_all(&u32::try_from(answer.len()).unwrap().to_be_bytes())
+                .unwrap();
+            service.write_all(&answer).unwrap();
+        }
+    });
+    assert_eq!(
+        bridge.answered(CtxRequest::ServiceCall {
+            method: "echo".to_owned(),
+            args: serde_json::json!([1]),
+        }),
+        CtxAnswer::ServiceAnswer {
+            result: serde_json::json!({"echo": [1]})
+        }
+    );
+    bridge.close();
+    assert!(matches!(
+        bridge.answered(CtxRequest::ServiceCall {
+            method: "echo".to_owned(),
+            args: serde_json::Value::Null,
+        }),
+        CtxAnswer::Error { .. }
+    ));
+    let without = bridge_with(raw(None, &serde_json::json!({})), |_| None);
+    let CtxAnswer::Error { reason } = without.answered(CtxRequest::ServiceCall {
+        method: "echo".to_owned(),
+        args: serde_json::Value::Null,
+    }) else {
+        panic!("answered without a service");
+    };
+    assert!(reason.contains("no service"), "{reason}");
 }

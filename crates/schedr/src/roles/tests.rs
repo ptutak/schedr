@@ -1594,3 +1594,73 @@ fn a_worker_connects_for_the_db_storage_only_when_it_asks_for_it() {
         "db"
     )])));
 }
+
+/// M5.2i9 (DN29, agy's review): extensions' services hold `service_memory` all the time: it
+/// comes off what the slots split and off what one task may ask for.
+#[test]
+fn services_memory_comes_off_the_budget_and_the_ceiling() {
+    let mut config = config();
+    let limit: u64 = 1 << 30;
+    let plain = memory_watch(&config, Some(limit), WORKER_RESERVE);
+    let mut plugin: schedr_config::config::ExtensionPlugin =
+        serde_json::from_value(serde_json::json!({
+            "command": ["/opt/x"], "versions": ["1.0"], "service": ["/opt/x", "--service"]
+        }))
+        .unwrap();
+    plugin.service_memory = 256 << 20;
+    config
+        .extensions
+        .plugins
+        .insert("a".to_owned(), plugin.clone());
+    config.extensions.plugins.insert("b".to_owned(), plugin);
+    assert_eq!(services_memory(&config), 512 << 20);
+    let watch = memory_watch(&config, Some(limit), WORKER_RESERVE);
+    let room = limit - limit / 100 * 10 - (512 << 20);
+    assert_eq!(watch.ceiling, Some(room));
+    assert_eq!(watch.budget, Some(room / 2));
+    assert_eq!(plain.ceiling, Some(limit - limit / 100 * 10));
+}
+
+/// M5.2i9 (decision 518): a configured extension with a service gets its spec: its keys, its
+/// versions and declarations, the worker's allow-listed environment, and a private folder of its
+/// own under the data directory; one without a service gets none.
+#[test]
+fn an_extensions_service_is_specified_from_its_config() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config();
+    let with: schedr_config::config::ExtensionPlugin = serde_json::from_value(serde_json::json!({
+        "command": ["/opt/x"], "versions": ["1.0"], "service": ["/opt/x", "--service"],
+        "service_secrets": [{"path": "x/api", "key": "token"}],
+        "metrics": [{"name": "jobs", "kind": "counter", "help": "Jobs"}]
+    }))
+    .unwrap();
+    let without: schedr_config::config::ExtensionPlugin =
+        serde_json::from_value(serde_json::json!({"command": ["/opt/y"], "versions": ["1.0"]}))
+            .unwrap();
+    config.extensions.plugins.insert("x".to_owned(), with);
+    config.extensions.plugins.insert("y".to_owned(), without);
+    let agent = agent_settings(
+        &config,
+        &env(&[("HOME", "/home/w"), ("SECRET_THING", "no")]),
+        dir.path(),
+        WORKER_RESERVE,
+    )
+    .unwrap();
+    let specs = service_specs(&agent);
+    assert_eq!(specs.len(), 1, "only the extension with a service");
+    let spec = &specs[0];
+    assert_eq!(spec.extension, "x");
+    assert_eq!(spec.config.command, ["/opt/x", "--service"]);
+    assert_eq!(spec.config.secrets.len(), 1);
+    assert_eq!(spec.declarations.metrics.len(), 1);
+    assert!(spec.versions.contains("1.0"));
+    assert!(!spec.env.contains_key("SECRET_THING"), "{:?}", spec.env);
+    assert!(spec.working_dir.starts_with(dir.path().join("services")));
+    let mode = std::fs::metadata(&spec.working_dir)
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+}

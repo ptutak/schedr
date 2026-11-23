@@ -214,6 +214,9 @@ pub fn run_task_ctx_report(
             report(env, version, &request)
         }
         TaskCtxCommand::Extension {
+            command: ExtensionCtxCommand::Call { method, args },
+        } => service_call(env, version, (method, args.as_deref()), out),
+        TaskCtxCommand::Extension {
             command: ExtensionCtxCommand::StopReason { field },
         } => {
             let mut stream = connect(env, Ctx::Task)?;
@@ -681,6 +684,31 @@ fn exports(variables: &BTreeMap<String, String>) -> String {
     lines
 }
 
+/// `schedr task-ctx extension call` (decision 518): the service's result printed as JSON.
+fn service_call(
+    env: &BTreeMap<String, String>,
+    version: &str,
+    (method, args): (&str, Option<&str>),
+    out: &mut impl Write,
+) -> Result<(), String> {
+    let args = crate::user::given_event_data(args)
+        .map_err(|why| why.replace("--event-data", "--args"))?
+        .unwrap_or(Value::Null);
+    let mut stream = connect(env, Ctx::Task)?;
+    let request = CtxRequest::ServiceCall {
+        method: method.to_owned(),
+        args,
+    };
+    let result = match call(&mut stream, version, &request)? {
+        CtxAnswer::ServiceAnswer { result } => result,
+        CtxAnswer::Error { reason }
+        | CtxAnswer::Refused { reason }
+        | CtxAnswer::ReportRefused { reason } => return Err(reason),
+        _ => return Err("the agent answered with something else".to_owned()),
+    };
+    writeln!(out, "{result}").map_err(|e| format!("can't write output: {e}"))
+}
+
 /// The values an answer holds, as printed: params in the JSON form `--params` takes.
 fn values(answer: CtxAnswer) -> Result<Value, String> {
     match answer {
@@ -701,6 +729,9 @@ fn values(answer: CtxAnswer) -> Result<Value, String> {
         }
         CtxAnswer::Reported | CtxAnswer::ReportRefused { .. } | CtxAnswer::StopReason { .. } => {
             Err("the agent answered with a report to another request".to_owned())
+        }
+        CtxAnswer::ServiceAnswer { .. } => {
+            Err("the agent answered with a service's result to another request".to_owned())
         }
         // Never printed in a message: it may hold a value.
         CtxAnswer::Secret { .. }

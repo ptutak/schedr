@@ -18,7 +18,7 @@ rest go into `other`. For example `{"metric": "pods_pending", "point": "max", "c
 names; one line in words (`"show": "max per namespace, top 5"`); a subset of PromQL; plain `fn`,
 `group` and `limit` keys.
 '''
-checked = 2026-11-22
+checked = 2026-11-23
 unverified = ["`over_time` (a name not chosen)", "`pods_pending` (an example metric)"]
 history = "JOURNAL.md#D516"
 step = "M5.2i10"

@@ -12,5 +12,5 @@ the retired quiet-DAG timings (`RETIRED_TIMINGS`, decision 485), accepted and ig
 history = "archive/PROJECT.md#D233"
 step = "M4.8t"
 also = ["deployment"]
-checked = 2026-11-22
+checked = 2026-11-23
 code = ["crates/schedr-config/src/loader.rs::hidden_timings"]

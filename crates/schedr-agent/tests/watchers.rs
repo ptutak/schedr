@@ -1085,6 +1085,7 @@ async fn a_cancel_during_a_slow_secret_read_leaves_the_others_alone() {
         handles: None,
         api: None,
         reports: None,
+        service: None,
     };
     let process = spec(
         &worker.setup,

@@ -47,6 +47,8 @@ struct Fake {
     hold_parses: bool,
     parses_held: Arc<std::sync::atomic::AtomicUsize>,
     parses_stopped: Arc<std::sync::atomic::AtomicUsize>,
+    /// Why extension `x`'s service isn't ready, if it isn't (decision 518).
+    service_not_ready: Option<String>,
 }
 
 /// Counts a held parse stopped (its future dropped).
@@ -59,6 +61,10 @@ impl Drop for StoppedParse {
 }
 
 impl Executor for Fake {
+    fn service_not_ready(&self, extension: &str, _version: &str) -> Option<String> {
+        self.service_not_ready.clone().filter(|_| extension == "x")
+    }
+
     async fn run(
         &self,
         spec: AttemptSpec,
@@ -1057,6 +1063,7 @@ async fn without_a_free_slot_an_assignment_is_rejected() {
 #[tokio::test]
 async fn bad_and_impossible_assignments_are_rejected_or_failed_and_good_ones_run() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -1204,6 +1211,7 @@ async fn a_restarted_agent_reports_its_results_again_and_forgets_what_was_runnin
         ("old-4", JournalRecord::Running(None)),
     ]);
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -1253,6 +1261,7 @@ async fn a_result_sent_again_fits_the_limit_the_master_has_now() {
         ..pb::Finished::default()
     });
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 1,
         timing: Some(pb::Timing {
@@ -1291,6 +1300,7 @@ async fn a_result_not_acknowledged_is_sent_again_while_the_link_stays_up() {
     // B41: the master failed to store it (a database stall) and keeps the stream; nothing
     // but a reconnect sent it again.
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -1493,6 +1503,7 @@ async fn a_master_wall_clock_far_off_is_warned_of_once_a_session() {
 #[tokio::test]
 async fn a_forked_attempt_sends_started_again_with_its_method() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -1531,6 +1542,7 @@ async fn a_forked_attempt_sends_started_again_with_its_method() {
 #[tokio::test]
 async fn an_attempt_assigned_again_is_ignored() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -1997,6 +2009,7 @@ fn a_missing_proc_is_warned_once_and_other_identity_errors_every_time() {
 #[tokio::test]
 async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
     let timing = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -2030,6 +2043,7 @@ async fn heartbeats_go_on_while_a_parse_result_is_uploaded() {
 /// The master's `Registered`, heartbeats every 20 ms.
 fn registered() -> pb::MasterMessage {
     to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -2498,6 +2512,7 @@ async fn a_parse_job_sent_again_while_it_runs_is_parsed_once() {
 #[tokio::test]
 async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 1,
         timing: None,
@@ -2537,6 +2552,7 @@ async fn a_parsed_file_past_the_masters_limit_is_uploaded_as_its_import_error() 
 #[tokio::test]
 async fn a_result_past_the_masters_limit_is_sent_as_output_too_large() {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 1,
         timing: None,
@@ -2838,6 +2854,7 @@ fn command_needing_secret(
     )
     .unwrap();
     let executor = ProcessExecutor {
+        services: crate::service::Services::default(),
         setup: setup.clone(),
         parse: crate::parse::ParseLimits::one_at_a_time(std::time::Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
@@ -3081,6 +3098,7 @@ async fn command_with_connection(
         extensions: crate::extensions::Plugins::new(),
     };
     let executor = ProcessExecutor {
+        services: crate::service::Services::default(),
         setup: setup.clone(),
         parse: crate::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
@@ -3388,6 +3406,7 @@ fn attempt_with_timed_cleanup(
         extensions: crate::extensions::Plugins::new(),
     };
     let executor = ProcessExecutor {
+        services: crate::service::Services::default(),
         setup: setup.clone(),
         parse: crate::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),
@@ -3855,6 +3874,7 @@ time.sleep(30)
 /// The answer to `Register`: `decision` for `attempt_id`.
 fn decided(attempt_id: &str, decision: pb::AttemptDecision) -> pb::MasterMessage {
     to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -4217,6 +4237,7 @@ fn silent_master(anywhere: bool) -> Vec<pb::MasterMessage> {
 /// 281: then never started).
 fn silent_master_leased(anywhere: bool, lease_ms: u64) -> Vec<pb::MasterMessage> {
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         timing: Some(pb::Timing {
             heartbeat_interval_ms: 20,
@@ -4728,6 +4749,7 @@ async fn a_dag_roots_hash_folds_in_the_script_roots_it_uses_and_one_lacking_with
             .collect()
     };
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: uses(&[("etl", &["jobs"])]),
         ..pb::Registered::default()
     }));
@@ -4816,6 +4838,7 @@ async fn a_withdrawn_roots_task_is_rejected_even_if_the_master_sent_it_before_kn
     // 303: the worker lacks script root `elsewhere`, which `etl` uses; an assignment the
     // master sent from the root's earlier report must not run.
     let registered = to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: vec![pb::RootUses {
             root: "etl".to_owned(),
             script_roots: vec!["elsewhere".to_owned()],
@@ -4961,6 +4984,7 @@ fn assign_trigger(instance: &str, task_id: &str) -> pb::MasterMessage {
 
 fn registered_fast() -> pb::MasterMessage {
     to_worker(master_message::Message::Registered(pb::Registered {
+        drained: false,
         script_uses: Vec::new(),
         max_message_size: 0,
         timing: Some(pb::Timing {
@@ -5965,4 +5989,27 @@ async fn discoverys_events_reach_the_first_heartbeat() {
         panic!("a heartbeat");
     };
     assert_eq!(heartbeat.extension_events_json.len(), 1);
+}
+
+/// M5.2i9 (DN29): an extension task whose service isn't ready here is given back as not ready,
+/// waited for as code on its way, no try used.
+#[tokio::test]
+async fn an_extension_task_whose_service_isnt_ready_is_given_back() {
+    let task =
+        task_json(&json!({"kind": "extension", "name": "x", "version": "1.0", "payload": {}}));
+    let script = vec![assign("a1", &task, "sync.py", false)];
+    let (seen, _) = against_script_with(
+        1,
+        Start::With(vec![]),
+        script,
+        |m| kinds(m).len() >= 2,
+        |agent| agent.executor.service_not_ready = Some("its service is starting".to_owned()),
+    )
+    .await;
+    let rejected = rejection(&seen);
+    assert_eq!(
+        rejected.reason,
+        i32::from(pb::RejectReason::ExtensionNotReady)
+    );
+    assert_eq!(rejected.detail, "extension `x`: its service is starting");
 }

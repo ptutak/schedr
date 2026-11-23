@@ -3,29 +3,29 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-22)
+## Now (2026-11-23)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i9, M5.2i11, M5.2i12, M5.2i13, M5.2i4.
+- **Then:** M5.2i11, M5.2i12, M5.2i13, M5.2i4, M5.2j.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 12; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B254 (low/likely) (`BUGS.md`).
+- **Open bugs:** 13; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely) (`BUGS.md`).
 
 ## Recent
 
-- D520 (2026-11-22): A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS
-- DN28 (2026-11-22): A notification's own facts in one details placeholder; EVENT_POSTED without the event's data or whether it started a run (adds to D515)
-- DN27 (2026-11-22): A shell plugin's own commands sit under `task-ctx extension` (corrects D519)
-- DN26 (2026-11-22): A gauge's default point is its mean (corrects D516)
-- DN25 (2026-11-21): A service's memory 256 MiB by default (corrects D518)
+- D521 (2026-11-23): Extensions never hold the master up: their reports are dropped first
+- DN33 (2026-11-23): A maintenance drain is told to a worker's services, which keep running (adds to D518)
+- DN32 (2026-11-22): A service answers each attempt's connection in time, timed by the worker (adds to D518)
+- DN31 (2026-11-22): A service whose attempts time out a few times in a row counts as crashed (adds to D518)
+- DN30 (2026-11-22): No stall check for a service: a hung one shows as its attempts timing out (corrects D518)
+- M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
 - M5.2i8 (2026-11-22): Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED
 - M5.2i7 (2026-11-22): `make demo-kind`: the Kubernetes extension presented on kind, with its metrics, logs and the Kubernetes Dashboard
-- M5.2i6 (2026-11-22): Shell plugins: `schedr extension shell`, any script an extension, through `schedr task-ctx`
 
 ## In progress
 
-- M5.2i6, i10, i7, i8 and i14 done and pushed. M5.2i14 (D520): a worker's certificate names its role, `[tls] worker_identity = "certificate"` its ID too (the chart's `tls.workerIdentity`, cert-manager's CSI driver, not tried on a real cluster); parse uploads only of reported code; starts and triggers per worker; standalone's links under in-memory mTLS, its files private, its open local API warned of; the trust page (docs/03-guide/23-trust.md, accepted by the user). B279 (an unknown trigger instance holds wait_for triggers) and B280 (the integration Postgres out of connections) logged. Next: M5.2i9 (the extension's service, decision 518: its lifecycle like a fork server's, the user agreeing), then i11, i12, i13 (extension stress), i4, j, k.
+- M5.2i9 (D518, DN29-DN33) finished, being pushed: an extension's service, its supervisor in the worker, Python's serve() and channel.service.call(), the Rust crate's service_call, task-ctx extension call, the maintenance drain told (DN33); agy's 11 and Grok's 4 findings fixed; docs accepted by the user. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i11, i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split).
 
 ## Waiting for the user
 

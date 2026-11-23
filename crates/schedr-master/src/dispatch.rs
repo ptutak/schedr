@@ -4178,7 +4178,13 @@ impl Dispatcher {
                     .flat_map(|m| &m.by)
                     .map(|(w, d)| format!("{w}: {d}")),
             );
+            let service = rejected.reason == i32::from(pb::RejectReason::ExtensionNotReady);
             let reason = match (specific, waited) {
+                (None, Some(waited)) if service => format!(
+                    "the extension's service wasn't ready on any eligible worker after {} min ({})",
+                    waited.as_mins(),
+                    reasons.join("; ")
+                ),
                 (None, Some(waited)) => format!(
                     "the code is missing on every eligible worker after {} min ({})",
                     waited.as_mins(),
@@ -4196,10 +4202,13 @@ impl Dispatcher {
                     now.checked_add(self.code_retry_delay)
                         .unwrap_or(Timestamp::MAX),
                 ),
-                Some(format!(
-                    "waiting for the code on the workers: {}",
-                    rejected.detail
-                )),
+                Some(
+                    if rejected.reason == i32::from(pb::RejectReason::ExtensionNotReady) {
+                        format!("waiting for the extension's service: {}", rejected.detail)
+                    } else {
+                        format!("waiting for the code on the workers: {}", rejected.detail)
+                    },
+                ),
             )
         } else {
             (TaskInstanceState::Queued, Some(now), None)

@@ -321,8 +321,154 @@ pub struct ErrorSummary {
     pub traceback: String,
 }
 
-/// Any message on a plugin's channel, either way: what `schema/extension.schema.json` describes
-/// (M5.2i4). Only for the schema.
+/// The protocol an extension's service speaks with its worker (decision 518): in its hello.
+pub const SERVICE_PROTOCOL: u32 = 1;
+
+/// A message from an extension's service to its worker, on its control socket
+/// (`SCHEDR_SERVICE_FD`, decision 518).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServiceMessage {
+    /// The first message, naming the extension and the versions it serves.
+    #[serde(rename = "hello")]
+    ServiceHello {
+        /// The service's own version, not checked.
+        schedr_version: String,
+        /// Always `service`.
+        mode: String,
+        /// [`SERVICE_PROTOCOL`].
+        protocol: u32,
+        /// The extension.
+        name: String,
+        /// The versions of it the service serves; the worker offers only those of its
+        /// configured ones.
+        versions: Vec<String>,
+    },
+    /// Started and serving, after the welcome: attempts may connect from now on.
+    Ready,
+    /// The answer to [`ToService::AttemptConnected`]: the attempt's connection taken, its plugin
+    /// may start. Unanswered within `service_accept_timeout`, the attempt fails, and a few in a
+    /// row take the service for hung (DN32).
+    AttemptAccepted {
+        /// The attempt.
+        attempt_id: String,
+    },
+    /// One of its declared secrets, again (`service_secrets`); answered [`ToService::ServiceSecret`] or
+    /// [`ToService::ServiceSecretFailed`].
+    SecretGet {
+        /// Which secret.
+        secret: SecretName,
+    },
+    /// What it is doing, for people (an event when it changes).
+    Status {
+        /// A short name for the phase, e.g. `watching`.
+        phase: String,
+        /// More about it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    /// Points of its extension's declared metrics, as a plugin's.
+    Metrics {
+        /// The points.
+        points: Vec<MetricPoint>,
+    },
+}
+
+/// A message from the worker to an extension's service, on its control socket.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToService {
+    /// The answer to its hello: go on, with its declared secrets, read for this start.
+    #[serde(rename = "welcome")]
+    ServiceWelcome {
+        /// The secrets of `service_secrets`.
+        #[serde(default)]
+        secrets: Vec<SecretValue>,
+    },
+    /// The answer to its hello: it can't run here (another protocol, another extension); it
+    /// exits.
+    #[serde(rename = "refused")]
+    ServiceRefused {
+        /// Why.
+        reason: String,
+    },
+    /// An attempt's private connection: the descriptor of its end of a socket pair comes with
+    /// this message (`SCM_RIGHTS`, on its first byte). The other end is the attempt's plugin's
+    /// `SCHEDR_SERVICE_FD`; its closing is the attempt's end.
+    AttemptConnected {
+        /// The attempt.
+        attempt_id: String,
+        /// The task it runs.
+        task: ServiceTask,
+    },
+    /// The worker drained for maintenance (`schedr workers drain`, DN33): it gets no attempts
+    /// meanwhile; a service that acts on its own pauses itself. It keeps running.
+    Drained,
+    /// The worker resumed after [`Self::Drained`]: attempts come again.
+    Resumed,
+    /// The secret asked for.
+    #[serde(rename = "secret")]
+    ServiceSecret {
+        /// A key's value, or a whole secret's object.
+        value: Value,
+    },
+    /// The secret asked for can't be given.
+    #[serde(rename = "secret_failed")]
+    ServiceSecretFailed {
+        /// `secret_denied` (not declared), `secret_not_found`, `secret_unavailable`.
+        kind: String,
+        /// Why.
+        message: String,
+    },
+}
+
+/// The task an attempt connected to a service runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ServiceTask {
+    /// The extension.
+    pub name: String,
+    /// The exact version the task is written for.
+    pub version: String,
+}
+
+/// A message on an attempt's connection to its service, either way (DN29): calls by `id`,
+/// several in flight, each answered once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CallMessage {
+    /// From the plugin: a call.
+    Call {
+        /// Its number, unique on the connection.
+        id: u64,
+        /// What is asked for.
+        method: String,
+        /// Its arguments.
+        #[serde(default)]
+        args: Value,
+    },
+    /// From the service: a call's result.
+    Answer {
+        /// The call's number.
+        id: u64,
+        /// The result.
+        #[serde(default)]
+        result: Value,
+    },
+    /// From the service: a call that failed.
+    CallFailed {
+        /// The call's number.
+        id: u64,
+        /// Why.
+        message: String,
+    },
+}
+
+/// Any message on a plugin's channel, either way, or a service's (control or calls): what
+/// `schema/extension.schema.json` describes (M5.2i4, M5.2i9). Only for the schema.
 #[cfg(feature = "schema")]
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
@@ -332,6 +478,12 @@ enum ChannelMessage {
     Plugin(PluginMessage),
     /// From the worker.
     Worker(WorkerMessage),
+    /// From a service.
+    Service(ServiceMessage),
+    /// To a service.
+    ToService(ToService),
+    /// On an attempt's connection to its service.
+    Call(CallMessage),
 }
 
 /// The JSON Schema of the plugin protocol's messages, either way (M5.2i4).

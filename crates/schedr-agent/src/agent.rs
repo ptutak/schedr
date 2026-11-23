@@ -263,6 +263,15 @@ pub trait Executor: Clone + Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Why an attempt of `extension` at `version` can't start here now because its service
+    /// isn't ready (decision 518); none when it can, or it has no service.
+    fn service_not_ready(&self, _extension: &str, _version: &str) -> Option<String> {
+        None
+    }
+
+    /// The worker drained for maintenance, or resumed: its extensions' services told (DN33).
+    fn maintenance_drained(&self, _drained: bool) {}
+
     /// The wait step hosts as last looked at, for the heartbeat: it can't wait.
     fn watcher_hosts(&self) -> Vec<pb::WatcherHost> {
         Vec::new()
@@ -366,6 +375,8 @@ pub struct ProcessExecutor {
     pub drain_terminate_period: Duration,
     /// The DAG interpreter's fork servers, when it has them (`fork_server = true`, Linux).
     pub forks: Option<ForkServers>,
+    /// Its extensions' services (decision 518).
+    pub services: crate::service::Services,
     /// The hosts running this worker's wait steps.
     pub watchers: crate::watchers::WatcherHosts,
     /// The worker's secret storages.
@@ -381,6 +392,14 @@ impl Executor for ProcessExecutor {
 
     fn code_in_use(&self) -> Vec<String> {
         self.watchers.code_in_use()
+    }
+
+    fn service_not_ready(&self, extension: &str, version: &str) -> Option<String> {
+        self.services.not_ready(extension, version)
+    }
+
+    fn maintenance_drained(&self, drained: bool) {
+        self.services.maintenance_drained(drained);
     }
 
     fn watcher_hosts(&self) -> Vec<pb::WatcherHost> {
@@ -515,6 +534,117 @@ impl Executor for ProcessExecutor {
 }
 
 impl ProcessExecutor {
+    /// Runs a Python task, or an extension's plugin given its private connection to its
+    /// service first (decision 518): one that can't be made fails the attempt, its retries
+    /// applying.
+    ///
+    /// The connection is waited for within the attempt's timeout and stops (agy's review: a
+    /// slow service held a cancelled attempt, and its plugin started after); a cleanup waits
+    /// for a restarting service to be ready. `service_run` gets the run of the service reached.
+    async fn run_with_service(
+        &self,
+        (spec, process): (&AttemptSpec, &crate::process::ProcessSpec),
+        mut task: crate::launch::PythonTask,
+        (mut limits, mut stop): (crate::supervise::Limits, Stops),
+        (hold, service_run): (&mut Option<crate::fork::GroupHold>, &mut Option<u64>),
+        spawned: impl FnOnce(i32, bool),
+    ) -> Result<crate::attempt::Ran, crate::launch::LaunchError> {
+        let started = std::time::Instant::now();
+        let deadline = limits
+            .timeout
+            .map(|timeout| tokio::time::Instant::now() + timeout);
+        let cleanup = spec.cleanup_handles.is_some();
+        let linked = crate::launch::unless_stopped(
+            self.service_link(spec, cleanup),
+            Some((&mut stop, deadline)),
+        )
+        .await;
+        let link = match linked {
+            Err(reason) => {
+                let supervised = crate::supervise::Supervised {
+                    termination: crate::status::Termination::Unknown,
+                    stopped: Some(reason),
+                    killed: false,
+                };
+                return Ok(Ran::with_no_process(supervised, None, started.elapsed()));
+            }
+            Ok(Err(why)) => {
+                return Err(crate::launch::LaunchError::Start {
+                    what: "the extension's service connection".to_owned(),
+                    source: std::io::Error::other(why),
+                });
+            }
+            Ok(Ok(link)) => link,
+        };
+        *service_run = link.as_ref().map(crate::service::Link::run);
+        task.service = link;
+        // The wait was the attempt's time.
+        limits.timeout = limits
+            .timeout
+            .map(|timeout| timeout.saturating_sub(started.elapsed()));
+        let forks = self.forks.as_ref();
+        run_python(process, task, limits, stop, forks, hold, spawned).await
+    }
+
+    /// The attempt's `Finished` from how it ran; its start counted, and its end told to its
+    /// extension's service: an attempt connected to it timing out counts towards the service
+    /// being taken for hung (DN31), ending otherwise starts that count over.
+    /// A cleanup's end counts for nothing (agy's review: one succeeding after each timed-out
+    /// attempt reset the count), nor does an attempt of an earlier run of the service.
+    fn finished_of(
+        &self,
+        spec: &AttemptSpec,
+        ran: Result<Ran, crate::launch::LaunchError>,
+        service_run: Option<u64>,
+    ) -> pb::Finished {
+        if let Ok(Ran {
+            start: Some(start),
+            forked,
+            ..
+        }) = &ran
+        {
+            self.metrics
+                .task_started(if *forked { "fork" } else { "spawn" }, start);
+        }
+        let ran_ok = ran.is_ok();
+        let finished = match ran {
+            Ok(ran) => finished(&spec.attempt_id, &spec.task, &ran),
+            Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),
+        };
+        if ran_ok
+            && spec.cleanup_handles.is_none()
+            && let (TaskKind::Extension { name, .. }, Some(run)) = (&spec.task.kind, service_run)
+        {
+            let timed_out = finished.status == i32::from(pb::AttemptStatus::TimedOut);
+            self.services.attempt_ended(name, run, timed_out);
+        }
+        finished
+    }
+
+    /// An extension attempt's connection to its service (decision 518); none for any other
+    /// attempt, or an extension without one.
+    async fn service_link(
+        &self,
+        spec: &AttemptSpec,
+        wait_ready: bool,
+    ) -> Result<Option<crate::service::Link>, String> {
+        let TaskKind::Extension { name, version, .. } = &spec.task.kind else {
+            return Ok(None);
+        };
+        if !self.services.has(name) {
+            return Ok(None);
+        }
+        let task = schedr_extension::protocol::ServiceTask {
+            name: name.clone(),
+            version: version.clone(),
+        };
+        self.services
+            .connect(&spec.attempt_id, task, wait_ready)
+            .await
+            .map(Some)
+            .map_err(|why| format!("extension `{name}`: {why}"))
+    }
+
     /// Where an extension task's metrics go (decision 513); none for any other task.
     fn figured(&self, task: &schedr_model::Task) -> Option<crate::reports::Figured> {
         let schedr_model::TaskKind::Extension { name, version, .. } = &task.kind else {
@@ -1006,7 +1136,9 @@ impl ProcessExecutor {
             events: None,
             api: spec.api.clone(),
             reports: Some(Arc::clone(reports)),
+            service: None,
         };
+        let mut service_run = None;
         let ran = match plan {
             // In a process shared with other wait steps: no budget of its own (the host's).
             Plan::Python { process, request }
@@ -1032,9 +1164,15 @@ impl ProcessExecutor {
                 .await
             }
             Plan::Python { process, request } => {
-                let forks = self.forks.as_ref();
                 let task = python_task(*request);
-                run_python(&process, task, limits, stop, forks, &mut hold, spawned).await
+                let run = self.run_with_service(
+                    (spec, &process),
+                    task,
+                    (limits, stop),
+                    (&mut hold, &mut service_run),
+                    spawned,
+                );
+                Box::pin(run).await
             }
             Plan::Command(process) => {
                 let ctx = self.command_ctx(spec, (secrets, handles), resource.as_ref(), reports);
@@ -1045,19 +1183,7 @@ impl ProcessExecutor {
         // nothing signals its group after that.
         drop(watching);
         drop(hold);
-        if let Ok(Ran {
-            start: Some(start),
-            forked,
-            ..
-        }) = &ran
-        {
-            self.metrics
-                .task_started(if *forked { "fork" } else { "spawn" }, start);
-        }
-        let mut finished = match ran {
-            Ok(ran) => finished(&spec.attempt_id, &spec.task, &ran),
-            Err(error) => failed_before_start(&spec.attempt_id, START_FAILED, &error.to_string()),
-        };
+        let mut finished = self.finished_of(spec, ran, service_run);
         if let Some(outcome) = resource.as_ref().and_then(|r| r.outcome()) {
             with_resource_value(&mut finished, outcome);
         }
@@ -3235,8 +3361,13 @@ impl<E: Executor> Agent<E> {
         (heartbeat, opened): (&mut tokio::time::Interval, tokio::time::Instant),
     ) {
         match message {
+            master_message::Message::MaintenanceDrained(drained) => {
+                self.executor.maintenance_drained(drained.drained);
+            }
             master_message::Message::Registered(registered) => {
                 self.registered = true;
+                // Drained for maintenance or not, its services told (DN33).
+                self.executor.maintenance_drained(registered.drained);
                 if registered.max_message_size > 0 {
                     self.master_limit =
                         usize::try_from(registered.max_message_size).unwrap_or(usize::MAX);
@@ -3780,6 +3911,15 @@ impl<E: Executor> Agent<E> {
         };
         if let Some(detail) = self.code_mismatch(&assign) {
             let _ = to_master.send(reject(pb::RejectReason::CodeMismatch, detail));
+            return None;
+        }
+        // Its extension's service not ready here (decision 518): waited for as code on its way
+        // is (DN29), no try used.
+        if let TaskKind::Extension { name, version, .. } = &spec.task.kind
+            && let Some(why) = self.executor.service_not_ready(name, version)
+        {
+            let detail = format!("extension `{name}`: {why}");
+            let _ = to_master.send(reject(pb::RejectReason::ExtensionNotReady, detail));
             return None;
         }
         // Planned with stand-ins for its secrets (fetched once it is started, so a slow

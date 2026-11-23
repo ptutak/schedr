@@ -37,6 +37,7 @@ pub mod resource;
 pub mod retention;
 pub mod scan;
 pub mod secrets;
+pub mod service;
 pub mod status;
 pub mod supervise;
 pub mod usage;

@@ -297,7 +297,8 @@ pub fn reject_reaction(reason: i32) -> Result<RejectReaction, ConversionError> {
         R::Unspecified => return Err(unknown),
         // Given back from a waiting queue (decision 509): ready again, any worker.
         R::NoFreeSlot | R::Draining | R::Withdrawn => RejectReaction::Temporary,
-        R::ScriptReferenceNotFound | R::DagFileMissing | R::CodeMismatch => {
+        // A service not ready (DN29) waits as code on its way does.
+        R::ScriptReferenceNotFound | R::DagFileMissing | R::CodeMismatch | R::ExtensionNotReady => {
             RejectReaction::CodeNotThereYet
         }
         R::InterpreterUndefined

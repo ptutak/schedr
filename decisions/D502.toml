@@ -31,4 +31,4 @@ code = [
     "crates/schedr-master/src/planning.rs::first_waiting",
     "crates/schedr-config/src/loader.rs::RETIRED_TIMINGS",
 ]
-checked = 2026-11-22
+checked = 2026-11-23

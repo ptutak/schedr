@@ -191,3 +191,48 @@ fn a_log_line_is_the_structured_format() {
         json!({"schedr_log": 1, "level": "warning", "message": "pod pending", "fields": {"node": "n1"}})
     );
 }
+
+/// Decision 518: a plugin's call to its extension's service, answered by its number; a failed
+/// one is the service's error, and without a service the call says so.
+#[test]
+fn a_plugin_calls_its_service_and_hears_its_answer_or_error() {
+    let (worker, _plugin_side) = UnixStream::pair().unwrap();
+    let WorkerMessage::ExtensionTask(task) = request(None) else {
+        unreachable!()
+    };
+    let (ours, mut theirs) = UnixStream::pair().unwrap();
+    let service = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let call: protocol::CallMessage = read_json(&mut theirs).unwrap();
+            let protocol::CallMessage::Call { id, method, args } = call else {
+                panic!("expected a call")
+            };
+            let answer = if method == "fail" {
+                protocol::CallMessage::CallFailed {
+                    id,
+                    message: "as asked".to_owned(),
+                }
+            } else {
+                protocol::CallMessage::Answer {
+                    id,
+                    result: serde_json::json!({"echo": args}),
+                }
+            };
+            write_json(&mut theirs, &answer).unwrap();
+        }
+    });
+    let mut channel = Channel::new(worker, &task).with_service(Some(ours));
+    assert_eq!(
+        channel
+            .service_call("echo", serde_json::json!([1]))
+            .unwrap(),
+        serde_json::json!({"echo": [1]})
+    );
+    let failed = channel.service_call("fail", Value::Null).unwrap_err();
+    assert_eq!(failed.to_string(), "the extension's service: as asked");
+    service.join().unwrap();
+    let (worker, _) = UnixStream::pair().unwrap();
+    let mut without = Channel::new(worker, &task);
+    let none = without.service_call("x", Value::Null).unwrap_err();
+    assert!(none.to_string().contains("no service"), "{none}");
+}

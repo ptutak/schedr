@@ -464,6 +464,7 @@ async fn answer_to(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
         | CtxRequest::LinkSet { .. }
         | CtxRequest::MetricAdd { .. }
         | CtxRequest::ExtensionNotify { .. }
+        | CtxRequest::ServiceCall { .. }
         | CtxRequest::StopReasonGet
         | CtxRequest::OutputSet { .. }) => report_answer(info, request),
         CtxRequest::Hello { .. } => CtxAnswer::Error {
@@ -540,6 +541,11 @@ fn report_answer(info: &CtxInfo, request: CtxRequest) -> CtxAnswer {
         CtxRequest::ExtensionNotify { .. } => CtxAnswer::ReportRefused {
             reason: "an extension's event: `task-ctx extension notify` works only in a shell \
                      plugin (`schedr extension shell`); a task sends with `task-ctx notify`"
+                .to_owned(),
+        },
+        CtxRequest::ServiceCall { .. } => CtxAnswer::ReportRefused {
+            reason: "`task-ctx extension call` works only in a shell plugin (`schedr extension \
+                     shell`)"
                 .to_owned(),
         },
         CtxRequest::OutputSet { .. } => CtxAnswer::ReportRefused {

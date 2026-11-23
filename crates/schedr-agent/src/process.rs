@@ -94,21 +94,21 @@ pub(crate) static SPAWNING: Mutex<()> = Mutex::const_new(());
 ///
 /// Returns an I/O error if the log file can't be opened or the program can't be started.
 pub async fn spawn(spec: &ProcessSpec) -> io::Result<OsProcess> {
-    spawn_passing(spec, None).await
+    spawn_passing(spec, Vec::new()).await
 }
 
-/// Starts a process that inherits `pass` (open, at the same descriptor number); the parent's
-/// copy is closed once the child has it. Used to hand a runner its end of the agent's socket
-/// pair.
+/// Starts a process that inherits each of `pass` (open, at the same descriptor numbers); the
+/// parent's copies are closed once the child has them. Used to hand a runner its end of the
+/// agent's socket pair, and a plugin with a service its end of the service's (decision 518).
 ///
 /// # Errors
 ///
 /// Returns an I/O error if the log file can't be opened, the descriptor can't be made
 /// inheritable, or the program can't be started.
-pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Result<OsProcess> {
+pub async fn spawn_passing(spec: &ProcessSpec, pass: Vec<OwnedFd>) -> io::Result<OsProcess> {
     let log = open_log(spec).await?;
     let spawning = SPAWNING.lock().await;
-    if let Some(fd) = &pass {
+    for fd in &pass {
         rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
     }
     let child = Command::new(&spec.program)
@@ -161,6 +161,38 @@ pub async fn spawn_passing(spec: &ProcessSpec, pass: Option<OwnedFd>) -> io::Res
         ))),
         stop_reading,
     })
+}
+
+/// Starts an extension's service (decision 518): `program` with `args` in `dir`, given only
+/// `env`, in a process group of its own, inheriting `pass` (its control socket's end); its
+/// output piped, for the worker's log. Started one at a time with every other process, as
+/// [`spawn_passing`]'s, so the descriptor reaches it alone.
+///
+/// # Errors
+///
+/// When the descriptor can't be made inheritable or the program can't be started.
+pub async fn spawn_service(
+    (program, args): (&Path, &[String]),
+    env: &BTreeMap<String, String>,
+    dir: &Path,
+    pass: OwnedFd,
+) -> io::Result<Child> {
+    let spawning = SPAWNING.lock().await;
+    rustix::io::fcntl_setfd(&pass, rustix::io::FdFlags::empty())?;
+    let child = Command::new(program)
+        .args(args)
+        .env_clear()
+        .envs(env)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn();
+    drop(pass);
+    drop(spawning);
+    child
 }
 
 /// The mode of the log files the worker creates (`[worker] log_mode`, B182): set once when the

@@ -74,7 +74,7 @@ CREATE TABLE extension_events (
     name       TEXT NOT NULL,
     worker_id  TEXT NOT NULL,
     version    TEXT NOT NULL,
-    kind       TEXT NOT NULL CHECK (kind IN ('discovered', 'skipped', 'refused', 'dropped', 'notified')),
+    kind       TEXT NOT NULL CHECK (kind IN ('discovered', 'skipped', 'refused', 'dropped', 'notified', 'service_started', 'service_ready', 'service_crashed', 'service_memory_killed', 'service_turned_off', 'service_status', 'service_stopped')),
     at         TIMESTAMPTZ NOT NULL,
     message    TEXT NOT NULL
 );

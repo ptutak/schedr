@@ -1667,6 +1667,54 @@ versions = ["1.0", "1.1"]
     assert!(!load(None, &env(&[]), &[]).unwrap().extensions.discover);
 }
 
+/// Decision 518: a service beside the plugin, its keys' defaults and its secrets by name.
+#[test]
+fn an_extension_may_have_a_service_with_its_keys() {
+    let toml = r#"
+[extensions.spark]
+command = ["/opt/acme/schedr-ext-spark"]
+versions = ["1.0"]
+service = ["/opt/acme/schedr-ext-spark", "--service"]
+service_memory = "512MiB"
+service_secrets = [{path = "etl/spark", key = "token"}]
+"#;
+    let config = load(Some(file(toml)), &env(&[]), &[]).unwrap();
+    let spark = &config.extensions.plugins["spark"];
+    assert_eq!(spark.service, ["/opt/acme/schedr-ext-spark", "--service"]);
+    assert_eq!(spark.service_memory, 512 * 1024 * 1024);
+    assert_eq!(spark.service_ready_timeout, Duration::from_mins(1));
+    assert_eq!(spark.service_restarts, 5);
+    assert_eq!(spark.service_settle, Duration::from_hours(24));
+    assert_eq!(spark.service_secrets[0].path, "etl/spark");
+    let plain = "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\n";
+    let config = load(Some(file(plain)), &env(&[]), &[]).unwrap();
+    assert_eq!(config.extensions.plugins["spark"].service.len(), 0);
+    for (more, why) in [
+        ("service = [\"bin/svc\"]\n", "an absolute path"),
+        (
+            "service = [\"/svc\"]\nservice_ready_timeout = \"0s\"\n",
+            "service_ready_timeout",
+        ),
+        (
+            "service = [\"/svc\"]\nservice_settle = \"0s\"\n",
+            "service_settle",
+        ),
+        (
+            "service = [\"/svc\"]\nservice_memory = \"1MiB\"\n",
+            "at least 16MiB",
+        ),
+        (
+            "service_secrets = [{path = \"etl/x\"}]\n",
+            "without a service",
+        ),
+    ] {
+        let error = load(Some(file(&format!("{plain}{more}"))), &env(&[]), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(why), "{more}: {error}");
+    }
+}
+
 #[test]
 fn a_bad_extension_table_is_refused_naming_it() {
     for (toml, why) in [

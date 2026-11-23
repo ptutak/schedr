@@ -96,6 +96,7 @@ async fn a_plugin_is_asked_with_describe_and_one_failing_is_skipped() {
             versions: BTreeSet::from(["1".to_owned()]),
             declarations: schedr_model::extension::Declarations::default(),
             max_series: schedr_model::extension::DEFAULT_MAX_SERIES,
+            service: None,
         },
     )]);
     assert_eq!(

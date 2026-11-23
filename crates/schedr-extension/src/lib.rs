@@ -80,6 +80,10 @@ pub enum Error {
     /// The worker refused the plugin, or what it asked (a secret, a handle).
     #[error("{0}")]
     Refused(String),
+    /// A call to the extension's service failed: its handler's error, or none here
+    /// (decision 518).
+    #[error("the extension's service: {0}")]
+    Service(String),
 }
 
 impl From<Error> for String {
@@ -169,6 +173,54 @@ pub trait Plugin {
 pub struct Channel {
     stream: UnixStream,
     given: Vec<(SecretName, Value)>,
+    /// The attempt's connection to its extension's service.
+    service: Option<ServiceCalls>,
+}
+
+/// An attempt's connection to its extension's service (decision 518): calls by number, one at
+/// a time from this crate.
+#[derive(Debug)]
+pub struct ServiceCalls {
+    stream: UnixStream,
+    next: u64,
+}
+
+impl ServiceCalls {
+    /// The calls over `stream`, the plugin's end of the connection.
+    #[must_use]
+    pub const fn new(stream: UnixStream) -> Self {
+        Self { stream, next: 1 }
+    }
+
+    /// Calls the service and waits for its answer.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Service`] when its handler failed; the socket's error when the service is gone.
+    pub fn call(&mut self, method: &str, args: Value) -> Result<Value, Error> {
+        let id = self.next;
+        self.next += 1;
+        let call = protocol::CallMessage::Call {
+            id,
+            method: method.to_owned(),
+            args,
+        };
+        write_json(&mut self.stream, &call)?;
+        loop {
+            match read_json::<protocol::CallMessage>(&mut self.stream)? {
+                protocol::CallMessage::Answer {
+                    id: answered,
+                    result,
+                } if answered == id => return Ok(result),
+                protocol::CallMessage::CallFailed {
+                    id: failed,
+                    message,
+                } if failed == id => return Err(Error::Service(message)),
+                // Another call's (none from this crate): skipped.
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Channel {
@@ -180,7 +232,40 @@ impl Channel {
             .iter()
             .map(|s| (s.name.clone(), s.value.clone()))
             .collect();
-        Self { stream, given }
+        Self {
+            stream,
+            given,
+            service: None,
+        }
+    }
+
+    /// The same, with the attempt's connection to its extension's service (decision 518).
+    #[must_use]
+    pub fn with_service(mut self, service: Option<UnixStream>) -> Self {
+        self.service = service.map(ServiceCalls::new);
+        self
+    }
+
+    /// Takes the attempt's connection to its service out of the channel, to be called apart
+    /// from the worker's requests (a shell plugin's bridge: a slow service mustn't hold them).
+    pub const fn take_service(&mut self) -> Option<ServiceCalls> {
+        self.service.take()
+    }
+
+    /// Calls the extension's service and waits for its answer (decision 518): one call at a
+    /// time from this crate, each by its number.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Service`] when the extension has no service here or its handler failed; the
+    /// socket's error when the service is gone.
+    pub fn service_call(&mut self, method: &str, args: Value) -> Result<Value, Error> {
+        match &mut self.service {
+            Some(service) => service.call(method, args),
+            None => Err(Error::Service(
+                "this extension has no service ([extensions.<name>] service)".to_owned(),
+            )),
+        }
     }
 
     /// Sends one message.
@@ -396,6 +481,11 @@ fn unexpected(expected: &'static str, got: &WorkerMessage) -> Error {
 ///
 /// [`Error::TooLarge`], or the socket's error.
 pub fn write(stream: &mut impl Write, message: &PluginMessage) -> Result<(), Error> {
+    write_json(stream, message)
+}
+
+/// Writes any message in the protocol's framing.
+fn write_json(stream: &mut impl Write, message: &impl serde::Serialize) -> Result<(), Error> {
     let body = serde_json::to_vec(message)?;
     let size = u32::try_from(body.len())
         .ok()
@@ -413,6 +503,11 @@ pub fn write(stream: &mut impl Write, message: &PluginMessage) -> Result<(), Err
 ///
 /// [`Error::TooLarge`], the socket's error, or JSON that isn't the protocol's.
 pub fn read(stream: &mut impl Read) -> Result<WorkerMessage, Error> {
+    read_json(stream)
+}
+
+/// Reads any message in the protocol's framing.
+fn read_json<T: serde::de::DeserializeOwned>(stream: &mut impl Read) -> Result<T, Error> {
     let mut header = [0; 4];
     stream.read_exact(&mut header)?;
     let size = u32::from_be_bytes(header);
@@ -472,12 +567,31 @@ pub fn log(level: Level, message: &str, fields: &[(&str, Value)]) {
 pub fn main(plugin: impl Plugin) -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let fd = std::env::var(FD_ENV).ok();
-    ExitCode::from(run_main(plugin, &args, fd.as_deref()))
+    let service = std::env::var(SERVICE_FD_ENV).ok();
+    ExitCode::from(run_main_with(
+        plugin,
+        &args,
+        (fd.as_deref(), service.as_deref()),
+    ))
 }
+
+/// The environment variable naming an attempt's connection to its extension's service
+/// (decision 518), when it has one.
+pub const SERVICE_FD_ENV: &str = "SCHEDR_SERVICE_FD";
 
 /// [`main`]'s work, given the arguments and `SCHEDR_AGENT_FD`: the exit code, 0 when the task
 /// succeeded, 1 when it failed or the channel did, 2 on a wrong start.
-pub fn run_main(mut plugin: impl Plugin, args: &[String], fd: Option<&str>) -> u8 {
+pub fn run_main(plugin: impl Plugin, args: &[String], fd: Option<&str>) -> u8 {
+    run_main_with(plugin, args, (fd, None))
+}
+
+/// As [`run_main`], given `SCHEDR_SERVICE_FD` too (decision 518): the attempt's connection to
+/// its extension's service, taken as the worker's socket is.
+pub fn run_main_with(
+    mut plugin: impl Plugin,
+    args: &[String],
+    (fd, service): (Option<&str>, Option<&str>),
+) -> u8 {
     if args == ["--describe"] {
         let description = serde_json::json!({
             "name": plugin.name(),
@@ -498,7 +612,18 @@ pub fn run_main(mut plugin: impl Plugin, args: &[String], fd: Option<&str>) -> u
             return 2;
         }
     };
-    match serve(&mut plugin, stream) {
+    let service = match service
+        .and_then(|fd| fd.parse::<i32>().ok())
+        .map(socket::inherited)
+    {
+        None => None,
+        Some(Ok(stream)) => Some(stream),
+        Some(Err(error)) => {
+            eprintln!("can't use the extension's service connection: {error}");
+            return 2;
+        }
+    };
+    match serve_with(&mut plugin, stream, service) {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(Error::Refused(reason)) => {
@@ -526,7 +651,20 @@ fn declared(declarations: &Value, key: &str) -> Vec<Value> {
 /// # Errors
 ///
 /// [`Error::Refused`] when the worker refused the plugin, or the channel's error.
-pub fn serve(plugin: &mut impl Plugin, mut stream: UnixStream) -> Result<bool, Error> {
+pub fn serve(plugin: &mut impl Plugin, stream: UnixStream) -> Result<bool, Error> {
+    serve_with(plugin, stream, None)
+}
+
+/// As [`serve`], with the attempt's connection to its extension's service, if it has one.
+///
+/// # Errors
+///
+/// As [`serve`].
+pub fn serve_with(
+    plugin: &mut impl Plugin,
+    mut stream: UnixStream,
+    service: Option<UnixStream>,
+) -> Result<bool, Error> {
     let declarations = plugin.declarations();
     write(
         &mut stream,
@@ -550,7 +688,7 @@ pub fn serve(plugin: &mut impl Plugin, mut stream: UnixStream) -> Result<bool, E
     };
     let max_output_size = raw.task.settings.max_output_size;
     let request = Request::of(raw)?;
-    let mut channel = Channel::new(stream, &request.raw);
+    let mut channel = Channel::new(stream, &request.raw).with_service(service);
     let ran = if request.cleanup {
         plugin.cleanup(&request, &mut channel)
     } else {

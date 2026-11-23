@@ -593,7 +593,10 @@ fires, it can kill the agent as well as tasks. So the agent enforces
 **budgets** itself for task and parse processes and watcher hosts:
 
 - The limit is the smallest cgroup v2 `memory.max` from the agent's cgroup up. Each task's
-  budget is its own `memory=`, else `[worker] memory_budget`, else (limit − reserve) ÷ slots.
+  budget is its own `memory=`, else `[worker] memory_budget`, else (limit − reserve − the
+  extensions' services' `service_memory`) ÷ slots. **A `memory_budget` you set is used as it
+  is**: leave room for the services yourself (slots × budget + their `service_memory` within
+  the limit), or a full worker can pass its limit.
   The parse runner gets the worker's budget for each file process. Parsing is separate from
   task slots, so concurrent parsers can together exceed the pod limit; see [Parsing capacity](06-parsing.md#imports-and-parsing-capacity).
 - Every [second](14-timings.md#fixed-timings) the agent measures each task's process group

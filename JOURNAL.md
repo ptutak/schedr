@@ -3087,3 +3087,86 @@ shared worker certificate in the chart, a database linked to nothing; the trigge
 unknown instance logged as B279. Grok found standalone's REST API, auth `none` on loopback,
 open to every local user and handing out logs; the user chose, of the options shown, a warning
 at start and the trust page (not: auth required unless a flag says; the API on a Unix socket).
+
+### <a id="DN29"></a>2026-11-22: A service's calls by ID, its memory off the task budgets, its secrets in the welcome, a retry after the settle; Rust and shell plugins call it (decision note 29; adds to D518)
+
+M5.2i9's choices that decision 518 and its plan step leave open, asked together at the step's
+start (the user, 2026-11-22). The user chose, of the options shown: calls by ID (not: one at a
+time); a service's memory off the task budgets (not: inside `memory_reserve`, where fork servers
+and watcher hosts live); its secrets in the welcome at each start (not: only by asking); tried
+again after `service_settle` (not: off until the worker restarts, the recommended one: "Tried
+again after the settle"); the Rust crate's plugin side only (not: a Rust service too; neither);
+`task-ctx extension call` for shell plugins (not: none now).
+Asked next how "offered only while ready" reaches the master's placement, the user answered "I
+thought we're filtering this by queues": right, decision 510 routes by queue, the question was
+narrowed to a queue's worker whose service isn't ready, and the user chose a rejection handled as
+code not there yet, `EXTENSION_NOT_READY` (not: holding the task in its slot until ready).
+
+### <a id="DN30"></a>2026-11-22: No stall check for a service: a hung one shows as its attempts timing out (decision note 30; corrects D518)
+
+Asked whether the worker should ping a service (it was building a ping for decision 518's "a
+loop stalled past 5 s is warned of"), the user: "I thought we decided earlier, that the service
+doesn't report, we don't detect stalls, they're detected once we schedule a task and it doesn't
+have a response within time (timed out) that means that the plugin doesn't respond". The records
+had the stall warning (D518, accepted 2026-11-21); corrected to the user's rule.
+
+### <a id="DN31"></a>2026-11-22: A service whose attempts time out a few times in a row counts as crashed (decision note 31; adds to D518)
+
+A side agent's note: with no stall check a hung service stays "ready", its tasks timing out one
+by one and nothing restarting it. The user: "They should count as a crash after a few attempts,
+and a turn-off". "A few" made `service_timeouts`, 3 by default, by Claude: a public key, as an
+operator tunes it per extension.
+
+### <a id="DN32"></a>2026-11-22: A service answers each attempt's connection in time, timed by the worker (decision note 32; adds to D518)
+
+The user, on DN31: "TimeOut could be measured on any service request probably, service
+message", then "I don't know the protocol though". Claude laid out the three channels (worker
+and plugin, worker and service, plugin and service, the worker not on the last) and where a
+request could be timed; the user chose A, the worker timing `attempt_connected`'s answer (not:
+the helpers timing each call; both).
+A side agent's note then: one count, reset by every accepted connection, never reaches its limit
+for a service that accepts connections and hangs on the work. Claude's wording of the reset was
+the flaw; corrected to two counts, each against `service_timeouts`.
+
+### <a id="DN33"></a>2026-11-23: A maintenance drain is told to a worker's services, which keep running (decision note 33; adds to D518)
+
+Claude found that the service, as built, stops only when its worker stops, not on a maintenance
+drain, against decision 518's "on a drain"; asked for its view, it recommended keeping it
+running, with telling it `drained`/`resumed` as the middle way. The user: "keep running and
+tell, it's a reasonable way, we inform the worker, and drain its' work, we inform the extensions
+aswell". Found while building it: the worker wasn't told of its own maintenance drain at all
+(the master only stopped assigning it work).
+
+### <a id="D521"></a>2026-11-23: Extensions never hold the master up: their reports are dropped first (decision 521)
+
+The user asked which database queries the master makes for extensions and whether they are
+profiled. Claude read them: all come in through a worker's heartbeat, awaited in the master's
+round (figures once a minute per worker: an upsert of the version, the hour's series once,
+a read-then-upsert of the minute; events with any heartbeat: an insert each and a trim per
+extension), plus the periodic rollups; none is timed, no stress scenario loads them. The user:
+"add profiling with proper measurements to i12", "what do you suggest ... some batches or
+limits? split it from heartbeat?", "If there are obvious improvements we could make them a part
+of i12 already", and "historically, batching gave us many speedups and I expect the same
+here... also some reductions to the volume of things stored etc. extensions shouldn't stop
+master from keeping being operational, a general rule - it's better to drop them and keep master
+operational then try to keep them, extensions have lower status than native tasks. They receive
+the same features, but they're an addition and they have to behave properly if they want to be
+used and kept."
+
+Claude then listed five candidates from the master's code, attempt statuses and links first (two
+queries inline per message); the user: "all 5 accepted, even if after applying measures doesn't
+show better performance, keep them, we've seen that this machine doesn't always show throughput
+increse."
+
+The user then: "we should send 2 basic metrics for long-running services for free: memory, and
+call response time". Claude: memory is free (the worker measures it each second); a call's time
+isn't, as the worker isn't on the plugin-service connection, so it offered the accept latency
+(timed by the worker, any language) and the call time around `on_call` (timed by `serve`). The
+user: "all three in i12".
+Asked how a user places them: as any metric, by name in the plugin's or the operator's panels,
+a default Service row for those none places. The user: "yes, add it to i12, I think an option
+service_metrics = false reads not well, someone might think he disables all metrics": no key to
+hide them. Then: "the hide option might stay, just different naming"; Claude offered
+`builtin_service_metrics`, not collected when off; the user: "builtin_service_metrics, stops
+collecting, someone might want to keep only one of the three (two)?": `true`, `false`, or a list
+of the metrics' names.

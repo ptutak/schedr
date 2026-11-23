@@ -20,8 +20,7 @@ connections, their plugins failing them (retries apply), offers withdrawn until 
 restarted backing off 1 s to 60 s; past `service_restarts` (5) within `service_settle` (24 h)
 the extension is turned off on that worker. Its secrets declared in config
 (`service_secrets`), fetched by the worker; its output in the worker's log, tagged; starting,
-ready, restarts and turned off as events; its statuses and metrics over the control socket. A
-loop stalled past 5 s is warned of (logged and an event). On a drain or turned off: no new
+ready, restarts and turned off as events; its statuses and metrics over the control socket. A hung service is seen as its attempts timing out, no stall check (DN30). On a drain or turned off: no new
 attempts, SIGTERM after the last connected one ends, SIGKILL after the grace. One per worker
 (N workers, N clients); recovery stays the cleanup handles'. Not chosen: through the agent, a
 socket path; declared in `--describe`; decorators (`Service` with `@service.call`); a probe
@@ -29,4 +28,14 @@ for readiness; attempts reconnecting after a restart; one shared across workers.
 '''
 history = "JOURNAL.md#D518"
 step = "M5.2i9"
-code = []
+code = [
+  "crates/schedr-agent/src/service.rs::Services",
+  "crates/schedr-extension/src/protocol.rs::ServiceMessage",
+  "crates/schedr-extension/src/protocol.rs::CallMessage",
+  "crates/schedr-agent/src/agent.rs::service_link",
+  "crates/schedr/src/roles.rs::service_specs",
+  "crates/schedr/src/roles.rs::services_memory",
+  "python/schedr/_service.py",
+  "crates/schedr/src/shell_plugin.rs",
+]
+checked = 2026-11-23

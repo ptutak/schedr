@@ -34,4 +34,4 @@ code = [
     "crates/schedr-agent/src/agent.rs::abandon_starts",
     "crates/schedr-agent/src/master_time.rs::Outbox",
 ]
-checked = 2026-11-22
+checked = 2026-11-23
