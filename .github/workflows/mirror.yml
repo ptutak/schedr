@@ -1,0 +1,45 @@
+name: Mirror
+
+# Every branch and tag of this repository pushed to gitlab.com/ptutak/schedr (the user,
+# 2026-11-23), as they are here: new and moved refs pushed, deleted ones deleted there.
+# A bare clone, not the checkout: its refs are exactly the repository's branches and tags
+# (`git push --mirror` from a clone would also send GitHub's `refs/pull/*`).
+# GITLAB_MIRROR_TOKEN: a project access token of the GitLab project, Maintainer, with
+# `write_repository` (Maintainer may push to its protected `main`).
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  delete:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One mirroring at a time, in order: each pushes the whole state, so none is skipped.
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  gitlab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Push every branch and tag to GitLab
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLAB_MIRROR_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITLAB_MIRROR_TOKEN" ]; then
+            echo "::error::the GITLAB_MIRROR_TOKEN secret isn't set"
+            exit 1
+          fi
+          git clone --bare --quiet \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git push --prune --force \
+            "https://oauth2:${GITLAB_MIRROR_TOKEN}@gitlab.com/ptutak/schedr.git" \
+            "refs/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
