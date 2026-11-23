@@ -57,25 +57,15 @@ step touches their code or the user schedules them.
 | 2 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 3 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
 | 4 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 5 | B282: a drained worker's interrupted task sometimes never ends after the worker is killed and comes back (Suspected) | 3 | high | rare | reliability |
-| 6 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 7 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 8 | B280: the integration tests' Postgres runs out of connections when roles tests overlap | 2 | low | possible | tests |
-| 9 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 10 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 11 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 12 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 13 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 14 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B282: a drained worker's interrupted task sometimes never ends after the worker is killed and comes back (Suspected)
-
-- **Rating:** severity **high**, probability **rare**, reliability (score 3): `roles::a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_period` waited over 60 s for the run to end in two `make check` runs in a row on 2026-11-23 (M5.2i11, no Rust changed since M5.2i9, whose CI passed); it passed alone, 8 copies at once, the whole roles binary, and a whole `make test-integration` after. The master logged only `a queued message of a replaced stream dropped` for w1 just before the worker came back: possibly the drained worker's report dropped as a replaced stream's, leaving its attempt unresolved; the first worker's log is lost with the test (only live roles are printed).
-- **Found:** 2026-11-23, by Claude, in M5.2i11's `make check` (twice; 06:29 and 06:44 UTC), the
-  test failing after 75-80 s; the first run also hit B280.
-- **Not yet known:** whether the master loses the drain's report (a product bug: a run stuck) or
-  the test's 60 s is short under make check's load. First: the test keeping every role's log,
-  the killed worker's too, so a failure shows the drain's side.
+| 5 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
+| 6 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 7 | B280: the integration tests' Postgres runs out of connections when roles tests overlap | 2 | low | possible | tests |
+| 8 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 9 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 10 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 11 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 12 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 13 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B281: a worker's memory split leaves out its extensions' services
 

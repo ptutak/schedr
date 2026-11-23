@@ -1224,6 +1224,9 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
             .first()
             .is_some_and(|a| !a["started_at"].is_null())
     });
+    // `started` comes before the runner reaches the task's code: under load, the drain's SIGTERM
+    // could kill it before it ignored SIGTERM, and its retry then slept its 120 s (B282).
+    cluster.wait("the task to ignore SIGTERM", || marker.exists());
     // Kubernetes: SIGTERM, then SIGKILL when the grace period is over.
     let exited = cluster.terminate_within("worker", grace);
     // SIGKILL if still running (the kubelet), and gone from the cluster's roles either way.
@@ -1242,6 +1245,12 @@ fn a_drained_task_that_ignores_sigterm_is_interrupted_within_the_pods_grace_peri
     assert!(
         exited.is_some_and(|s| s.success()),
         "the worker didn't stop within the grace period: {exited:?}\n{}",
+        cluster.logs()
+    );
+    // The drain's SIGTERM reached the task that ignored it (Grok's B282 hunt).
+    assert!(
+        std::path::Path::new(&format!("{}.term", marker.display())).exists(),
+        "the task never got the drain's SIGTERM\n{}",
         cluster.logs()
     );
 }
