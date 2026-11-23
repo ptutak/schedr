@@ -54,17 +54,63 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B279: a worker reporting an instance the master doesn't know holds every wait_for trigger until it stops it | 2 | medium | rare | **security** |
-| 2 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
-| 3 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
-| 4 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 5 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
-| 6 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
-| 7 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
-| 8 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
-| 9 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 10 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 11 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 12 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 2 | B285: a task unschedulable for missing code stays so after its workers report the code | 6 | high | possible | reliability |
+| 3 | B284: a task unschedulable because its extension's service wasn't ready stays so after the services come back | 6 | high | possible | reliability |
+| 4 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
+| 5 | B269: the process tests of cleanup moves, drains and cancels fail under load: one Postgres near its 100 connections, the master's lease pausing | 6 | medium | likely | tests |
+| 6 | B287: a worker that becomes eligible later never gives a task every other worker refused for itself another chance | 4 | medium | possible | reliability |
+| 7 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
+| 8 | B281: a worker's memory split leaves out its extensions' services | 3 | low | likely | usability |
+| 9 | B254: a worker's RUNNING count includes its wait steps, against its task slots | 3 | low | likely | usability |
+| 10 | B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back | 2 | low | possible | performance |
+| 11 | B278: the remembered auth check's test needs a tenfold speed-up, which a loaded machine misses | 2 | low | possible | tests |
+| 12 | B277: the metrics page's colour test checks whichever line the browser finds first | 2 | low | possible | tests |
+| 13 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 14 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
+| 15 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 16 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B287: a worker that becomes eligible later never gives a task every other worker refused for itself another chance
+
+- **Rating:** severity **medium**, probability **possible**, reliability (score 4): a task every eligible worker refused for a worker-specific reason (`INTERPRETER_UNDEFINED`, `EXTENSION_UNDEFINED`, ...) is `unschedulable` at once; a worker that wasn't eligible then (on older code of its root, or serving the queue only later through a new incarnation's settings change without a restart) and becomes eligible by reporting the new code never queues it again: only a new worker or incarnation, a resume, or a user retry does (DN37 answers only code and service refusals).
+- **Found:** 2026-11-23, by agy's fourth review of M5.2i13 (B284/B285): DN37's new code answers
+  the code-waiting tasks of a worker now eligible, which live in `code_missing`; one refused
+  only for worker-specific reasons is in `rejections` alone.
+- **A fix:** keep what such a task needs of a worker (`Wants`) beside its `rejections` too, and
+  queue it again when a worker becomes eligible for it (new code, or a queue it now serves).
+
+## B286: a cancelled or failed task's refusals stay in the master's memory until its workers come back
+
+- **Rating:** severity **low**, probability **possible**, performance (score 2): the dispatcher's `rejections` and `code_missing` keep a task instance's refusals until it starts, is retried, or a worker registers or resumes; cancelling its run or task, its DAG removed, or `unschedulable_timeout` failing it leaves them, scanned each round since DN37 (`answered_refusals`) and copied with the dispatcher's memory on each worker message, until its refusing workers are able again or one registers anew.
+- **Found:** 2026-11-23, by agy's second review of M5.2i13 (proof: a cancelled run's instance
+  still in `code_missing`); older than DN37 for `rejections`.
+- **A fix:** forget an instance's refusals where it leaves `queued`/`unschedulable` for good
+  (cancel, wind down, `fail_waiting_users`), or prune those not waiting when a round reads its
+  ready instances.
+
+## B285: a task unschedulable for missing code stays so after its workers report the code
+
+- **Rating:** severity **high**, probability **possible**, reliability (score 6): a task every eligible worker refused for missing code (`DAG_FILE_MISSING`, `CODE_MISMATCH`, `SCRIPT_REFERENCE_NOT_FOUND`) for `[master] code_wait` becomes `unschedulable`; a worker reporting a root's new content hash (`Dispatcher::report_root`) only records it, never forgetting its refusals nor queuing such tasks again, so after the code is fixed and synced the task and its run wait until a worker restarts or a user retries it.
+- **Found:** 2026-11-23, by a side agent's note on B284 (the same gap for code), checked by
+  Claude in `core.rs` `root_reported` and `dispatch.rs` `report_root`: no `requeue_unschedulable`,
+  no change to `code_missing`.
+- **A fix:** B284's: a worker able again (here: a root's hash it reports changed) has its
+  refusals forgotten and the next round queues the `unschedulable` tasks again.
+
+## B284: a task unschedulable because its extension's service wasn't ready stays so after the services come back
+
+- **Rating:** severity **high**, probability **possible**, reliability (score 6): a task rejected with `EXTENSION_NOT_READY` by every eligible worker for `[master] code_wait` becomes `unschedulable` (DN29); only a new worker, a worker's restart or a resume re-queues `unschedulable` tasks (`Dispatcher::register`, `resume`), never a service ready again, after its backoff or once its `service_settle` passed, so the task and its run wait until a worker restarts or a user retries; and a worker's old not-ready answer counts towards "every eligible worker" after its service is back.
+- **Found:** 2026-11-23, by Claude, reviewing `Dispatcher::not_here` at the user's request after
+  stress 21b (seed 1) left 61 of 120 runs running: every worker's chaos service turned off for
+  `service_settle` (24 h), its tasks `unschedulable`, their runs never ending (by design while
+  the services are off; the gap is that nothing re-queues them once they are back).
+- **Where:** `crates/schedr-master/src/dispatch.rs`, `not_here` (the `code_missing` memory, its
+  `by` never forgetting a worker) and `register`/`resume` (the only `requeue_unschedulable`
+  callers); the worker's service state never reaches the master (`core.rs`
+  `offered_extensions` is read at register only).
+- **Fix ideas (the user's to choose):** the worker tells the master when an extension's service
+  becomes ready, and the master re-queues tasks unschedulable for it; or such tasks stay queued
+  (DN29 rejected "holding the task until ready"); or they are re-queued every `code_wait`.
 
 ## B281: a worker's memory split leaves out its extensions' services
 

@@ -410,6 +410,13 @@ pub fn marked_cleanup(marks: &Path, work: &str) -> String {
     format!("{}; {work}; {}", mark("cstart"), mark("cend"))
 }
 
+/// Whether `worker` was frozen at any moment from `from` to `to`.
+fn frozen_during(troubles: &[crate::chaos::Trouble], worker: &str, from: u128, to: u128) -> bool {
+    troubles.iter().any(|t| {
+        t.frozen && t.worker == worker && t.from <= to && t.to.is_none_or(|end| from <= end)
+    })
+}
+
 /// Whether `worker` was in trouble (cut off, frozen) at any moment from `from` to `to`.
 fn in_trouble(troubles: &[crate::chaos::Trouble], worker: &str, from: u128, to: u128) -> bool {
     troubles
@@ -477,20 +484,25 @@ struct CleanupRun {
 
 /// What the tasks' and their cleanups' marks say is wrong (PLAN.md M4.8z): a cleanup that
 /// started while its try still ran (a try with no mark never ran: its work comes after its
-/// `start` mark, decision 460); a try's cleanup run to its end more than once, unless
+/// `start` mark, decision 460), unless `plugins` (tasks that may not exit on `SIGTERM`) and the
+/// try's worker was frozen at any moment from the try's start to the cleanup's (DN38: its stop
+/// delayed past the move, decision 280); a try's cleanup run to its end more than once, unless
 /// [`run_again_allowed`] (decision 255 and at least once); and a try whose cleanup the database says
 /// ran (`ok`) without a mark of it ending. `seen` holds when each task process was last seen
-/// alive, `killed` what the harness killed and when.
+/// alive, `killed` what the harness killed and when. Second, the cleanups by design beside
+/// their try, to list and count.
 pub fn cleanup_problems(
     db: &Db,
     marks: &Path,
     (seen, killed): (&HashMap<u32, u128>, &HashMap<u32, u128>),
     troubles: &[crate::chaos::Trouble],
-) -> Vec<String> {
+    plugins: bool,
+) -> (Vec<String>, Vec<String>) {
     type Key = (String, String, u32);
     let text = std::fs::read_to_string(marks).unwrap_or_default();
     let ended = db.ended();
-    let mut tasks: BTreeMap<Key, (Option<u128>, Option<u128>)> = BTreeMap::new();
+    // Each try's start, end and worker.
+    let mut tasks: BTreeMap<Key, (Option<u128>, Option<u128>, String)> = BTreeMap::new();
     let mut cleanups: BTreeMap<Key, BTreeMap<u32, CleanupRun>> = BTreeMap::new();
     for line in text.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -510,10 +522,12 @@ pub fn cleanup_problems(
                 // Its end, if no `end` mark comes: the harness's kill, else the last moment
                 // its process was seen.
                 let gone = killed.get(&pid).or_else(|| seen.get(&pid)).copied();
-                let entry = tasks.entry(key).or_insert((None, gone));
+                let worker = fields.get(6).copied().unwrap_or("-").to_owned();
+                let entry = tasks.entry(key).or_insert((None, gone, String::new()));
                 entry.0 = Some(ns);
+                entry.2 = worker;
             }
-            "end" => tasks.entry(key).or_insert((None, None)).1 = Some(ns),
+            "end" => tasks.entry(key).or_insert((None, None, String::new())).1 = Some(ns),
             "cstart" | "cend" => {
                 let worker = fields.get(6).copied().unwrap_or("-").to_owned();
                 let run = cleanups
@@ -535,25 +549,33 @@ pub fn cleanup_problems(
         }
     }
     let in_trouble = |worker: &str, from: u128, to: u128| in_trouble(troubles, worker, from, to);
-    let mut problems = Vec::new();
+    let (mut problems, mut beside) = (Vec::new(), Vec::new());
     for (key, runs) in &cleanups {
         let name = format!("{}/{} try {}", key.0, key.1, key.2);
         // A try with no mark never ran (sent to a worker cut off, which the master lost
         // not knowing, so it moved the cleanup as for one that may have run, decision 460):
         // nothing for its cleanup to overlap. The database's end is no help there: a moved
         // cleanup's attempt ends with the cleanup.
-        let task_end = tasks
+        let task = tasks
             .get(key)
-            .map(|(_, end)| end.or_else(|| ended.get(key).copied()));
+            .map(|(start, end, worker)| (*start, end.or_else(|| ended.get(key).copied()), worker));
         for run in runs.values() {
-            match task_end {
+            match task {
                 None => {}
-                Some(Some(end)) if end <= run.start => {}
-                Some(end) => problems.push(format!(
-                    "{name}: its cleanup started on {} at {} while the try still ran (ended \
-                     {end:?})",
-                    run.worker, run.start
-                )),
+                Some((_, Some(end), _)) if end <= run.start => {}
+                Some((start, end, worker)) => {
+                    let what = format!(
+                        "{name}: its cleanup started on {} at {} while the try still ran on \
+                         {worker} (ended {end:?})",
+                        run.worker, run.start
+                    );
+                    let from = start.unwrap_or(run.start);
+                    if plugins && frozen_during(troubles, worker, from, run.start) {
+                        beside.push(what);
+                    } else {
+                        problems.push(what);
+                    }
+                }
             }
         }
         let mut done: Vec<&CleanupRun> = runs.values().filter(|r| r.end.is_some()).collect();
@@ -582,7 +604,7 @@ pub fn cleanup_problems(
             ));
         }
     }
-    problems
+    (problems, beside)
 }
 
 /// The `q` quantile (0..=1) of `values`, the nearest rank; 0 for none.

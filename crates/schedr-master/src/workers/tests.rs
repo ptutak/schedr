@@ -237,3 +237,81 @@ fn a_worker_without_a_queue_takes_nothing_past_its_slots() {
     workers.reserve("w1", "a1", ts("2026-10-21T08:00:00Z"));
     assert_eq!(workers.pick(queueing(), &none()), None);
 }
+
+/// B285: a root's code is new for a worker only when its hash differs from the one it last
+/// reported, a reconnect (the same incarnation, its roots cleared) reporting the same hash
+/// included; a withdrawn root's next report is new.
+#[test]
+fn new_code_is_a_hash_other_than_the_last_reported() {
+    let mut workers = Workers::new();
+    assert!(!workers.known_as("w1", "i1"));
+    workers.register("w1", "i1", &queues(&[]), 2);
+    assert!(workers.known_as("w1", "i1"));
+    assert!(!workers.known_as("w1", "i2"));
+    assert!(workers.report_root("w1", "etl", "h1"), "first report");
+    assert!(!workers.report_root("w1", "etl", "h1"), "the same");
+    assert!(!workers.register("w1", "i1", &queues(&[]), 2));
+    assert!(
+        !workers.report_root("w1", "etl", "h1"),
+        "reconnected, the same"
+    );
+    assert!(workers.report_root("w1", "etl", "h2"), "new");
+    workers.withdraw_root("w1", "etl");
+    assert!(
+        workers.report_root("w1", "etl", "h2"),
+        "withdrawn, then back"
+    );
+    assert!(!workers.report_root("w9", "etl", "h1"), "unknown worker");
+}
+
+/// B284 (DN37): a service refusal is answered by a count of readies past the one it saw; a
+/// lower count, handled after a higher one, takes nothing back; an unknown extension or worker
+/// answers nothing.
+#[test]
+fn a_service_refusal_is_answered_by_a_higher_count_of_readies() {
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &queues(&[]), 2);
+    assert!(
+        !workers.service_ready_since("w1", "spark", 0),
+        "nothing heard"
+    );
+    workers.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    assert!(
+        !workers.service_ready_since("w1", "spark", 1),
+        "the count it saw"
+    );
+    assert!(workers.service_ready_since("w1", "spark", 0));
+    workers.report_services("w1", BTreeMap::from([("spark".to_owned(), 0)]));
+    assert!(
+        workers.service_ready_since("w1", "spark", 0),
+        "an older heartbeat"
+    );
+    assert!(!workers.service_ready_since("w1", "other", 0));
+    assert!(!workers.service_ready_since("w9", "spark", 0));
+}
+
+/// DN37: a worker's counts are those its last heartbeat named (agy's review: merged, a worker
+/// naming new extensions each time grew the map for good); whether one rose.
+#[test]
+fn a_workers_counts_are_its_last_heartbeats_and_say_whether_one_rose() {
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &queues(&[]), 2);
+    let named = |pairs: &[(&str, u64)]| -> BTreeMap<String, u64> {
+        pairs.iter().map(|(n, c)| ((*n).to_owned(), *c)).collect()
+    };
+    assert!(workers.report_services("w1", named(&[("a", 1), ("b", 0)])));
+    assert!(
+        !workers.report_services("w1", named(&[("a", 1), ("b", 0)])),
+        "the same"
+    );
+    assert!(
+        !workers.report_services("w1", named(&[("a", 0)])),
+        "lower: kept higher"
+    );
+    assert_eq!(
+        workers.get("w1").unwrap().service_readies,
+        named(&[("a", 1)]),
+        "only the last heartbeat's"
+    );
+    assert!(workers.report_services("w1", named(&[("a", 2)])));
+}

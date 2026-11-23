@@ -371,3 +371,25 @@ async fn a_services_builtins_are_never_declared_alone() {
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert_eq!(fake.figures.take_figures(), Vec::new());
 }
+
+/// DN37: each service's count of readies, for the heartbeat and a refusal: none while it
+/// starts, one once ready; a refusal meanwhile carries the count it saw.
+#[tokio::test]
+async fn a_services_readies_are_counted() {
+    let starting = start("never_ready", |_| {});
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(starting.services.readies(), [("fake".to_owned(), 0)]);
+    let (why, readies) = starting.services.not_ready("fake", "1.0").unwrap();
+    assert_eq!((why.as_str(), readies), ("its service is starting", 0));
+    starting.stop.send_replace(true);
+    let ready = start("serve", |_| {});
+    ready
+        .until("ready", |fake| matches!(fake.state(), State::Ready(_)))
+        .await;
+    assert_eq!(ready.services.readies(), [("fake".to_owned(), 1)]);
+    assert_eq!(ready.services.not_ready("fake", "1.0"), None);
+    // Ready, but not for this version: refused with the count it saw.
+    let (_, readies) = ready.services.not_ready("fake", "9.9").unwrap();
+    assert_eq!(readies, 1);
+    ready.stop.send_replace(true);
+}

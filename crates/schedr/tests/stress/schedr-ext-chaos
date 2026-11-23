@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""The stress suite's chaos extension (M5.2i13, scenario 21b): a plugin that misbehaves on purpose.
+
+Each task's payload says, for its first tries, what goes wrong; a try past the list does its work:
+
+    {"marks": "/path/marks.txt", "secs": 2, "faults": ["exit", "ok"]}
+
+The faults, each the worker's to recover from (the attempt fails or times out, and is retried):
+
+    exit           exits in the middle of the request, nothing said
+    kill           killed (SIGKILL, by itself: no harness matching command lines)
+    hang           ignores SIGTERM and sleeps: stopped past its grace by the attempt's timeout
+    freeze         stops itself (SIGSTOP): frozen until the timeout's SIGKILL
+    garbage        writes a frame that isn't JSON on its channel
+    oversize       writes a frame header past the 64 MiB limit
+    service_crash  makes its service exit (its ``crash`` method): the worker starts it again
+    ok             does its work
+
+Its work: a status, a call of its service (``count``), a sleep of ``secs``, then 1. Like the suite's
+command tasks (``check::marked``), it appends a ``start`` mark when it begins and an ``end`` mark
+when its process ends (its work done, or a fault ending it: written just before, the suite's
+process watch missing a process gone that fast), and its cleanup ``cstart`` and ``cend`` marks:
+one line each, with the run, the task, the try, its PID, the time in ns and the worker
+(``STRESS_WORKER``). Killed from outside (a hang or a freeze past its timeout), it writes none:
+the watch saw it alive until then.
+
+Run as ``schedr-ext-chaos --service`` it is its service, with ``count`` and ``crash``.
+"""
+
+import asyncio
+import atexit
+import os
+import signal
+import struct
+import sys
+import time
+from collections.abc import Callable
+
+from schedr_extension import (
+    ExtensionChannel,
+    ExtensionJson,
+    ExtensionRequest,
+    ServiceAttempt,
+    main,
+    serve,
+)
+
+FAULTS = ("ok", "exit", "kill", "hang", "freeze", "garbage", "oversize", "service_crash")
+
+
+def _mark(marks: str, what: str) -> None:
+    """Appends a mark line, in one write (shorter than ``PIPE_BUF``: lines never mix)."""
+    env = os.environ
+    line = (
+        f"{what} {env.get('SCHEDR_RUN_ID', '-')} {env.get('SCHEDR_TASK_ID', '-')} "
+        f"{env.get('SCHEDR_TRY_NUMBER', '0')} {os.getpid()} {time.time_ns()} "
+        f"{env.get('STRESS_WORKER', '-')}\n"
+    )
+    fd = os.open(marks, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line.encode())
+    finally:
+        os.close(fd)
+
+
+def _plan(payload: ExtensionJson) -> tuple[str, float, str]:
+    """The marks file, the work's seconds, and this try's fault."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"the payload is an object, got {payload!r}")
+    marks, secs, faults = payload.get("marks"), payload.get("secs"), payload.get("faults")
+    if not isinstance(marks, str) or not isinstance(secs, int | float):
+        raise TypeError(f"`marks` is text and `secs` a number, got {payload!r}")
+    if not isinstance(faults, list):
+        raise TypeError(f"`faults` is a list, got {faults!r}")
+    number = int(os.environ.get("SCHEDR_TRY_NUMBER", "1"))
+    fault = faults[number - 1] if 0 < number <= len(faults) else "ok"
+    if fault not in FAULTS:
+        raise ValueError(f"unknown fault {fault!r}")
+    return marks, float(secs), str(fault)
+
+
+def _ending(marks: str) -> None:
+    """Has the try's ``end`` mark written when its process ends, once, whichever way."""
+    written = [False]
+
+    def end() -> None:
+        if not written[0]:
+            written[0] = True
+            _mark(marks, "end")
+
+    atexit.register(end)
+    ENDS.append(end)
+
+
+# The try's `end` mark, written at most once: before a fault ends the process, else at exit.
+ENDS: list[Callable[[], None]] = []
+
+
+def _end_now() -> None:
+    for end in ENDS:
+        end()
+
+
+def _frame(raw: bytes) -> None:
+    """Writes `raw` on the plugin's channel to the worker, past the helper."""
+    os.write(int(os.environ["SCHEDR_AGENT_FD"]), raw)
+
+
+async def run(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
+    """The try's fault, else its work."""
+    marks, secs, fault = _plan(request.payload)
+    _mark(marks, "start")
+    _ending(marks)
+    if fault == "exit":
+        _end_now()
+        os._exit(5)
+    elif fault == "kill":
+        _end_now()
+        os.kill(os.getpid(), signal.SIGKILL)
+    elif fault == "freeze":
+        os.kill(os.getpid(), signal.SIGSTOP)
+    elif fault == "hang":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            await asyncio.sleep(3600)
+    elif fault == "garbage":
+        _frame(struct.pack(">I", 9) + b"not json!")
+    elif fault == "oversize":
+        _frame(struct.pack(">I", 0xFFFF_FFF0))
+    elif fault == "service_crash":
+        await channel.service.call("crash", None)
+    # After garbage, an over-size frame or a crash, the worker has closed the conversation, and
+    # the try fails here or at its end. Should the worker let one through, the try succeeds: the
+    # scenario fails on any try planned to misbehave that succeeded.
+    await channel.status("working", progress=0.5)
+    await channel.service.call("count", None)
+    await asyncio.sleep(secs)
+    _end_now()
+    return 1
+
+
+async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
+    """Marks its run, half a second of work between."""
+    del channel
+    marks, _, _ = _plan(request.payload)
+    _mark(marks, "cstart")
+    await asyncio.sleep(0.5)
+    _mark(marks, "cend")
+    return None
+
+
+COUNTED = [0]
+
+
+async def on_call(attempt: ServiceAttempt, method: str, args: object) -> object:
+    """A call of an attempt's plugin."""
+    del attempt, args
+    if method == "count":
+        COUNTED[0] += 1
+        return COUNTED[0]
+    if method == "crash":
+        os._exit(3)
+    raise ValueError(f"unknown method `{method}`")
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--service"]:
+    raise SystemExit(serve(on_call, name="chaos", versions=["1.0"]))
+
+if __name__ == "__main__":
+    raise SystemExit(main(run, name="chaos", versions=["1.0"], cleanup=cleanup))

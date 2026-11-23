@@ -345,6 +345,17 @@ case <-stop:
 
 A shell plugin's way comes with `schedr extension shell` (M5.2i6).
 
+**Less strict than a task that exits on `SIGTERM`, by design (DN38).** A plugin may take its
+grace to stop (deleting a Job), and one that hangs takes all of it. When its worker is frozen (a
+paused VM, a stopped process) while its lease without the master runs out, the worker stops its
+tasks only once thawed, and kills nothing meanwhile. With `cleanup_anywhere`, the master moves the
+cleanup 40 s after the lease (decision 256), not knowing a frozen worker from one cut off, which
+would have stopped the task itself (decision 252). So a plugin may still run when its own cleanup
+starts on another worker: until its worker is thawed and its grace is over. The same holds for any
+task that doesn't exit on `SIGTERM`; it is plugins that do so. Hence: on `master_lost`, stop at
+once (the cleanup does the rest from the handles); and write the cleanup to be safe while the
+attempt's plugin may still be finishing.
+
 ## Cleanup
 
 With `cleanup=True`, the plugin registers **handles** while it runs: what its cleanup needs that
@@ -524,7 +535,10 @@ service_secrets = [{path = "spark/api", key = "token"}]
    until the settle has passed since the first of them, then tried again. Meanwhile, and whenever
    it isn't ready, the worker gives the extension's tasks back with `EXTENSION_NOT_READY`: no try
    is used, the queue's other workers get them, and the task waits as for code on its way,
-   `unschedulable` only after `[master] code_wait` (10 min) with every worker saying so.
+   `unschedulable` only after `[master] code_wait` (10 min) with every worker saying so. Each
+   refusal carries how many times the service had become ready, and each heartbeat the count
+   now; once a worker's count is past its refusal's (the service ready again since), the refusal
+   is forgotten and the task queued again in the next round, its code wait starting over.
 7. When the worker stops, its drain done (no attempt connected any more), the service gets
    `SIGTERM`, and `SIGKILL` after the grace. A worker drained for maintenance keeps it running.
 

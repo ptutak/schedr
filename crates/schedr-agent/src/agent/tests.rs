@@ -61,8 +61,11 @@ impl Drop for StoppedParse {
 }
 
 impl Executor for Fake {
-    fn service_not_ready(&self, extension: &str, _version: &str) -> Option<String> {
-        self.service_not_ready.clone().filter(|_| extension == "x")
+    fn service_not_ready(&self, extension: &str, _version: &str) -> Option<(String, u64)> {
+        self.service_not_ready
+            .clone()
+            .filter(|_| extension == "x")
+            .map(|why| (why, 2))
     }
 
     async fn run(
@@ -5992,7 +5995,7 @@ async fn discoverys_events_reach_the_first_heartbeat() {
 }
 
 /// M5.2i9 (DN29): an extension task whose service isn't ready here is given back as not ready,
-/// waited for as code on its way, no try used.
+/// waited for as code on its way, no try used, with its service's count of readies (DN37).
 #[tokio::test]
 async fn an_extension_task_whose_service_isnt_ready_is_given_back() {
     let task =
@@ -6012,4 +6015,6 @@ async fn an_extension_task_whose_service_isnt_ready_is_given_back() {
         i32::from(pb::RejectReason::ExtensionNotReady)
     );
     assert_eq!(rejected.detail, "extension `x`: its service is starting");
+    // With the count of readies it saw (DN37: the fake's 2).
+    assert_eq!(rejected.service_readies, 2);
 }

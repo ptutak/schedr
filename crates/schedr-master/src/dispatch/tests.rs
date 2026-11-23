@@ -164,6 +164,7 @@ fn rejected(attempt_id: &str, reason: pb::RejectReason, detail: &str) -> pb::Rej
         attempt_id: attempt_id.to_owned(),
         reason: reason.into(),
         detail: detail.to_owned(),
+        service_readies: 0,
     }
 }
 
@@ -2458,6 +2459,667 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
             .unwrap(),
         TaskRetry::NotUnschedulable(TaskInstanceState::Scheduled)
     );
+}
+
+/// `extract` an extension task of `spark`, then `load`.
+fn extension_dag() -> Dag {
+    let mut value = serde_json::to_value(dag(0)).unwrap();
+    let extract = &mut value["tasks"][0];
+    extract["kind"] = json!("extension");
+    extract["name"] = json!("spark");
+    extract["version"] = json!("1.0");
+    extract["payload"] = json!({});
+    extract.as_object_mut().unwrap().remove("arguments");
+    serde_json::from_value(value).unwrap()
+}
+
+/// Steps until `worker` is given `extract`, and has it refused with `refusal`: from 0 s, 35 s
+/// apart; the state each refusal leaves it in, in order.
+async fn refused_by(
+    dispatcher: &mut Dispatcher,
+    db: &Database,
+    run_id: &str,
+    refusals: &[(&str, pb::RejectReason, &str)],
+) -> Vec<TaskInstanceState> {
+    let mut states = Vec::new();
+    for (at, (worker, reason, detail)) in (0..).step_by(35).zip(refusals) {
+        let out = dispatcher
+            .step(&InRound::for_tests(), later(at))
+            .await
+            .unwrap();
+        let attempt = out.iter().find(|o| o.worker_id == *worker).map_or_else(
+            || panic!("nothing for {worker} at {at} s: {out:?}"),
+            |o| assignment(o).attempt_id.clone(),
+        );
+        dispatcher
+            .rejected(
+                &InRound::for_tests(),
+                worker,
+                &rejected(&attempt, *reason, detail),
+                later(at),
+            )
+            .await
+            .unwrap();
+        states.push(state_of(db, run_id, "extract").await.0);
+    }
+    states
+}
+
+/// B284: a task every worker refused for its extension's service not ready, past the code
+/// wait, is `unschedulable`; once a worker's heartbeat says that service is ready again, the
+/// next round queues it again and gives it to that worker. Another extension back changes
+/// nothing.
+#[tokio::test]
+async fn a_task_unschedulable_for_its_extensions_service_runs_once_a_service_is_back() {
+    let (dispatcher, db, run_id) = with_run(extension_dag()).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    for worker in ["w1", "w2"] {
+        dispatcher.report_services(worker, BTreeMap::from([("spark".to_owned(), 0)]));
+    }
+    let off = pb::RejectReason::ExtensionNotReady;
+    let why = "extension `spark`: its service is turned off";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[("w1", off, why), ("w2", off, why), ("w1", off, why)],
+    )
+    .await;
+    assert_eq!(
+        states,
+        [
+            TaskInstanceState::Queued,
+            TaskInstanceState::Queued,
+            TaskInstanceState::Unschedulable
+        ]
+    );
+    // Another extension back on w2, `spark` still where its refusal saw it: nothing.
+    dispatcher.report_services(
+        "w2",
+        BTreeMap::from([("spark".to_owned(), 0), ("other".to_owned(), 3)]),
+    );
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    assert!(out.iter().all(|o| o.worker_id.is_empty()), "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    // `spark` ready again on w2: queued again, and w2 asked first (w1's refusal still holds).
+    dispatcher.report_services("w2", BTreeMap::from([("spark".to_owned(), 1)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(210))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w2"], "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Running
+    );
+}
+
+/// B285: a task every worker refused for missing code, past the code wait, is `unschedulable`;
+/// once a worker reports new code of a root, the next round queues it again for that worker.
+/// Its service back changes nothing for a code refusal.
+#[tokio::test]
+async fn a_task_unschedulable_for_missing_code_runs_once_a_worker_reports_new_code() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    for worker in ["w1", "w2"] {
+        dispatcher.report_root(worker, "etl", "h1");
+    }
+    let missing = pb::RejectReason::DagFileMissing;
+    let why = "no team/sync.py";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, why),
+            ("w2", missing, why),
+            ("w1", missing, why),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    // The same code reported again, or a service back: nothing.
+    dispatcher.report_root("w1", "etl", "h1");
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    assert!(out.iter().all(|o| o.worker_id.is_empty()), "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    // New code on w1: queued again, and given to w1.
+    dispatcher.report_root("w1", "etl", "h2");
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(210))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+}
+
+/// A task every worker refused for a worker-specific reason stays `unschedulable` when a
+/// worker is able again for code or a service: those answer only their own refusals.
+#[tokio::test]
+async fn a_task_every_worker_refused_for_itself_stays_unschedulable_when_one_is_able_again() {
+    let (mut dispatcher, db, run_id) = with_run(dag(0)).await;
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[(
+            "w1",
+            pb::RejectReason::InterpreterUndefined,
+            "no python3.15",
+        )],
+    )
+    .await;
+    assert_eq!(states, [TaskInstanceState::Unschedulable]);
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+}
+
+/// `extract` made `unschedulable` by w1 and w2 refusing it for `spark`'s service, w1 twice
+/// (agy's review of M5.2i13: the regressions below start from it).
+async fn unschedulable_for_spark() -> (Dispatcher, Database, String) {
+    let (dispatcher, db, run_id) = with_run(extension_dag()).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let off = pb::RejectReason::ExtensionNotReady;
+    let why = "extension `spark`: its service is restarting";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[("w1", off, why), ("w2", off, why), ("w1", off, why)],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    (dispatcher, db, run_id)
+}
+
+/// A service restarting between two heartbeats, never seen not ready in one: a count past the
+/// refusal's answers it all the same (its state, not a change of it).
+#[tokio::test]
+async fn a_service_refusal_never_seen_in_a_heartbeat_is_answered_by_the_next_one() {
+    let (mut dispatcher, db, run_id) = unschedulable_for_spark().await;
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(110))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Running
+    );
+}
+
+/// A heartbeat with the count its refusal saw answers nothing, whenever it is handled (one sent
+/// before the refusal, handled after it: agy's review).
+#[tokio::test]
+async fn a_count_the_refusal_saw_answers_nothing() {
+    let (mut dispatcher, db, run_id) = unschedulable_for_spark().await;
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 0)]));
+    dispatcher
+        .step(&InRound::for_tests(), later(110))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+}
+
+/// The queue's write failing, the refusals answered are still there for the next round: the
+/// task is queued once the database works again.
+#[tokio::test]
+async fn a_failed_requeue_leaves_the_refusals_for_the_next_round() {
+    let (mut dispatcher, db, run_id) = unschedulable_for_spark().await;
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    db.fail_write(1);
+    assert!(
+        dispatcher
+            .step(&InRound::for_tests(), later(110))
+            .await
+            .is_err()
+    );
+    db.fail_write(0);
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(120))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+}
+
+/// Queued again, the task's code wait starts over: one refusal at once doesn't make it
+/// `unschedulable` again.
+#[tokio::test]
+async fn a_task_queued_again_waits_the_code_wait_anew() {
+    let (mut dispatcher, db, run_id) = unschedulable_for_spark().await;
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(110))
+        .await
+        .unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let off = pb::RejectReason::ExtensionNotReady;
+    dispatcher
+        .rejected(
+            &InRound::for_tests(),
+            "w1",
+            &rejected(
+                &attempt,
+                off,
+                "extension `spark`: its service is restarting",
+            ),
+            later(115),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+/// A worker that refused the task for missing code, then for itself: its new code answers
+/// nothing, the task stays `unschedulable` (queued, it would wait for good).
+#[tokio::test]
+async fn a_worker_that_refused_for_itself_too_is_never_answered_by_new_code() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", pb::RejectReason::DagFileMissing, "no team/sync.py"),
+            (
+                "w1",
+                pb::RejectReason::InterpreterUndefined,
+                "no python3.15",
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+}
+
+/// A worker reconnecting (the same incarnation) reports the same code again: not new code.
+#[tokio::test]
+async fn a_reconnect_reporting_the_same_code_answers_nothing() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher.report_root("w1", "etl", "h1");
+    let missing = pb::RejectReason::DagFileMissing;
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, "no team/sync.py"),
+            ("w1", missing, "no team/sync.py"),
+            ("w1", missing, "no team/sync.py"),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    dispatcher
+        .register("w1", "i1", &[], 2, later(150))
+        .await
+        .unwrap();
+    dispatcher.report_root("w1", "etl", "h1");
+    dispatcher
+        .step(&InRound::for_tests(), later(160))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+}
+
+/// A new incarnation's registration whose re-queue fails changes nothing: registering again,
+/// the worker is new still, and its `unschedulable` tasks are queued (agy's review of M5.2i13).
+#[tokio::test]
+async fn a_registration_whose_requeue_fails_queues_them_when_retried() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    let missing = pb::RejectReason::DagFileMissing;
+    let why = "no team/sync.py";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, why),
+            ("w1", missing, why),
+            ("w1", missing, why),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    db.fail_write(1);
+    assert!(
+        dispatcher
+            .register("w1", "i2", &[], 2, later(150))
+            .await
+            .is_err()
+    );
+    db.fail_write(0);
+    dispatcher
+        .register("w1", "i2", &[], 2, later(151))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+}
+
+/// New code reported, then rolled back with its message ([`Dispatcher::restore`]): nothing is
+/// answered; reported again, it is.
+#[tokio::test]
+async fn new_code_rolled_back_answers_nothing_until_reported_again() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher.report_root("w1", "etl", "h1");
+    let missing = pb::RejectReason::DagFileMissing;
+    let why = "no team/sync.py";
+    refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, why),
+            ("w1", missing, why),
+            ("w1", missing, why),
+        ],
+    )
+    .await;
+    let memory = dispatcher.memory();
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher.restore(memory);
+    dispatcher
+        .step(&InRound::for_tests(), later(150))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    dispatcher.report_root("w1", "etl", "h2");
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(160))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+}
+
+/// A worker refusing for its service, then for itself: its service ready again answers
+/// nothing (the code case is above).
+#[tokio::test]
+async fn a_worker_that_refused_for_itself_after_its_service_is_never_answered() {
+    let (dispatcher, db, run_id) = with_run(extension_dag()).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            (
+                "w1",
+                pb::RejectReason::ExtensionNotReady,
+                "extension `spark`: starting",
+            ),
+            (
+                "w1",
+                pb::RejectReason::InterpreterUndefined,
+                "no python3.15",
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 1)]));
+    dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+}
+
+/// A refusal carries the count it saw: the same count answers nothing, one past it does.
+#[tokio::test]
+async fn a_refusal_is_answered_only_past_the_count_it_carried() {
+    let (dispatcher, db, run_id) = with_run(extension_dag()).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(0));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(0))
+        .await
+        .unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let mut refusal = rejected(
+        &attempt,
+        pb::RejectReason::ExtensionNotReady,
+        "extension `spark`: its service is restarting",
+    );
+    refusal.service_readies = 3;
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &refusal, later(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 3)]));
+    dispatcher
+        .step(&InRound::for_tests(), later(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 4)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(20))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+}
+
+/// A worker not eligible when the others refused (on older code), reporting the new code, never
+/// refused the task: it is queued again for it (agy's review of M5.2i13).
+#[tokio::test]
+async fn a_worker_reaching_the_code_after_the_refusals_gets_the_task() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
+    dispatcher.report_root("w1", "etl", "h2");
+    dispatcher.report_root("w2", "etl", "h1");
+    let missing = pb::RejectReason::DagFileMissing;
+    let why = "no team/sync.py";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, why),
+            ("w1", missing, why),
+            ("w1", missing, why),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+    dispatcher.report_root("w2", "etl", "h2");
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(200))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w2"], "{out:?}");
+}
+
+/// New code on a worker that may not run the task (another queue, or drained) answers
+/// nothing: it stays `unschedulable` (agy's review of M5.2i13).
+#[tokio::test]
+async fn new_code_on_a_worker_not_eligible_answers_nothing() {
+    for drained in [false, true] {
+        let (dispatcher, db, run_id) = with_run(dag(0)).await;
+        let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+        let queues: &[String] = if drained { &[] } else { &["other".to_owned()] };
+        dispatcher
+            .register("w2", "i1", queues, 1, ts(NOW))
+            .await
+            .unwrap();
+        if drained {
+            dispatcher.set_drained("w2");
+        }
+        dispatcher.set_current_code("etl", &BTreeSet::from(["h2".to_owned()]), None);
+        dispatcher.report_root("w1", "etl", "h2");
+        dispatcher.report_root("w2", "etl", "h1");
+        let missing = pb::RejectReason::DagFileMissing;
+        let why = "no team/sync.py";
+        let states = refused_by(
+            &mut dispatcher,
+            &db,
+            &run_id,
+            &[
+                ("w1", missing, why),
+                ("w1", missing, why),
+                ("w1", missing, why),
+            ],
+        )
+        .await;
+        assert_eq!(states.last(), Some(&TaskInstanceState::Unschedulable));
+        dispatcher.report_root("w2", "etl", "h2");
+        dispatcher
+            .step(&InRound::for_tests(), later(200))
+            .await
+            .unwrap();
+        assert_eq!(
+            state_of(&db, &run_id, "extract").await.0,
+            TaskInstanceState::Unschedulable,
+            "drained: {drained}"
+        );
+    }
+}
+
+/// A refusal heard after the worker's count already passed it (the heartbeat first) is
+/// answered at the next round all the same.
+#[tokio::test]
+async fn a_refusal_behind_the_count_already_heard_is_answered() {
+    let (dispatcher, db, run_id) = with_run(extension_dag()).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(0));
+    dispatcher.report_services("w1", BTreeMap::from([("spark".to_owned(), 2)]));
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(0))
+        .await
+        .unwrap();
+    let attempt = assignment(&out[0]).attempt_id.clone();
+    let mut refusal = rejected(
+        &attempt,
+        pb::RejectReason::ExtensionNotReady,
+        "extension `spark`: its service is restarting",
+    );
+    refusal.service_readies = 1;
+    dispatcher
+        .rejected(&InRound::for_tests(), "w1", &refusal, later(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        state_of(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(3))
+        .await
+        .unwrap();
+    let given: Vec<&str> = out.iter().map(|o| o.worker_id.as_str()).collect();
+    assert_eq!(given, ["w1"], "{out:?}");
+}
+
+/// Master time that doesn't move, whatever the wall clock says.
+fn master_still(_now: Timestamp) -> Timestamp {
+    ts(NOW)
+}
+
+/// The code wait runs on master time (B228): the wall clock moving 70 s while master time
+/// doesn't, the task waits on.
+#[tokio::test]
+async fn the_code_wait_runs_on_master_time() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    dispatcher.set_steady(master_still);
+    let missing = pb::RejectReason::DagFileMissing;
+    let why = "no team/sync.py";
+    let states = refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[
+            ("w1", missing, why),
+            ("w1", missing, why),
+            ("w1", missing, why),
+        ],
+    )
+    .await;
+    assert_eq!(states.last(), Some(&TaskInstanceState::Queued));
 }
 
 #[tokio::test]

@@ -1,0 +1,14 @@
+title = "a task unschedulable for missing code stays so after its workers report the code"
+severity = "high"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a task every eligible worker refused for missing code (`DAG_FILE_MISSING`, `CODE_MISMATCH`, `SCRIPT_REFERENCE_NOT_FOUND`) for `[master] code_wait` becomes `unschedulable`; a worker reporting a root's new content hash (`Dispatcher::report_root`) only records it, never forgetting its refusals nor queuing such tasks again, so after the code is fixed and synced the task and its run wait until a worker restarts or a user retries it"
+found = 2026-11-23
+suspected = false
+details = '''
+- **Found:** 2026-11-23, by a side agent's note on B284 (the same gap for code), checked by
+  Claude in `core.rs` `root_reported` and `dispatch.rs` `report_root`: no `requeue_unschedulable`,
+  no change to `code_missing`.
+- **A fix:** B284's: a worker able again (here: a root's hash it reports changed) has its
+  refusals forgotten and the next round queues the `unschedulable` tasks again.
+'''

@@ -2360,10 +2360,13 @@ fn stress_06c_pgbouncer_statements_outside_a_transaction() {
     );
 }
 
-/// Scenario 25 (M5.2i12): scenario 1's shape run four times on the same machine, each on a
+/// Scenario 25 (M5.2i12): scenario 1's shape run six times on the same machine, each on a
 /// fresh cluster, so an extension task's cost is read apart from its work's: plain command tasks
 /// (`_plain`, scenario 1 itself); Python `@task`s sleeping as long (`_python`: an interpreter per
-/// task, no extension); extension tasks that only return (`_noop`: the extension's own floor:
+/// task, no extension), and the same forked from the workers' fork servers (`_python_forked`,
+/// M5.2i13); extension tasks all the dummy's Python plugin doing what the run below does
+/// (`_extension_python`, M5.2i13: a plugin in Python beside a `@task`); extension tasks that only
+/// return (`_noop`: the extension's own floor:
 /// the plugin's start, its hello, the service's connection, its end); and extension tasks doing
 /// what real plugins do (this one): half the dummy's Python plugin, half a shell script through
 /// `schedr extension shell`, each reporting a status, a link, a metric point and a notification,
@@ -2373,6 +2376,11 @@ fn stress_06c_pgbouncer_statements_outside_a_transaction() {
 fn stress_25_extension_throughput() {
     let plain = throughput(postgres_database(), "25_extension_throughput_plain", false);
     let python = sleeping_tasks("25_extension_throughput_python", Work::Python);
+    let forked = sleeping_tasks("25_extension_throughput_python_forked", Work::PythonForked);
+    let extension_python = sleeping_tasks(
+        "25_extension_throughput_extension_python",
+        Work::ExtensionPython,
+    );
     let noop = sleeping_tasks("25_extension_throughput_noop", Work::ExtensionNoop);
     let mut stress = Stress::new(Some(postgres_database()));
     let size = stress.size;
@@ -2393,7 +2401,13 @@ fn stress_25_extension_throughput() {
     });
     stress.measure(&mut report, "master", 1.0);
     let tasks_per_s = report.get("tasks_per_s").unwrap_or(0.0);
-    for (name, baseline) in [("plain", plain), ("python", python), ("noop", noop)] {
+    for (name, baseline) in [
+        ("plain", plain),
+        ("python", python),
+        ("python_forked", forked),
+        ("extension_python", extension_python),
+        ("noop", noop),
+    ] {
         report.set(&format!("{name}_tasks_per_s"), baseline);
         report.set(
             &format!("tasks_per_s_vs_{name}"),
@@ -2407,7 +2421,7 @@ fn stress_25_extension_throughput() {
     );
     report.set("page_read_p50_s", quantile(&reads, 0.5));
     report.at_most("page_read_p99_s", quantile(&reads, 0.99), 10.0);
-    extension_figures(&stress, &mut report);
+    extension_figures(&stress, &mut report, Work::Extension);
     finish(&stress, report, &["success"]);
 }
 
@@ -2416,6 +2430,11 @@ fn stress_25_extension_throughput() {
 enum Work {
     /// A Python `@task` sleeping 0.1 s.
     Python,
+    /// The same, the workers' fork servers on.
+    PythonForked,
+    /// An extension task reporting as real plugins do, then sleeping 0.1 s, all the dummy's
+    /// Python plugin.
+    ExtensionPython,
     /// An extension task that only returns.
     ExtensionNoop,
     /// An extension task reporting as real plugins do, then sleeping 0.1 s.
@@ -2425,7 +2444,7 @@ enum Work {
 /// Scenario 1's cluster and DAGs, every task `work`: the DAGs' count.
 fn work_cluster(stress: &mut Stress, work: Work, report: &mut Report) -> usize {
     let size = stress.size;
-    if work != Work::Python {
+    if !matches!(work, Work::Python | Work::PythonForked) {
         let config = extension_config(stress);
         let path = stress.cluster.dir.path().join("config.toml");
         let mut text = std::fs::read_to_string(&path).unwrap();
@@ -2434,8 +2453,18 @@ fn work_cluster(stress: &mut Stress, work: Work, report: &mut Report) -> usize {
     }
     let mut dags = work_dags(stress, "many", size.n(50, 1000), size.n(10, 15), work);
     dags.extend(work_dags(stress, "wide", 1, size.n(200, 5000), work));
+    let python = support::python();
+    let fork_env = [
+        ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH", python.as_str()),
+        ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__FORK_SERVER", "true"),
+    ];
+    let env: &[(&str, &str)] = if work == Work::PythonForked {
+        &fork_env
+    } else {
+        &[]
+    };
     stress.start_core("master", &[]);
-    stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
+    stress.start_workers(size.n(2, 8), size.n(4, 8), env);
     let parsed = stress.wait_for_dags(dags.len(), 10 * MINUTE);
     report.set("parse_all_s", parsed.as_secs_f64());
     stress.trigger(&dags, 1);
@@ -2450,8 +2479,22 @@ fn sleeping_tasks(name: &'static str, work: Work) -> f64 {
     let dags = work_cluster(&mut stress, work, &mut report);
     stress.wait_for_runs(dags, size.time(20 * MINUTE, 90 * MINUTE), |_| {});
     stress.measure(&mut report, "master", 1.0);
-    if work == Work::ExtensionNoop {
-        extension_figures(&stress, &mut report);
+    if matches!(work, Work::ExtensionNoop | Work::ExtensionPython) {
+        extension_figures(&stress, &mut report, work);
+    }
+    if work == Work::PythonForked {
+        // Forked, not spawned for want of a fork server (agy's review: else the run measures
+        // spawned tasks under the forked name), as scenario 13 checks.
+        let attempts = stress.db.count("SELECT COUNT(*) FROM attempts");
+        let forked = stress
+            .db
+            .count("SELECT COUNT(*) FROM attempts WHERE start_method = 'fork'");
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a share of a few thousand attempts"
+        )]
+        let share = forked as f64 / attempts.max(1) as f64;
+        report.at_least("fork_share", share, 0.99);
     }
     let tasks_per_s = report.get("tasks_per_s").unwrap_or(0.0);
     finish(&stress, report, &["success"]);
@@ -2499,13 +2542,14 @@ fn extension_config(stress: &Stress) -> String {
 }
 
 /// `count` DAGs `<prefix>0001`, … of `tasks` tasks each doing `work`: for extension tasks,
-/// every other one the dummy's, the rest the shell script's; their IDs.
+/// every other one the dummy's, the rest the shell script's (all the dummy's for
+/// `ExtensionPython`); their IDs.
 fn work_dags(stress: &Stress, prefix: &str, count: usize, tasks: usize, work: Work) -> Vec<String> {
     (1..=count)
         .map(|i| {
             let id = format!("{prefix}{i:04}");
             let source = match work {
-                Work::Python => format!(
+                Work::Python | Work::PythonForked => format!(
                     r#"import time
 
 from schedr import Dag, task
@@ -2520,11 +2564,16 @@ with Dag("{id}"):
         work.override(task_id=f"e{{k:04}}")(k)
 "#
                 ),
-                Work::ExtensionNoop | Work::Extension => {
-                    let (dummy, shell) = if work == Work::Extension {
-                        ("STEPS", "{}")
-                    } else {
+                Work::ExtensionNoop | Work::Extension | Work::ExtensionPython => {
+                    let (dummy, shell) = if work == Work::ExtensionNoop {
                         ("[{\"return\": 1}]", "{\"noop\": True}")
+                    } else {
+                        ("STEPS", "{}")
+                    };
+                    let python_only = if work == Work::ExtensionPython {
+                        "True"
+                    } else {
+                        "False"
                     };
                     format!(
                         r#"from schedr import Dag, ExtensionTask
@@ -2541,7 +2590,7 @@ STEPS = [
 
 with Dag("{id}"):
     for k in range({tasks}):
-        if k % 2 == 0:
+        if {python_only} or k % 2 == 0:
             ExtensionTask(f"e{{k:04}}", name="dummy", version="1.0", payload={dummy})
         else:
             ExtensionTask(f"e{{k:04}}", name="shellstress", version="1.0", payload={shell})
@@ -2557,8 +2606,9 @@ with Dag("{id}"):
 
 /// What the master stored of the extensions' reports and how long its queries took: rows a
 /// second over the run, the minute samples the points were folded into, the reports dropped, and
-/// each query's p99 and total.
-fn extension_figures(stress: &Stress, report: &mut Report) {
+/// each query's p99 and total. Each plugin's run apart: the dummy's Python (all of them for
+/// `ExtensionPython`) and the shell script's.
+fn extension_figures(stress: &Stress, report: &mut Report, work: Work) {
     let span = stress
         .db
         .floats(&format!(
@@ -2588,10 +2638,15 @@ fn extension_figures(stress: &Stress, report: &mut Report) {
     report.set("tasks_succeeded", tasks);
     // Each plugin's run on its worker: the dummy's Python (even task numbers) and the shell
     // script's (odd), where the gap with plain tasks is spent.
-    for (kind, digits) in [
-        ("python", "'0','2','4','6','8'"),
-        ("shell", "'1','3','5','7','9'"),
-    ] {
+    let kinds: &[(&str, &str)] = if work == Work::ExtensionPython {
+        &[("python", "'0','1','2','3','4','5','6','7','8','9'")]
+    } else {
+        &[
+            ("python", "'0','2','4','6','8'"),
+            ("shell", "'1','3','5','7','9'"),
+        ]
+    };
+    for (kind, digits) in kinds {
         let runs = stress.db.floats(&format!(
             "SELECT ({}) - ({}) FROM attempts a JOIN task_instances ti \
              ON ti.id = a.task_instance_id WHERE a.ended_at IS NOT NULL \

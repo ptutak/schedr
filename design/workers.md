@@ -273,7 +273,8 @@ Each is one line; the reader's page has the diagrams.
   stops only `cleanup_anywhere` tasks at its lease; other tasks may overlap retries elsewhere until
   reconnect. A frozen worker may permit any task to overlap, including `cleanup_anywhere` tasks
   outlasting the lease and cleanup move wait. Chaos scenarios record these permitted overlaps as
-  `tries_run_twice` and fail on all others. Tasks should be idempotent.
+  `tries_run_twice` and fail on all others. Tasks should be idempotent. *Added to by DN38:* A frozen
+  worker's try may outlive its cleanup's move: the cleanup runs beside it.
 - **An assignment cannot start after its worker lease expires** (D281): The agent closes a stream
   silent for the worker lease and ignores messages arriving after it. Input fetches and first
   registration obey the same limit; the master takes an unstarted assignment back once the worker's

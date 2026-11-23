@@ -280,7 +280,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i9 | An extension's service: a long-running process per worker beside its plugins (decision 518) | done 2026-11-23 | D518 |
 | M5.2i11 | The Kubernetes plugin widened: an async client with watches, and every panel kind | done 2026-11-23 |  |
 | M5.2i12 | Stress 25: extension tasks under load, comparable with scenario 1 | done 2026-11-23 | D521 |
-| M5.2i13 | Stress 21b: seeded random chaos aimed at extensions | planned |  |
+| M5.2i13 | Stress 21b: seeded random chaos aimed at extensions | done 2026-11-23 |  |
 | M5.2i4 | The plugin protocol's specification, and a schema of just its messages | planned |  |
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
 | M5.2j | Runs and DAGs in numbered pages (decision 517) | planned | D517 |

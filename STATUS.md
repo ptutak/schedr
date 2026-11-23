@@ -7,21 +7,21 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i13, M5.2i4, M5.2j, M5.2k, R1.2.
+- **Then:** M5.2i4, M5.2j, M5.2k, R1.2, M5.3a.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 12; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely) (`BUGS.md`).
+- **Open bugs:** 16; first: B279 (medium/rare), B285 (high/possible), B284 (high/possible), B272 (medium/likely), B269 (medium/likely) (`BUGS.md`).
 
 ## Recent
 
+- DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
+- DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
 - DN36 (2026-11-23): An attempt's statuses written off the round are coalesced by phase (adds to D521)
 - DN35 (2026-11-23): A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr (adds to D518)
 - DN34 (2026-11-23): The Python plugin and service API is the package schedr_extension, which imports nothing of schedr (corrects D510)
-- D521 (2026-11-23): Extensions never hold the master up: their reports are dropped first
-- DN33 (2026-11-23): A maintenance drain is told to a worker's services, which keep running (adds to D518)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
+- M5.2i13 (2026-11-23): Stress 21b: seeded random chaos aimed at extensions
 - M5.2i12 (2026-11-23): Stress 25: extension tasks under load, comparable with scenario 1
-- M5.2i11 (2026-11-23): The Kubernetes plugin widened: an async client with watches, and every panel kind
 
 ## In progress
 

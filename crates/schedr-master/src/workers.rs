@@ -66,6 +66,12 @@ pub struct Worker {
     pub drained: bool,
     /// Whether its stream is up: a connections job goes only to a worker that is.
     pub connected: bool,
+    /// How many times each of its extensions' services has become ready, as its last
+    /// heartbeat said (DN37): its state, a lost heartbeat losing nothing.
+    pub service_readies: BTreeMap<String, u64>,
+    /// Each root's content hash it last reported, kept over a reconnect (whose `roots` start
+    /// empty): new code is a hash other than this one (B285).
+    pub code_seen: BTreeMap<String, String>,
 }
 
 /// What a task needs of a worker.
@@ -172,6 +178,14 @@ impl Workers {
         Self::default()
     }
 
+    /// Whether `id` is registered at `incarnation` already.
+    #[must_use]
+    pub fn known_as(&self, id: &str, incarnation: &str) -> bool {
+        self.workers
+            .get(id)
+            .is_some_and(|worker| worker.incarnation == incarnation)
+    }
+
     /// Registers a worker (or its new incarnation, which starts with no attempts). Returns
     /// whether the set of workers changed (a new worker or a restart), which gives
     /// `unschedulable` tasks another chance.
@@ -210,6 +224,8 @@ impl Workers {
                 roots: BTreeMap::new(),
                 drained: false,
                 connected: true,
+                service_readies: BTreeMap::new(),
+                code_seen: BTreeMap::new(),
             },
         );
         true
@@ -236,17 +252,58 @@ impl Workers {
         }
     }
 
-    /// Records the content hash a worker reported for a root.
-    pub fn report_root(&mut self, id: &str, root: &str, hash: &str) {
-        if let Some(worker) = self.workers.get_mut(id) {
+    /// Records the content hash a worker reported for a root: whether it is new code for it,
+    /// a hash other than the one it last reported, a reconnect's report of the same not (B285:
+    /// its "code missing" refusals no longer hold).
+    pub fn report_root(&mut self, id: &str, root: &str, hash: &str) -> bool {
+        self.workers.get_mut(id).is_some_and(|worker| {
             worker.roots.insert(root.to_owned(), hash.to_owned());
-        }
+            worker
+                .code_seen
+                .insert(root.to_owned(), hash.to_owned())
+                .as_deref()
+                != Some(hash)
+        })
+    }
+
+    /// Records how many times each of a worker's services has become ready, as its heartbeat
+    /// said (DN37): only those, so the map stays within one heartbeat's limits (agy's review).
+    /// A count never goes back within an incarnation: a lower one (a heartbeat handled after a
+    /// newer one) keeps the higher. Whether any count rose.
+    pub fn report_services(&mut self, id: &str, readies: BTreeMap<String, u64>) -> bool {
+        let Some(worker) = self.workers.get_mut(id) else {
+            return false;
+        };
+        let mut rose = false;
+        let known = std::mem::take(&mut worker.service_readies);
+        worker.service_readies = readies
+            .into_iter()
+            .map(|(extension, count)| {
+                let before = known.get(&extension).copied().unwrap_or(0);
+                rose |= count > before;
+                (extension, count.max(before))
+            })
+            .collect();
+        rose
+    }
+
+    /// Whether `id`'s service of `extension` has become ready since a refusal that saw it ready
+    /// `refused` times (B284): told by a count past it, whatever order the two were handled in.
+    #[must_use]
+    pub fn service_ready_since(&self, id: &str, extension: &str, refused: u64) -> bool {
+        self.workers.get(id).is_some_and(|worker| {
+            worker
+                .service_readies
+                .get(extension)
+                .is_some_and(|count| *count > refused)
+        })
     }
 
     /// A worker withdrew a root (decision 303): it no longer has it.
     pub fn withdraw_root(&mut self, id: &str, root: &str) {
         if let Some(worker) = self.workers.get_mut(id) {
             worker.roots.remove(root);
+            worker.code_seen.remove(root);
         }
     }
 

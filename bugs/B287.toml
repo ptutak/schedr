@@ -1,0 +1,14 @@
+title = "a worker that becomes eligible later never gives a task every other worker refused for itself another chance"
+severity = "medium"  # critical, high, medium, low
+probability = "possible"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "a task every eligible worker refused for a worker-specific reason (`INTERPRETER_UNDEFINED`, `EXTENSION_UNDEFINED`, ...) is `unschedulable` at once; a worker that wasn't eligible then (on older code of its root, or serving the queue only later through a new incarnation's settings change without a restart) and becomes eligible by reporting the new code never queues it again: only a new worker or incarnation, a resume, or a user retry does (DN37 answers only code and service refusals)"
+found = 2026-11-23
+suspected = false
+details = '''
+- **Found:** 2026-11-23, by agy's fourth review of M5.2i13 (B284/B285): DN37's new code answers
+  the code-waiting tasks of a worker now eligible, which live in `code_missing`; one refused
+  only for worker-specific reasons is in `rejections` alone.
+- **A fix:** keep what such a task needs of a worker (`Wants`) beside its `rejections` too, and
+  queue it again when a worker becomes eligible for it (new code, or a queue it now serves).
+'''

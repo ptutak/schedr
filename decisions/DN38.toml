@@ -1,0 +1,21 @@
+title = "A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it"
+date = 2026-11-23
+by = "user"  # user, claude
+on = "D280"
+kind = "adds"  # corrects (update the decision's summary too), adds
+summary = '''
+A frozen worker can't stop its tasks, so a try of one may still run when the master, past the
+lease and the move wait (decision 256), runs its cleanup on another worker: the cleanup beside
+the try it cleans up after, as decision 280 lets the try overlap its retry. Nothing on the master
+can tell a frozen worker from one cut off, which stops such tasks itself (decision 252). The
+chaos scenario with plugins (21b) lists these (`cleanups_beside_their_try`): a cleanup beside
+its try whose worker was frozen at any moment from the try's start to the cleanup's (a freeze
+there delays the worker's stop past the move), failing only on one beside a try of a worker that
+wasn't. Its 5 s slack after a freeze, for a try beside its retry, is 35 s there (the grace); the
+other chaos scenarios, whose tasks exit on `SIGTERM`, keep both strict. Documented as plugins
+being less strict than tasks that exit on `SIGTERM`, by design (the user). Not chosen: the worker pinging its plugins, each killing itself when
+the pings stop (the worker would become a master of its plugins, with all its work); a longer
+move wait (longer freezes still pass it, and every real loss's cleanup waits longer); keeping
+hangs and freezes apart in the tests (hiding a behaviour decision 280 accepts).
+'''
+history = "JOURNAL.md#DN38"

@@ -244,6 +244,10 @@ struct Counted {
     /// The service's run now, counted from 1: an attempt of an earlier run doesn't count
     /// towards this one's timeouts (agy's review).
     run: std::sync::atomic::AtomicU64,
+    /// How many times it has become ready (DN37): told in each heartbeat, and with each
+    /// refusal for its not being ready, so the master knows a refusal answered by order of
+    /// count, whatever the order its messages are handled in.
+    readies: std::sync::atomic::AtomicU64,
 }
 
 impl Drop for Connected {
@@ -351,12 +355,29 @@ impl Services {
         self.by_extension.contains_key(extension)
     }
 
-    /// Why an attempt of `extension` at `version` can't connect now; none when it can, or the
-    /// extension has no service.
+    /// Why an attempt of `extension` at `version` can't connect now, and how many times its
+    /// service has become ready so far (DN37); none when it can, or the extension has no
+    /// service.
     #[must_use]
-    pub fn not_ready(&self, extension: &str, version: &str) -> Option<String> {
+    pub fn not_ready(&self, extension: &str, version: &str) -> Option<(String, u64)> {
         let handle = self.by_extension.get(extension)?;
-        handle.state.borrow().not_ready(version)
+        // The count first: a ready seen after it is a ready the master will hear of as newer.
+        let readies = handle.counted.readies.load(Ordering::SeqCst);
+        handle
+            .state
+            .borrow()
+            .not_ready(version)
+            .map(|why| (why, readies))
+    }
+
+    /// Each extension with a service, and how many times its service has become ready (DN37:
+    /// told in each heartbeat).
+    #[must_use]
+    pub fn readies(&self) -> Vec<(String, u64)> {
+        self.by_extension
+            .iter()
+            .map(|(name, handle)| (name.clone(), handle.counted.readies.load(Ordering::SeqCst)))
+            .collect()
     }
 
     /// Waits until every service has stopped, at most `within`.
@@ -845,7 +866,11 @@ async fn serve_control(
     // plugin's hello: never declared alone (agy's review: an idle worker's built-ins-only
     // declarations, the newest heard, hid the plugin's metrics and its rollups).
     *ready_at = Some(Instant::now());
+    // Ready first, then counted (agy's review): a refusal reads the count, then the state, so
+    // one that saw this count saw it ready and refused nothing; one that refused saw the count
+    // before, which this ready passes.
     state.send_replace(State::Ready(versions.clone()));
+    counted.readies.fetch_add(1, Ordering::SeqCst);
     deps.figures.event(ExtensionEvent::now(
         &spec.extension,
         None,

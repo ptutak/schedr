@@ -71,6 +71,7 @@ are in the report.
 | 19 | Slow links: 200 ms per chunk on every worker, then 1.5 s on one | no failures |
 | 20 | Worker frozen with `SIGSTOP` past the lease and cleanup move, then thawed | its tasks continue while its agent is frozen |
 | 21 | Seeded random cuts, slow links and freezes under load | recovery under a reproducible fault schedule |
+| 21b | Scenario 21's schedule with every task an extension task of the suite's chaos plugin (`21b_random_chaos_extensions`, M5.2i13), whose first tries misbehave as the seed says | each plugin fault recovered as designed: the attempt fails or times out (never succeeds) and is retried, its cleanup runs once, no task on two workers but as decision 280 allows, every worker still running |
 | 22 | Parsing many files (`22_parse_many_files`): `schedr dags check` of files importing a shared helper and a slow library, spawned and forked, one at a time and four at once | seconds and peak memory for each; every file parsed |
 | 23 | Many wait steps (`23_many_sensors`): 500 at once on one worker, its default `[watchers] slots`, 400 plain `@sensor`s awaiting a file and 100 pokes checking for it every 5 s | the worker's memory with its watcher hosts, idle and with all 500 in, per wait step, and what the hosts report; how soon each ends once the file is there; every one succeeds |
 | 23b | Plain pokes (`23b_plain_pokes`): 100 plain `def` pokes on one worker, each call blocking 1 s as a blocking client does, every 5 s (decision 489) | how soon each ends once the file is there, at most 7 s at p99 (its `every` and its call): on Python's default pool of at most 32 threads their calls would queue and overrun; every one succeeds |
@@ -86,6 +87,22 @@ for 5–90 s, affecting at most half the workers at once. It uses `SCHEDR_STRESS
 fresh clock seed, recorded in the report and timeline. Replay the schedule with the same
 profile and seed, for example `SCHEDR_STRESS_SEED=123 make stress STRESS=21_random_chaos`.
 Timing of processes and the resulting execution can still vary.
+
+Scenario 21b runs the same schedule over extension tasks of the suite's own chaos plugin
+(`crates/schedr/tests/stress/schedr-ext-chaos`). Each task's payload names what goes wrong on
+its first two tries, drawn from the seed too: the plugin exits mid-request, is killed, hangs
+ignoring SIGTERM past its grace, stops itself (SIGSTOP), writes a frame that isn't JSON or a
+header past the 64 MiB limit, or makes its extension's service exit (the worker starts it
+again; past `service_restarts` within its `service_settle`, here 2 minutes, it turns the
+extension off on that worker and tries again once the 2 minutes have passed). A later try does its work: a status, a call of its service, 2 or 25 s of sleep. It
+writes the same marks as the command tasks, its cleanup too, so the same checks apply; no try
+planned to misbehave may succeed (a bad frame the worker let through would show only there); and
+every worker must still be running at the end. Plugins are less strict than tasks that exit on
+`SIGTERM`, by design (DN38): a hung one on a worker frozen at any moment from the try's start to
+its cleanup's may still run when its cleanup, moved, starts elsewhere; 21b lists those in
+`cleanups_beside_their_try.txt` and counts them, as `tries_run_twice`, and allows a try beside
+its retry the grace (35 s) after a freeze, not 5 s. Scenarios 17-21 keep both strict. Replay it with
+`SCHEDR_STRESS_SEED=123 make stress STRESS=21b_random_chaos_extensions`.
 
 Each chaos scenario leaves `target/stress/<scenario>/timeline.txt` and
 `tries_run_twice.txt`. On failure the bundle also contains role logs, `marks.txt` and a

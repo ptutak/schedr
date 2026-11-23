@@ -205,7 +205,9 @@ their code copies:
   workers serving queue `default` to have the newest code of root `etl`"). If every eligible
   worker rejects the task, it can become `unschedulable`. When any rejection is for missing
   code, this waits at least `[master] code_wait` (10 min by default) from the first code
-  rejection. `schedr tasks retry` gives it another chance.
+  rejection. A worker that then reports new code of a root has its "code missing" refusals
+  forgotten, and those tasks are queued again in the next round; `schedr tasks retry` gives
+  any `unschedulable` task another chance.
 
 What a worker imports, for a parse job and for a task, is **its own copy of the code it
 hashed**. When a root settles, the agent copies its scanned files into its data directory

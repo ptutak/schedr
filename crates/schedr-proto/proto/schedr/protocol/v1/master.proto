@@ -245,6 +245,11 @@ message Heartbeat {
   // schedr-model ExtensionEvent as JSON, oldest first: discovered, skipped, refused, dropped.
   // At most 100: the oldest go first. Sent once, lost with a heartbeat that isn't.
   repeated bytes extension_events_json = 11;
+  // Each of its extensions with a service, and how many times that service has become ready
+  // (DN37; protocol 2.2): its state, sent every time. A count past the one an
+  // `EXTENSION_NOT_READY` refusal carried answers that refusal, giving the task another chance
+  // (B284), whatever order the two are handled in.
+  repeated ServiceReadies services = 12;
 }
 
 // A schedr process's memory and CPU, and its container's (decision 463).
@@ -358,6 +363,15 @@ message Rejected {
   RejectReason reason = 2;
   // A human-readable detail, e.g. "interpreter `etl-venv` not defined on worker-1".
   string detail = 3;
+  // For `EXTENSION_NOT_READY`: how many times the extension's service had become ready when it
+  // refused (DN37; protocol 2.2).
+  uint64 service_readies = 4;
+}
+
+// An extension's service on a worker (DN37; protocol 2.2): how many times it has become ready.
+message ServiceReadies {
+  string name = 1;
+  uint64 readies = 2;
 }
 
 enum AttemptStatus {

@@ -1961,6 +1961,41 @@ impl Database {
         });
         Ok(updated)
     }
+    /// Puts these `unschedulable` task instances back in the queue, ready at `now` (B284,
+    /// B285: a worker became able to run them); others are left as they are. How many.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn requeue_unschedulable_of(
+        &self,
+        instance_ids: &[String],
+        now: Timestamp,
+    ) -> Result<u64, DbError> {
+        const SQLITE: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
+            queued_reason = NULL, updated_at = $1{ts} WHERE state = 'unschedulable' \
+            AND id IN (SELECT value FROM json_each($2))";
+        const POSTGRES: &str = "UPDATE task_instances SET state = 'queued', ready_at = $1{ts}, \
+            queued_reason = NULL, updated_at = $1{ts} WHERE state = 'unschedulable' \
+            AND id IN (SELECT value::uuid FROM jsonb_array_elements_text($2::jsonb))";
+        if instance_ids.is_empty() {
+            return Ok(0);
+        }
+        let list = crate::query::to_json(&instance_ids);
+        let updated = in_tx!(self, |tx, backend| {
+            let query = match backend {
+                crate::backend::Backend::Sqlite => SQLITE,
+                crate::backend::Backend::Postgres => POSTGRES,
+            };
+            crate::query::query(sql(backend, query))
+                .bind(db_time(now))
+                .bind(&list)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+        });
+        Ok(updated)
+    }
 }
 
 fn task_id_of(text: String) -> Result<TaskId, DbError> {

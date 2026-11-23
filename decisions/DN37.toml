@@ -1,0 +1,29 @@
+title = "A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance"
+date = 2026-11-23
+by = "user"  # user, claude
+on = "D518"
+kind = "adds"  # corrects (update the decision's summary too), adds
+summary = '''
+Each heartbeat (protocol 2.2) says how many times each of the worker's extensions' services has
+become ready, and each `EXTENSION_NOT_READY` refusal the count when it refused: the worker's
+state, sent every time, so a lost heartbeat loses nothing, and compared by count, so neither the
+order the master handles the two in nor its clock matters. A refusal is answered once the
+worker's count is past its own (the service ready again since; a service ready for other
+versions only never counts up, so its refusals stand). A "code missing" refusal is answered once
+the worker reports a root's content hash other than the one it last reported (a reconnect's same
+hash isn't new code) (B285); that new code also gives the task to a worker that never refused it
+(on older code then), if it is eligible for it now, as assignment reads it. Each round, the refusals answered are forgotten and those tasks, if
+`unschedulable`, queued again, their code wait starting over (B284: they stayed `unschedulable`
+once the services came back, and a worker's old refusal still counted towards "every eligible
+worker"). Only those: a worker that refused the task for itself is never answered, its later
+refusal for itself replacing a code one. Memory changes only once the queue is written; a worker
+gone takes its refusals with it. Assignment is unchanged: the master still offers tasks to
+workers whose service isn't ready, and their refusal stays the one way to `unschedulable`. Not
+chosen: leaving out such workers when assigning (the task would never be refused, so never
+`unschedulable`, without a second timer); an immediate message on each change (the task has
+waited `code_wait` already; 10 s more is nothing); a list of the services not ready, by name
+(agy's reviews: a change of it missed a restart between heartbeats, and a heartbeat handled
+after a newer refusal answered it); such tasks never `unschedulable` (DN29's "holding the task
+until ready"); re-queuing them every `code_wait` (late, and blind to whether any service is back).
+'''
+history = "JOURNAL.md#DN37"

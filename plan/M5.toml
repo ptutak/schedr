@@ -644,12 +644,13 @@ done = 2026-11-23
 id = "M5.2i13"
 title = "Stress 21b: seeded random chaos aimed at extensions"
 scope = '''
-(the user, 2026-11-22: "Also random_chaos targeting extensions aswell - it could be a second random_chaos just targeting extensions.") `21b_random_chaos_extensions`: scenario 21's seeded fault schedule (cuts, slow links, freezes) under scenario 25's extension load, plus faults of the extension's own: plugins killed, hung past their grace, frozen, sending garbage or over-size messages, exiting mid-request, the service process (M5.2i9) killed and restarted; each recovers as designed (the attempt fails or is retried, cleanups run once, no task on two workers, the worker stays), reproducible by its seed
+(the user, 2026-11-22: "Also random_chaos targeting extensions aswell - it could be a second random_chaos just targeting extensions.") `21b_random_chaos_extensions`: scenario 21's seeded fault schedule (cuts, slow links, freezes) under scenario 25's extension load, plus faults of the extension's own: plugins killed, hung past their grace, frozen, sending garbage or over-size messages, exiting mid-request, the service process (M5.2i9) killed and restarted; each recovers as designed (the attempt fails or is retried, cleanups run once, no task on two workers, the worker stays), reproducible by its seed. Scenario 25 also gains two runs (the user, 2026-11-23, after asking whether extension tasks really ran faster than native Python ones: half its extension tasks were shell scripts, its Python tasks spawned): forked Python `@task`s (the workers' fork servers on) and extension tasks all the dummy's Python plugin, so the stress page orders spawned Python, Python plugins and forked Python by measurement
 '''
 done_when = '''
 `SCHEDR_STRESS_SEED=<n> make stress STRESS=21b_random_chaos_extensions` passes quick and full on several seeds; what it checks on the stress page
 '''
-status = "planned"
+status = "done"
+done = 2026-11-23
 
 [[steps]]
 id = "M5.2i4"

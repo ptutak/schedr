@@ -3259,3 +3259,80 @@ phase), after the first, the plan's wording, lost a phase in the shell plugin's 
   13-26 ms). Not a comparison of kinds: the extension run is half shell scripts, and its Python
   tasks are spawned, not forked (corrected 2026-11-23 after the user asked whether extensions
   really ran faster than native Python).
+
+### 2026-11-23: M5.2i13, scenario 25's two new runs measured in CI, not here
+
+Scenario 25's runs added in M5.2i13 (forked Python `@task`s; extension tasks all the dummy's
+Python plugin) weren't run locally: the user, "I trust i13 and it's not a priority ... a page in
+documentation", then "let's either put it into CI stress now (after the push) or even wait for
+nightly". They are test code only; the stress page's ordering of spawned Python, Python plugins
+and forked Python waits for that run's numbers.
+
+### <a id="DN37"></a>2026-11-23: A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (decision note 37; adds to D518)
+
+Stress 21b (seed 1) left 61 of 120 runs running: every worker had turned the chaos extension's
+service off for `service_settle` (24 h), and the tasks it refused were `unschedulable` for good,
+nothing queuing them again once a service came back (B284). The user chose A of three (the
+worker's heartbeat says which services aren't ready; a task never `unschedulable` for a service;
+re-queued every `code_wait`), "on each heartbeat", and without leaving out such workers when
+assigning ("A without the extra"): the refusals stay the one way to `unschedulable`. Then, after
+a side agent's note that code had the same gap (B285, checked: a worker's new root hash was only
+recorded), "A, both in one change". For 21b itself the user: "change the settle time for chaos
+tests to test the actual functionality": its chaos extension's `service_settle` is 2 minutes.
+
+### <a id="DN38"></a>2026-11-23: A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (decision note 38; adds to D280)
+
+Stress 21b (seed 1, with DN37) ended with every run successful and two failures of one kind: a
+chaos plugin hung past its timeout, ignoring SIGTERM; its worker froze before the SIGKILL; the
+master, past the lease and the move wait, ran the try's cleanup elsewhere while the hung plugin
+lived on until the thaw. The user, after the sequence was laid out ("so the cleanup is
+overlapping the task, is that right?", "We cannot prevent it right?"): "A, if we implement
+"heartbeats" it means the worker becomes "master" for it's plugins with all the work current
+master needs for it's own workers."
+Then the user, on a side agent's note that the plugins' leniency loosened the whole suite: "A,
+scope both to 21b" (the 35 s slack and the cleanup listing; scenarios 17-21 check as before).
+Seed 2 found the rule too narrow: a worker frozen through its lease's end and thawed before the
+move stopped its hung plugin 30 s after the thaw, past the move; the rule became "frozen at any
+moment from the try's start to the cleanup's". The user: "we have to document, that plugins
+behave in less strict way than tasks - by design": the extensions page's "Being stopped" says so,
+with the cause (a process not exiting on `SIGTERM`), true for any such task.
+
+agy's review of M5.2i13 with B284/B285 (2026-11-23, its first turn cut by a network failure,
+resumed) found seven, all confirmed, five with failing proofs: the round forgot refusals before
+its write (a failed write lost them); the master reacted to a change of a worker's list, not
+its state (a service restarting between two heartbeats, or a lost one, never answered); a
+worker's code refusal kept beside its later refusal for itself (re-queued, the task would wait
+for good); the code wait not starting over once queued again; a reconnect's same hashes taken
+for new code; the list of workers able again unbounded; no database test of the new query, nor a
+check that scenario 25's forked run forked. All fixed (DN37's summary says what it is now), each
+with a test.
+
+agy's second review (a fresh conversation, the first past 350k tokens) found six more, all
+confirmed, five with failing proofs: a service ready for other versions only refused as not
+ready, and the list by name answered it every heartbeat; a registration whose re-queue failed
+lost its memory first, and a rolled-back code report left the dispatcher changed; the times
+compared on the wall clock (B228's lesson); a heartbeat sent before a refusal handled after it
+(the hub queues results for the round, heartbeats alone) answered it; a gone worker's refusals
+kept for good, scanned each round; and tests missing for the heartbeat's limits, `Workers`, and
+the rollback copy. Fixed by counting each service's readies (the heartbeat's state and the
+refusal's), writing before memory changes in `register`, restoring the dispatcher's memory with
+discovery's, and forgetting a gone worker's refusals; each with a test. A cancelled task's
+refusals kept until its workers are able again is older than this (the `rejections` map too):
+B286.
+
+agy's third review (fresh) found eight on the count-based rework, seven fixed with tests: the
+count bumped before the service was marked ready (a refusal could carry the count of its own
+ready); a worker's counts merged from every heartbeat (unbounded); a worker on older code when
+the others refused, reaching the code later, got nothing; a rolled-back registration not
+restoring the dispatcher; every round scanning the refusals (now only when a count rose, new code
+came or a service refusal arrived); the code wait on the wall clock (older); tests. Declined: a
+code report handled just before an assignment and its refusal may answer that refusal: one extra
+offer and the code wait restarting once, nothing stuck nor looping. Its fourth, narrow round, on
+those fixes: the registration restore was wrong (a registration isn't one transaction; its
+re-queue already committed, restored refusals kept a queued task from every worker for good), so
+it is reverted, a half-done registration left as before this step; new code answered tasks for
+any worker with it, now only for one eligible for the task (its queue, not drained, its root's
+code); tests for the master-time code wait and a refusal behind a count already heard. A worker
+becoming eligible later for a task every other worker refused for itself is older and wider:
+B287. The lesson (the user: "save that lesson"): read the invariants a component keeps before
+adding state to it; agy's prompt now asks for a proposed fix with each finding.

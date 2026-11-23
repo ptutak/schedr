@@ -498,6 +498,7 @@ async fn a_task_is_cancelled_or_retried_and_impossible_requests_are_rejected() {
         attempt_id: stop.attempt_id.clone(),
         reason: pb::RejectReason::NoFreeSlot.into(),
         detail: String::new(),
+        service_readies: 0,
     };
     world
         .dispatcher

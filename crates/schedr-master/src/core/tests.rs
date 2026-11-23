@@ -531,6 +531,7 @@ async fn rejections_heartbeats_and_draining_are_handled() {
         attempt_id: assign.attempt_id.clone(),
         reason: pb::RejectReason::NoFreeSlot.into(),
         detail: String::new(),
+        service_readies: 0,
     });
     assert_eq!(
         core.handle_in_round("w1", rejected, later(30))
@@ -4498,6 +4499,21 @@ async fn what_a_worker_reports_for_people_is_kept_within_limits() {
         (256, 4096),
         "nor kept whole in memory"
     );
+    // DN37: its services' counts as many and as long as kept, in the dispatcher's memory.
+    let services = (0..300)
+        .map(|i| pb::ServiceReadies {
+            name: format!("{i:04}{}", "s".repeat(5000)),
+            readies: 1,
+        })
+        .collect();
+    let beat = worker_message::Message::Heartbeat(pb::Heartbeat {
+        services,
+        ..pb::Heartbeat::default()
+    });
+    core.handle_in_round("w1", beat, later(3)).await.unwrap();
+    let readies = &core.dispatcher.worker("w1").unwrap().service_readies;
+    assert_eq!(readies.len(), 256);
+    assert!(readies.keys().all(|name| name.chars().count() == 4096));
 }
 
 #[tokio::test]

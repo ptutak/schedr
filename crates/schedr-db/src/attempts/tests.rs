@@ -379,6 +379,55 @@ async fn unschedulable_instances_are_queued_again_when_asked() {
     );
 }
 
+/// B284/B285: only the instances named are queued again, and only `unschedulable` ones.
+#[tokio::test]
+async fn only_the_unschedulable_instances_named_are_queued_again() {
+    let (db, run_id) = with_run().await;
+    let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let (attempt_id, _) = db
+        .assign_attempt(&instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    db.undo_assignment(
+        &attempt_id,
+        TaskInstanceState::Unschedulable,
+        None,
+        Some("no"),
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.requeue_unschedulable_of(&[], ts(NOW)).await.unwrap(), 0);
+    let other = "01920000-0000-7000-8000-000000000000".to_owned();
+    assert_eq!(
+        db.requeue_unschedulable_of(&[other], ts(NOW))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        instance_state(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Unschedulable
+    );
+    let named = [instance_id];
+    assert_eq!(
+        db.requeue_unschedulable_of(&named, ts(NOW)).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        instance_state(&db, &run_id, "extract").await.0,
+        TaskInstanceState::Queued
+    );
+    // Queued already: not touched again.
+    assert_eq!(
+        db.requeue_unschedulable_of(&named, ts(NOW)).await.unwrap(),
+        0
+    );
+}
+
 #[tokio::test]
 async fn attempts_start_and_end_once() {
     let (db, run_id) = with_run().await;

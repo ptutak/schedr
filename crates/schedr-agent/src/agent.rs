@@ -265,8 +265,14 @@ pub trait Executor: Clone + Send + Sync + 'static {
 
     /// Why an attempt of `extension` at `version` can't start here now because its service
     /// isn't ready (decision 518); none when it can, or it has no service.
-    fn service_not_ready(&self, _extension: &str, _version: &str) -> Option<String> {
+    fn service_not_ready(&self, _extension: &str, _version: &str) -> Option<(String, u64)> {
         None
+    }
+
+    /// Each extension with a service and how many times it has become ready, for the
+    /// heartbeat (DN37).
+    fn service_readies(&self) -> Vec<(String, u64)> {
+        Vec::new()
     }
 
     /// The worker drained for maintenance, or resumed: its extensions' services told (DN33).
@@ -394,8 +400,12 @@ impl Executor for ProcessExecutor {
         self.watchers.code_in_use()
     }
 
-    fn service_not_ready(&self, extension: &str, version: &str) -> Option<String> {
+    fn service_not_ready(&self, extension: &str, version: &str) -> Option<(String, u64)> {
         self.services.not_ready(extension, version)
+    }
+
+    fn service_readies(&self) -> Vec<(String, u64)> {
+        self.services.readies()
     }
 
     fn maintenance_drained(&self, drained: bool) {
@@ -2982,6 +2992,12 @@ impl<E: Executor> Agent<E> {
             pokes: Vec::new(),
             extension_figures_json: self.extension_figures(),
             extension_events_json: self.extension_events(),
+            services: self
+                .executor
+                .service_readies()
+                .into_iter()
+                .map(|(name, readies)| pb::ServiceReadies { name, readies })
+                .collect(),
         }))
     }
 
@@ -3157,6 +3173,7 @@ impl<E: Executor> Agent<E> {
             attempt_id: queued.assign.attempt_id,
             reason: pb::RejectReason::Withdrawn.into(),
             detail,
+            service_readies: 0,
         })));
         if let Some(sequence) = queued.sequence {
             to_master.release(sequence);
@@ -3603,6 +3620,7 @@ impl<E: Executor> Agent<E> {
                     attempt_id: assign.attempt_id.clone(),
                     reason: pb::RejectReason::InvalidSpecification.into(),
                     detail,
+                    service_readies: 0,
                 };
                 let _ = to_master.send(wrap(worker_message::Message::Rejected(rejected)));
                 None
@@ -3867,6 +3885,7 @@ impl<E: Executor> Agent<E> {
                 attempt_id: assign.attempt_id.clone(),
                 reason: reason.into(),
                 detail,
+                service_readies: 0,
             }))
         };
         if assign.cleanup_only.is_some() && self.cleaning_rest(&assign.attempt_id) {
@@ -3916,10 +3935,14 @@ impl<E: Executor> Agent<E> {
         // Its extension's service not ready here (decision 518): waited for as code on its way
         // is (DN29), no try used.
         if let TaskKind::Extension { name, version, .. } = &spec.task.kind
-            && let Some(why) = self.executor.service_not_ready(name, version)
+            && let Some((why, readies)) = self.executor.service_not_ready(name, version)
         {
             let detail = format!("extension `{name}`: {why}");
-            let _ = to_master.send(reject(pb::RejectReason::ExtensionNotReady, detail));
+            let mut refusal = reject(pb::RejectReason::ExtensionNotReady, detail);
+            if let Some(worker_message::Message::Rejected(rejected)) = refusal.message.as_mut() {
+                rejected.service_readies = readies;
+            }
+            let _ = to_master.send(refusal);
             return None;
         }
         // Planned with stand-ins for its secrets (fetched once it is started, so a slow
@@ -3956,6 +3979,7 @@ impl<E: Executor> Agent<E> {
                 attempt_id: assign.attempt_id.clone(),
                 reason: reason.into(),
                 detail,
+                service_readies: 0,
             }))
         };
         if let Err(why) = journaled {
@@ -4022,6 +4046,7 @@ impl<E: Executor> Agent<E> {
                     attempt_id: spec.attempt_id.clone(),
                     reason: reason.into(),
                     detail,
+                    service_readies: 0,
                 })));
             }
             Err(NotRun::Failed { kind, message }) => {

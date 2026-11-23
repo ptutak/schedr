@@ -206,21 +206,34 @@ impl Stress {
         &mut self,
         count: usize,
         limit: Duration,
-        mut meanwhile: impl FnMut(&mut Self),
+        meanwhile: impl FnMut(&mut Self),
     ) {
+        if let Err(why) = self.runs_finish(count, limit, meanwhile) {
+            panic!("{why}\n{}", self.cluster.logs());
+        }
+    }
+
+    /// As [`Stress::wait_for_runs`], what was left unfinished at the limit as an error (for a
+    /// scenario that keeps its bundle then).
+    pub fn runs_finish(
+        &mut self,
+        count: usize,
+        limit: Duration,
+        mut meanwhile: impl FnMut(&mut Self),
+    ) -> Result<(), String> {
         let want = i64::try_from(count).unwrap();
         let deadline = Instant::now() + limit;
         loop {
             if self.db.runs() >= want && self.db.unfinished_runs() == 0 {
-                return;
+                return Ok(());
             }
-            assert!(
-                Instant::now() < deadline,
-                "waited too long for {count} runs to finish: {} exist, {} unfinished\n{}",
-                self.db.runs(),
-                self.db.unfinished_runs(),
-                self.cluster.logs()
-            );
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "waited too long for {count} runs to finish: {} exist, {} unfinished",
+                    self.db.runs(),
+                    self.db.unfinished_runs(),
+                ));
+            }
             meanwhile(self);
             std::thread::sleep(Duration::from_secs(1));
         }

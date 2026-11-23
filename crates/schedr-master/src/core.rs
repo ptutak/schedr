@@ -1505,6 +1505,14 @@ impl MasterCore {
         if let Some(usage) = beat.usage {
             self.heard_of_usage(worker_id, usage, now).await;
         }
+        // Within the limits before anything keeps it (B183).
+        let limits = self.settings.worker_report;
+        let readies = limits
+            .take(worker_id, "services", beat.services)
+            .into_iter()
+            .map(|service| (limits.cut(service.name), service.readies))
+            .collect();
+        self.dispatcher.report_services(worker_id, readies);
         self.heartbeat_triggers(worker_id, &beat.running_triggers, &beat.pokes, now)
             .await
     }
@@ -2420,11 +2428,14 @@ impl MasterCore {
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, CoreError> {
         let (db, memory) = (self.db.clone(), self.discovery.memory());
+        let dispatched = self.dispatcher.memory();
         let handled = Box::pin(db.atomically(self.root_reported(worker_id, root, now))).await;
         if handled.is_err() {
             // Rolled back, discovery's memory too: a retry decides afresh, and records the
-            // switch again (B91).
+            // switch again (B91); the dispatcher's too, so its code is new again then (agy's
+            // review of M5.2i13).
             self.discovery.restore(memory);
+            self.dispatcher.restore(dispatched);
             self.sync_code();
         }
         handled

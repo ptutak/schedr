@@ -30,7 +30,9 @@ secret storages and default storage, and the extensions its plugins serve (proto
 [Extensions](21-extensions.md)).
 `Registered` returns the timings, journal decisions, message size limit and script uses.
 A `Heartbeat` reports free slots, running attempts, triggers and usage, and how long its
-waiting queue's oldest task has waited (`queue_head_age_ms`, protocol 2.2); the `HeartbeatAck`
+waiting queue's oldest task has waited (`queue_head_age_ms`, protocol 2.2), and how many times
+each of its extensions' services has become ready (`services`, protocol 2.2), the count an
+`EXTENSION_NOT_READY` refusal also carries (`service_readies`); the `HeartbeatAck`
 answers with the cluster's slow-equals (`slow_equals_ms`, see
 [The waiting queue](05-workers.md#the-waiting-queue)).
 

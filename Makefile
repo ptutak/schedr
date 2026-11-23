@@ -74,10 +74,11 @@ DAG_TYPED = $(filter-out %/conftest.py,$(filter-out examples/test_% examples/doc
 DEMO_DAGS = $(wildcard examples/demo/dags/*.py)
 # The greenhouse showcase's DAG folder apart too, for the same reason.
 SHOWCASE_DAGS = $(wildcard examples/showcase/dags/*.py)
-# Extensions' DAGs, and their plugins: programs (`schedr-ext-*`, no `.py`), read by mypy as
-# scripts and by basedpyright as `.py` copies under target/ (it reads `.py` files only).
+# Extensions' DAGs, and their plugins (the stress suite's chaos plugin too): programs
+# (`schedr-ext-*`, no `.py`), read by mypy as scripts and by basedpyright as `.py` copies under
+# target/ (it reads `.py` files only).
 EXTENSION_DAGS = $(wildcard examples/extensions/*.py)
-PLUGINS = $(wildcard examples/extensions/*/schedr-ext-*)
+PLUGINS = $(wildcard examples/extensions/*/schedr-ext-*) crates/schedr/tests/stress/schedr-ext-chaos
 PLUGIN_COPIES = target/plugin-types
 
 lint:            ## Run clippy, ruff, mypy, mypy and basedpyright over DAG code and extension plugins, shellcheck over the shell scripts

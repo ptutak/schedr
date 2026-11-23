@@ -1095,6 +1095,42 @@ async fn failures_retries_requeues_and_cancels_are_stored() {
     )
     .await
     .unwrap();
+    // B284/B285: only the instances named, on Postgres's own query (UUIDs from JSON).
+    let other = "01920000-0000-7000-8000-000000000000".to_owned();
+    assert_eq!(
+        db.requeue_unschedulable_of(&[other], ts(NOW))
+            .await
+            .unwrap(),
+        0
+    );
+    let load = db.run_tasks(&run_id).await.unwrap().unwrap();
+    let load = load
+        .instances
+        .iter()
+        .find(|i| i.task_id == id("load"))
+        .unwrap()
+        .id
+        .clone();
+    assert_eq!(
+        db.requeue_unschedulable_of(&[load], ts(NOW)).await.unwrap(),
+        1
+    );
+    db.update_instances(
+        &run_id,
+        &[InstanceUpdate {
+            task_id: id("load"),
+            map_index: -1,
+            state: TaskInstanceState::Unschedulable,
+            ready_at: None,
+            outcome: None,
+            used_retry: false,
+            reason: None,
+            map_sizes: None,
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
     assert_eq!(db.requeue_unschedulable(ts(NOW)).await.unwrap(), 1);
     db.request_cancel(&run_id, ts(NOW)).await.unwrap();
     db.finish_run(&run_id, RunState::Cancelled, ts(NOW))

@@ -1558,6 +1558,7 @@ impl Sim {
                         attempt_id: assign.attempt_id,
                         reason: pb::RejectReason::Withdrawn.into(),
                         detail: String::new(),
+                        service_readies: 0,
                     };
                     self.up(inst, worker_message::Message::Rejected(rejected));
                 } else {
@@ -1661,6 +1662,7 @@ impl Sim {
                 attempt_id: id,
                 reason: reason.into(),
                 detail: String::new(),
+                service_readies: 0,
             };
             self.up(inst, worker_message::Message::Rejected(rejected));
             return;
