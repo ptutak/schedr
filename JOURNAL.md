@@ -3336,3 +3336,14 @@ code); tests for the master-time code wait and a refusal behind a count already 
 becoming eligible later for a task every other worker refused for itself is older and wider:
 B287. The lesson (the user: "save that lesson"): read the invariants a component keeps before
 adding state to it; agy's prompt now asks for a proposed fix with each finding.
+
+### 2026-11-23: M5.2i4 closed
+
+The plugin protocol's page and schema grew with each step after its first version (396e14de):
+services (M5.2i9, DN29-DN33), reports and stops (M5.2i5), notifications (M5.2i8). Checked
+against `schema/extension.schema.json`: every one of its 31 message types on the page. Already
+in place: close-on-exec in both helpers, the worker closing a conversation both ways on a frame
+it can't read (B275), the crate's two-way test (`in_step.rs`) and the Python helper's messages
+checked against the schema. Added: DN35's rules, a service sending `service_call_seconds`, the
+one built-in it may, and a plugin's `service_*` points dropped without a word (checked in
+`reports.rs`).

@@ -191,7 +191,7 @@ after which it exits. Then:
 | service | `{"type": "attempt_accepted", "attempt_id": ...}` | Within `service_accept_timeout`; only then does the plugin start. Unanswered, the attempt fails |
 | service | `{"type": "secret_get", "secret": {"path": ..., "key": ...}}` | One of its declared secrets again; answered `secret` or `secret_failed` as a plugin's |
 | service | `{"type": "status", "phase": ..., "message": ...}` | What it does, an event on the extension's page; no answer |
-| service | `{"type": "metrics", "points": [...]}` | Points of the extension's declared metrics, as a plugin's; no answer |
+| service | `{"type": "metrics", "points": [...]}` | Points of the extension's declared metrics, as a plugin's, and of `service_call_seconds` (a histogram by `method`: how long it took to answer each call, failed ones too), the one built-in it may send ([its built-in metrics](21-extensions.md#its-built-in-metrics)); no answer |
 | worker | `{"type": "drained"}`, `{"type": "resumed"}` | The worker drained for maintenance, and resumed: no attempts meanwhile; it keeps running. No answer |
 
 The worker asks no liveness: a service is watched by its process, its
@@ -243,7 +243,7 @@ itself.
 | `stop_reason_get` | After `SIGTERM`: why it is being stopped | `stop_reason` | `await channel.stop_reason()` | `{"type": "stop_reason_get"}` |
 | `status` | Where the task is | none | `await channel.status("running", "step 2 of 4", progress=0.5)` | `{"type": "status", "phase": "running", "message": "step 2 of 4", "progress": 0.5}` |
 | `link` | A link to what it started elsewhere (`http`, `https`); the same label replaces it | none | `await channel.link("Job", "https://spark.example/jobs/j-42")` | `{"type": "link", "label": "Job", "url": "https://spark.example/jobs/j-42"}` |
-| `metrics` | Points of declared metrics; an undeclared one is dropped, warned of once | none | `await channel.metric("jobs", 1, outcome="ok")` | `{"type": "metrics", "points": [{"name": "jobs", "labels": {"outcome": "ok"}, "value": 1}]}` |
+| `metrics` | Points of declared metrics; an undeclared one is dropped, warned of once; one named `service_*` (schedr's) dropped without a word | none | `await channel.metric("jobs", 1, outcome="ok")` | `{"type": "metrics", "points": [{"name": "jobs", "labels": {"outcome": "ok"}, "value": 1}]}` |
 | `notify` | A declared notification event, to the DAG's channels subscribed to `EXTENSION_EVENT` | none | `await channel.notify("job_done", "the job is done", {"rows": 3})` | `{"type": "notify", "event": "job_done", "text": "the job is done", "data": {"rows": 3}}` |
 | `task_succeeded` | Last: the task (or cleanup) succeeded | none; it exits | `return {"rows": 3}` from `run` | `{"type": "task_succeeded", "output": {"rows": 3}, "outcome": "SUCCESS"}` |
 | `task_failed` | Last: the task (or cleanup) failed | none; it exits | `raise RuntimeError("the cluster said no")` in `run` | `{"type": "task_failed", "error": {"exception": "RuntimeError", "message": "the cluster said no", "traceback": "..."}, "kind": null}` |
