@@ -24,7 +24,8 @@ from typing import Any, overload
 from schedr import _build
 from schedr._model import DagCtxField, DagCtxRef, ParamRef, Reference, SecretDecl, SecretRef
 from schedr._secrets import parse_secret
-from schedr._serialization.codec import CodecError, decode, decode_any, encode
+from schedr._serialization import CodecError
+from schedr._serialization.codec import decode, decode_any, encode
 
 _VALUE_IN_DAG_BODY = (
     "a reference can't be used as a value in the DAG file (it is known only at run time); "

@@ -97,7 +97,7 @@ build-backend = "maturin"
 bindings = "bin"
 manifest-path = "crates/schedr/Cargo.toml"
 python-source = "python"
-python-packages = ["schedr"]
+python-packages = ["schedr", "schedr_extension"]
 # The binary crate's library is named `schedr_bin`; the Python package is `schedr`.
 module-name = "schedr"
 
@@ -154,7 +154,7 @@ convention = "google"
 python_version = "3.14"
 strict = true
 mypy_path = "python"
-packages = ["schedr"]
+packages = ["schedr", "schedr_extension"]
 
 # --- basedpyright ---------------------------------------------------------
 # DAG code as an editor reads it (decision 57): the examples and the typing checks, in
@@ -243,7 +243,7 @@ filterwarnings = ["error:task [^ ]+. outcome class:UserWarning"]
 # Forked processes (the fork server's shims and children, in tests) save their data.
 patch = ["_exit", "fork", "subprocess"]
 parallel = true
-source = ["schedr"]
+source = ["schedr", "schedr_extension"]
 branch = true
 # `python -m` entry points only call into tested code (like Rust's main.rs).
 omit = ["*/__main__.py"]

@@ -1,0 +1,12 @@
+title = "An attempt's statuses written off the round are coalesced by phase"
+date = 2026-11-23
+by = "user"  # user, claude
+on = "D521"
+kind = "adds"  # corrects (update the decision's summary too), adds
+summary = '''
+Of an attempt's statuses in one write of the master's writer, consecutive ones with the same
+phase are stored as the newest; every change of phase is kept. Not the newest status per
+attempt per write (it lost phases: `preparing, copying, done` stored as `preparing, done`), nor
+no coalescing (up to ten rows a second per attempt, pushing the history's middle out of its 100).
+'''
+history = "JOURNAL.md#DN36"

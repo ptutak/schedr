@@ -4,7 +4,7 @@
 updated = 2026-11-23
 
 in_progress = [
-    "M5.2i11 finished, being pushed: the Kubernetes plugin on kubernetes_asyncio through its extension's service (watches of Jobs and pods, a Secret per Job, every chart kind, the service's pods gauge); agy's 8 findings fixed; kind passes. Its done-when's two-worker gauge can't be shown on kind (standalone's in-memory mTLS admits no outside worker), journaled. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split). For the user in the morning: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).",
+    "M5.2i12 finished, being pushed: extensions' reports off the master's round (D521; statuses coalesced by phase, DN36), built-in service metrics (DN35), plugins on `schedr_extension` (DN34, B283 fixed), stress 25 in four runs (extension tasks 3.1 to 11.9 tasks a second), a master-level round test; agy's 12 and Grok's 2 new findings fixed. Then i13 and i4, then k and j; M5.3c (a small `schedr-ctx`) after 1.2.0. The night of 2026-11-23's terms (memory: night-2026-11-23): each step reviewed, checked and pushed; a step measuring performance closes its gaps before the next. The GitLab mirror runs (its token until about 2027-11-23). For the user: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).",
 ]
 
 waiting = []

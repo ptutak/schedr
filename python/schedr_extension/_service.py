@@ -20,14 +20,16 @@ import signal
 import socket
 import sys
 import threading
+import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ChannelClosedError, ProtocolError
+from schedr_extension._protocol import MAX_MESSAGE_SIZE, Channel, ChannelClosedError, ProtocolError
 
 if TYPE_CHECKING:
-    from schedr.extension import ExtensionJson
+    from schedr_extension import ExtensionJson
 
 SERVICE_FD_ENV = "SCHEDR_SERVICE_FD"
 """The environment variable naming a service's control socket, and a plugin's end of its
@@ -175,6 +177,49 @@ class ServiceContext:
         await asyncio.to_thread(self._control.send, {"type": "metrics", "points": [point]})
 
 
+# Its calls' times (M5.2i12's `service_call_seconds`): sent at most once a second, at most this
+# many held between (past them, the oldest go) and this many in one message (a control line's
+# 16 KiB).
+_CALL_TIMES_HELD = 1000
+_CALL_TIMES_PER_MESSAGE = 100
+
+
+class _CallTimes:
+    """Each call's time, by method, until sent as `service_call_seconds` points."""
+
+    def __init__(self) -> None:
+        self.held: deque[tuple[str, float]] = deque(maxlen=_CALL_TIMES_HELD)
+
+    def add(self, method: str, seconds: float) -> None:
+        self.held.append((method, seconds))
+
+    def messages(self) -> list[dict[str, object]]:
+        """What was held, as `metrics` messages; none held after."""
+        points = [
+            {"name": "service_call_seconds", "labels": {"method": method}, "value": seconds}
+            for method, seconds in self.held
+        ]
+        self.held.clear()
+        return [
+            {"type": "metrics", "points": points[i : i + _CALL_TIMES_PER_MESSAGE]}
+            for i in range(0, len(points), _CALL_TIMES_PER_MESSAGE)
+        ]
+
+
+async def _send_call_times(control: Channel, times: _CallTimes) -> None:
+    """Sends the calls' times once a second, until cancelled with the service.
+
+    It stops early when its control socket closes: the service ends then, its reader seeing it.
+    """
+    while True:
+        await asyncio.sleep(1)
+        try:
+            for message in times.messages():
+                await asyncio.to_thread(control.send, message)
+        except OSError, ProtocolError:
+            return
+
+
 type OnCall = Callable[[ServiceAttempt, str, object], Awaitable[object]]
 """A service's handler: given the attempt, the method and its arguments; returns the result
 (JSON), or raises to fail the call."""
@@ -276,7 +321,7 @@ async def _run(
 ) -> int:
     name, versions = named
     start, on_closed, stop = hooks.start, hooks.on_closed, hooks.stop
-    from schedr.extension import _plugin_version  # noqa: PLC0415 (a cycle otherwise)
+    from schedr_extension import _plugin_version  # noqa: PLC0415 (a cycle otherwise)
 
     hello = {
         "type": "hello",
@@ -304,13 +349,14 @@ async def _run(
         loop.add_signal_handler(signal.SIGTERM, stopping.set)
     attempts: set[asyncio.Task[None]] = set()
     gone = context._gone
+    times = _CallTimes()
 
     def connected(message: dict[str, Any], fd: int) -> None:
         task = message.get("task", {})
         attempt = ServiceAttempt(
             message["attempt_id"], task.get("name", ""), task.get("version", "")
         )
-        handled = loop.create_task(_attempt(control, attempt, fd, on_call, on_closed))
+        handled = loop.create_task(_attempt(control, attempt, fd, (on_call, times), on_closed))
         attempts.add(handled)
         handled.add_done_callback(attempts.discard)
 
@@ -342,9 +388,10 @@ async def _run(
     if start is not None:
         await start(context)
     await asyncio.to_thread(control.send, {"type": "ready"})
+    sending = loop.create_task(_send_call_times(control, times))
     waiting = [loop.create_task(stopping.wait()), loop.create_task(gone.wait())]
     await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
-    for waited in waiting:
+    for waited in [*waiting, sending]:
         waited.cancel()
     if stop is not None and stopping.is_set():
         await stop()
@@ -387,9 +434,10 @@ async def _attempt(
     control: Channel,
     attempt: ServiceAttempt,
     fd: int,
-    on_call: OnCall,
+    calls_to: tuple[OnCall, _CallTimes],
     on_closed: Callable[[ServiceAttempt], Awaitable[None]] | None,
 ) -> None:
+    on_call, times = calls_to
     sock = socket.socket(fileno=fd)
     sock.set_inheritable(False)
     sock.setblocking(False)
@@ -406,8 +454,14 @@ async def _attempt(
             await writer.drain()
 
     async def handle(call_id: int, method: str, args: object) -> None:
+        began = time.monotonic()
         try:
-            result = await on_call(attempt, method, args)
+            try:
+                result = await on_call(attempt, method, args)
+            finally:
+                # Its handler's time, once, whatever its end (agy's review: an answer that
+                # couldn't be sent timed it twice).
+                times.add(method, time.monotonic() - began)
             json.dumps(result, allow_nan=False)
             await answer({"type": "answer", "id": call_id, "result": result})
         except ConnectionError, asyncio.CancelledError:

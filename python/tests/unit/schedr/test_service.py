@@ -12,7 +12,8 @@ from contextlib import contextmanager
 
 import pytest
 
-from schedr.extension import (
+from schedr.runner.protocol import Channel
+from schedr_extension import (
     ExtensionChannel,
     ExtensionError,
     ServiceAttempt,
@@ -21,7 +22,6 @@ from schedr.extension import (
     ServiceError,
     serve,
 )
-from schedr.runner.protocol import Channel
 
 
 @contextmanager
@@ -341,3 +341,33 @@ def test_descriptors_received_with_cloexec_are_never_inherited() -> None:
     assert len(fds) == 1
     assert not os.get_inheritable(fds[0])
     os.close(fds[0])
+
+
+def test_each_calls_time_reaches_the_worker_as_a_builtin_metric() -> None:
+    """M5.2i12: `serve` times each call by method, the failed ones too, and sends the times as
+    `service_call_seconds` points at most once a second."""
+    calls: list[tuple[str, str, object]] = []
+    closed: list[str] = []
+    with running_service(calls, closed) as (control, _thread, _code):
+        plugin = connect(control, "a-1")
+        service = ServiceCalls(plugin.detach())
+
+        async def calling() -> None:
+            await service.call("slow")
+            with pytest.raises(ServiceError):
+                await service.call("fail")
+
+        asyncio.run(calling())
+        # Sent once a second: the two calls' times may come in one message or two (agy's
+        # review: a single read was flaky across a second's boundary).
+        points: dict[str, dict[str, object]] = {}
+        while set(points) != {"slow", "fail"}:
+            told = control.receive()
+            assert told["type"] == "metrics"
+            for point in told["points"]:
+                assert point["labels"]["method"] not in points, "timed once"
+                points[point["labels"]["method"]] = point
+        assert all(p["name"] == "service_call_seconds" for p in points.values())
+        slow = points["slow"]["value"]
+        assert isinstance(slow, float)
+        assert slow >= 0.2

@@ -2,7 +2,7 @@
 dict literals and typed declarations alike pass `main` (agy's review of M5.2i7: a list of plain
 dicts infers `dict[str, object]` and was refused)."""
 
-from schedr.extension import (
+from schedr_extension import (
     ExtensionChannel,
     ExtensionJson,
     ExtensionRequest,

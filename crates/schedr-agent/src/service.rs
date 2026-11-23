@@ -115,6 +115,8 @@ pub struct ServiceConfig {
     pub settle: Duration,
     /// The secrets it is given.
     pub secrets: Vec<SecretName>,
+    /// The built-in service metrics collected (`builtin_service_metrics`): their names.
+    pub builtin_metrics: Vec<String>,
 }
 
 /// A service to keep up.
@@ -461,6 +463,15 @@ async fn supervise(
         deps.figures
             .event(ExtensionEvent::now(&spec.extension, None, kind, message));
     };
+    // Its built-in metrics, declared beside whatever its extension declares.
+    deps.figures.set_builtins(
+        &spec.extension,
+        spec.config
+            .builtin_metrics
+            .iter()
+            .filter_map(|name| schedr_model::extension::builtin_service_metric(name))
+            .collect(),
+    );
     let mut restarts: VecDeque<Instant> = VecDeque::new();
     let mut wait = None;
     loop {
@@ -830,6 +841,9 @@ async fn serve_control(
             );
         }
     }
+    // Its built-in metrics are kept once its version is declared, by the config above or a
+    // plugin's hello: never declared alone (agy's review: an idle worker's built-ins-only
+    // declarations, the newest heard, hid the plugin's metrics and its rollups).
     *ready_at = Some(Instant::now());
     state.send_replace(State::Ready(versions.clone()));
     deps.figures.event(ExtensionEvent::now(
@@ -868,6 +882,7 @@ async fn serve_control(
             said = messages.next::<ServiceMessage>() => match said {
                 Ok(ServiceMessage::AttemptAccepted { attempt_id }) => {
                     if let Some(accepted) = accepting.remove(&attempt_id) {
+                        builtin(spec, deps, &versions, "service_accept_seconds", accepted.since.elapsed().as_secs_f64());
                         // Answered: only the unanswered count starts over (DN32).
                         *unanswered = 0;
                         let _ = accepted.reply.send(Ok(accepted.link));
@@ -920,8 +935,9 @@ async fn serve_control(
                 match connect_attempt(&mut talk, &connect, &versions, counted).await {
                     // Its plugin starts once the service accepts it.
                     Ok(link) => {
-                        let due = tokio::time::Instant::now() + spec.config.accept_timeout;
-                        let waiting = Accepting { due, link, reply: connect.reply };
+                        let since = tokio::time::Instant::now();
+                        let due = since + spec.config.accept_timeout;
+                        let waiting = Accepting { due, since, link, reply: connect.reply };
                         accepting.insert(connect.attempt_id, waiting);
                     }
                     Err(why) => {
@@ -938,6 +954,8 @@ async fn serve_control(
                 if used > spec.config.memory {
                     return Ended::OverMemory(used);
                 }
+                #[expect(clippy::cast_precision_loss, reason = "bytes, shown as a gauge")]
+                builtin(spec, deps, &versions, "service_memory_bytes", used as f64);
             }
             changed = stopping.changed() => {
                 if changed.is_err() {
@@ -962,6 +980,8 @@ async fn serve_control(
 /// An attempt's connection handed to the service, waiting for its `attempt_accepted`.
 struct Accepting {
     due: tokio::time::Instant,
+    /// When it was handed over: its accept time.
+    since: tokio::time::Instant,
     link: Link,
     reply: oneshot::Sender<Result<Link, String>>,
 }
@@ -1169,38 +1189,91 @@ async fn told(
             Ok(())
         }
         ServiceMessage::Metrics { points } => {
-            // Kept under the newest version it serves that has declarations.
-            let version = newest_declared(&deps.figures, &spec.extension, versions);
-            for point in points {
-                let point = schedr_model::extension::MetricPoint {
-                    labels: point
-                        .labels
-                        .into_iter()
-                        .map(|(label, value)| (label, talk.mask.mask_text(&value)))
-                        .collect(),
-                    name: point.name,
-                    value: point.value,
-                };
-                let kept = version.as_deref().is_some_and(|version| {
-                    deps.figures
-                        .observe(&spec.extension, version, &point)
-                        .is_ok()
-                });
-                if !kept
-                    && talk.told.warned.len() < MAX_WARNED
-                    && talk.told.warned.insert(point.name.clone())
-                {
-                    tracing::warn!(
-                        extension = spec.extension,
-                        metric = point.name,
-                        "a service's metric point dropped: not declared for the versions it serves"
-                    );
-                }
-            }
+            kept_points(spec, deps, talk, versions, points);
             Ok(())
         }
     }
 }
+
+/// A built-in service metric's point (`service_*`, unlabelled), kept under the newest version
+/// the service serves that has declarations, when it is collected.
+fn builtin(
+    spec: &ServiceSpec,
+    deps: &ServiceDeps,
+    versions: &BTreeSet<String>,
+    name: &str,
+    value: f64,
+) {
+    if !spec.config.builtin_metrics.iter().any(|n| n == name) {
+        return;
+    }
+    let Some(version) = newest_declared(&deps.figures, &spec.extension, versions) else {
+        return;
+    };
+    let point = schedr_model::extension::MetricPoint {
+        name: name.to_owned(),
+        labels: BTreeMap::new(),
+        value,
+    };
+    let _ = deps.figures.observe(&spec.extension, &version, &point);
+}
+
+/// A service's metric points kept under the newest version it serves that has declarations;
+/// one of the worker's own built-ins dropped, another undeclared warned of once.
+fn kept_points(
+    spec: &ServiceSpec,
+    deps: &ServiceDeps,
+    talk: &mut Talk,
+    versions: &BTreeSet<String>,
+    points: Vec<schedr_extension::protocol::MetricPoint>,
+) {
+    // Kept under the newest version it serves that has declarations.
+    let version = newest_declared(&deps.figures, &spec.extension, versions);
+    for point in points {
+        // The worker's own measures aren't the service's to set (Grok's review): of the
+        // built-ins, it sends its calls' times only.
+        if point
+            .name
+            .starts_with(schedr_model::extension::BUILTIN_SERVICE_PREFIX)
+            && point.name != SERVICE_CALL_SECONDS
+        {
+            continue;
+        }
+        let point = schedr_model::extension::MetricPoint {
+            labels: point
+                .labels
+                .into_iter()
+                .map(|(label, value)| (label, talk.mask.mask_text(&value)))
+                .collect(),
+            name: point.name,
+            value: point.value,
+        };
+        let kept = version.as_deref().is_some_and(|version| {
+            deps.figures
+                .observe(&spec.extension, version, &point)
+                .is_ok()
+        });
+        // A built-in one turned off (`builtin_service_metrics`): not collected, silently
+        // (Python's `serve` sends its call times whatever the worker keeps).
+        let builtin = point
+            .name
+            .starts_with(schedr_model::extension::BUILTIN_SERVICE_PREFIX);
+        if !kept
+            && !builtin
+            && talk.told.warned.len() < MAX_WARNED
+            && talk.told.warned.insert(point.name.clone())
+        {
+            tracing::warn!(
+                extension = spec.extension,
+                metric = point.name,
+                "a service's metric point dropped: not declared for the versions it serves"
+            );
+        }
+    }
+}
+
+/// The built-in metric a service sends itself: its calls' times.
+const SERVICE_CALL_SECONDS: &str = "service_call_seconds";
 
 /// The most metric names a service's run is warned of.
 const MAX_WARNED: usize = 50;

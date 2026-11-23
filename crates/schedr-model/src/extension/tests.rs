@@ -152,6 +152,99 @@ fn a_metric_no_panel_shows_gets_a_full_row_below_them() {
     );
 }
 
+/// M5.2i12: the built-in service metrics no panel names share one Service row below the rest,
+/// memory a line (the largest worker's on "All workers"), the times quantiles; one a panel names
+/// is drawn there instead. A plugin may not declare one of their names.
+#[test]
+fn the_builtin_service_metrics_get_a_service_row_and_their_names_are_schedrs() {
+    let mut declared = declarations(kubernetes());
+    declared.panels.truncate(1);
+    declared.metrics.extend(
+        BUILTIN_SERVICE_METRICS
+            .iter()
+            .filter_map(|name| builtin_service_metric(name)),
+    );
+    assert_eq!(check_declarations(&declared), Ok(()));
+    let panels = page_panels(&declared);
+    let service: Vec<(&str, u32, Cell, ChartKind, Option<Combine>)> = panels
+        .iter()
+        .filter(|p| {
+            p.metric
+                .as_deref()
+                .is_some_and(|m| m.starts_with("service_"))
+        })
+        .map(|p| {
+            (
+                p.metric.as_deref().unwrap(),
+                p.row,
+                p.cell,
+                p.chart,
+                p.combine,
+            )
+        })
+        .collect();
+    assert_eq!(
+        service,
+        [
+            (
+                "service_memory_bytes",
+                4,
+                Cell::Left,
+                ChartKind::Line,
+                Some(Combine::Max)
+            ),
+            (
+                "service_accept_seconds",
+                4,
+                Cell::Center,
+                ChartKind::Quantiles,
+                None
+            ),
+            (
+                "service_call_seconds",
+                4,
+                Cell::Right,
+                ChartKind::Quantiles,
+                None
+            ),
+        ]
+    );
+    // Named by a panel: drawn there, the row the other two's.
+    declared.panels.push(Panel {
+        metric: Some("service_memory_bytes".to_owned()),
+        chart: ChartKind::Number,
+        ..declared.panels[0].clone()
+    });
+    let laid_out = page_panels(&declared);
+    let cells: Vec<(&str, Cell)> = laid_out
+        .iter()
+        .filter(|p| {
+            p.metric
+                .as_deref()
+                .is_some_and(|m| m.starts_with("service_"))
+        })
+        .map(|p| (p.metric.as_deref().unwrap(), p.cell))
+        .collect();
+    assert_eq!(
+        cells,
+        [
+            ("service_memory_bytes", declared.panels[0].cell),
+            ("service_accept_seconds", Cell::Left),
+            ("service_call_seconds", Cell::Right),
+        ]
+    );
+    let mut own = declarations(kubernetes());
+    own.metrics.push(MetricDeclaration {
+        name: "service_jobs".to_owned(),
+        ..own.metrics[0].clone()
+    });
+    assert!(
+        check_own_declarations(&own, &BUILTIN_SERVICE_METRICS)
+            .unwrap_err()
+            .contains("are schedr's")
+    );
+}
+
 #[test]
 fn only_http_links_are_shown() {
     assert!(link_url_allowed("https://dash.example/pods/batch/x"));

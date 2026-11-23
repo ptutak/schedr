@@ -131,6 +131,16 @@ most 10 reports a second, 50 at once after a quiet spell: past that its newest s
 and sent when it ends, a link is dropped with a warning, and a metric point is kept on the
 worker as usual (only its figures travel, once a minute).
 
+Extensions never slow the master (decision 521). It stores their reports off its round: a
+worker's message hands them to a queue and goes on, and a writer of their own stores them at most
+once a second, each write in one transaction within 2 s. Of an attempt's statuses in one such
+write, a run of the same phase keeps its newest (a progress ticking within `pulling` is one row);
+each change of phase is kept. A full queue, a failed write or a slow one drops what it held:
+counted in the master's `schedr_master_extension_reports_dropped_total{reason}` (`full`, `failed`,
+`slow`, and `many`: past 100 events of one extension in one write) and warned of in its log at
+most once a minute. So a status may show on its attempt a second after the attempt ended, and on
+a database too slow for them, an extension's page has gaps while its tasks run on.
+
 **Metrics** are declared in the plugin's `hello` (as NETCONF's hello announces its models), or in
 the worker's `[extensions.<name>]` config, which wins: each a `name`, a `kind` (`counter`, `gauge`
 or `histogram`, with its `buckets`), a `help`, a `unit` and its `labels`, a label perhaps with the
@@ -263,13 +273,13 @@ cleanup runs from the handles it registered). It has the grace left, and should 
 hasn't finished by then is killed with it. Everything it started should be in its process group,
 or registered as a handle for the cleanup.
 
-**In Python**, `schedr.extension` turns `SIGTERM` into a cancellation of the plugin's coroutine:
+**In Python**, `schedr_extension` turns `SIGTERM` into a cancellation of the plugin's coroutine:
 `asyncio.CancelledError` is raised at the `await` it is waiting on.
 
 ```python
 import asyncio
 
-from schedr.extension import ExtensionChannel, ExtensionRequest, main
+from schedr_extension import ExtensionChannel, ExtensionRequest, main
 
 async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
     job = submit(request.payload)
@@ -349,13 +359,13 @@ something to undo is a plugin.
 
 ## Building a plugin in Python
 
-A plugin is a program the worker runs for each attempt. In Python, `schedr.extension` is its whole
+A plugin is a program the worker runs for each attempt. In Python, `schedr_extension` is its whole
 loop: you write a coroutine that does the task, and `main` speaks the protocol around it.
 
 1. Write the program (`schedr-ext-spark`, executable, `schedr` installed beside it):
 
    ```python
-   from schedr.extension import ExtensionChannel, ExtensionRequest, main
+   from schedr_extension import ExtensionChannel, ExtensionRequest, main
 
    async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
        token = await channel.secret("spark/api", "token")
@@ -491,6 +501,7 @@ service_secrets = [{path = "spark/api", key = "token"}]
 | `service_restarts` | `5` | Restarts within `service_settle` before the extension is turned off on the worker |
 | `service_settle` | `24h` | The window restarts count in, and how long it stays off |
 | `service_secrets` | none | The secrets it is given at each start, never in its environment |
+| `builtin_service_metrics` | `true` | Which [built-in metrics](#its-built-in-metrics) are collected: `true` all three, `false` none, or a list of their names |
 
 **Its life on a worker:**
 
@@ -527,7 +538,7 @@ newest version it serves.
 1. Write it:
 
    ```python
-   from schedr.extension import ServiceAttempt, ServiceContext, serve
+   from schedr_extension import ServiceAttempt, ServiceContext, serve
 
    # What the attempts share: one client, logged in once, and a watch it keeps.
    state = {"client": None, "context": None, "paused": False, "jobs": {}}
@@ -618,6 +629,39 @@ service is a counter its attempts share (`examples/extensions/dummy/schedr-ext-d
 --service`, configured by `make standalone`; `extension_service` in
 `examples/extensions/dummy_extension.py` runs three attempts against it).
 
+### Its built-in metrics
+
+schedr measures three things of every service itself, with nothing for its author to declare or
+send:
+
+| Metric | Kind | What | Measured by |
+|---|---|---|---|
+| `service_memory_bytes` | gauge, bytes | Its processes' memory together, as its `service_memory` limit counts it | the worker, at each memory check |
+| `service_accept_seconds` | histogram, seconds | From an attempt's connection handed to it to its `attempt_accepted` | the worker |
+| `service_call_seconds` | histogram, seconds, by `method` | How long it took to answer each call, failed ones too | Python's `serve`, sent once a second |
+
+They are the extension's metrics like its own, kept under the newest version it serves: on the
+worker's `/metrics`, and on the extension's page. They are collected once that version is declared
+on the worker, by its `[extensions.<name>] metrics` or its plugin's first run there: a worker
+that hasn't run one of its tasks yet shows none (declared alone, they would hide the plugin's own
+metrics from the page). Only the worker measures memory and accept times; a service sends its
+calls' times and no other `service_*` point, and a plugin none. A panel draws one by its name, as any metric,
+in the plugin's `PANELS` or the worker's `[extensions.<name>] panels`:
+
+```toml
+panels = [{title = "Service memory", metric = "service_memory_bytes", chart = "number",
+           row = 1, cell = "left", combine = "max"}]
+```
+
+Those no panel names share one **Service** row at the bottom of the page: memory a line (the
+largest worker's on **All workers**), the two times as quantiles. Names starting with `service_`
+are schedr's: a plugin or a config declaring one is refused. A `method` takes as many series as
+`max_series` allows, the rest folded into `other`.
+
+`builtin_service_metrics` turns them off: `false` for none, or the names of those to keep
+(`["service_memory_bytes", "service_call_seconds"]`); one left out isn't collected at all, and an
+unknown name is refused when the configuration is read.
+
 ## Building a service in another language
 
 A service in any language speaks the service part of [the plugin
@@ -634,8 +678,12 @@ protocol](22-plugin-protocol.md#a-service): length-prefixed JSON over the inheri
    next unaccepted. Answer `drained` and `resumed` as it needs (no answer is expected), and exit
    on `SIGTERM`.
 
+Its [built-in](#its-built-in-metrics) `service_call_seconds` is Python's `serve`'s to send: a
+service in another language sends it as a plain `metrics` message of points named so, a `method`
+label each, if it wants it.
+
 The protocol page's [messages](22-plugin-protocol.md#every-message) list every message both
-ways. `python/schedr/_service.py` is a complete service in about 300 lines, to read beside it.
+ways. `python/schedr_extension/_service.py` is a complete service in about 300 lines, to read beside it.
 
 
 ## The Kubernetes plugin

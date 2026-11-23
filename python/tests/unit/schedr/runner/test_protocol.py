@@ -94,7 +94,7 @@ def test_receive_rejects_broken_input(
 def test_send_rejects_messages_over_the_limit(
     pair: tuple[Channel, socket.socket], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("schedr.runner.protocol.MAX_MESSAGE_SIZE", 10)
+    monkeypatch.setattr("schedr_extension._protocol.MAX_MESSAGE_SIZE", 10)
     channel, _ = pair
     with pytest.raises(ProtocolError, match="is over the limit of 10 bytes"):
         channel.send({"type": "too long for ten"})

@@ -242,7 +242,8 @@ def _process(
     request: Mapping[str, Any], channel_fd: int, stdout_fd: int, stderr_fd: int
 ) -> NoReturn:
     """The forked process: set up as a spawned runner would be, then run the runner."""
-    from schedr.runner.main import EXIT_ERROR, FD_ENV, main  # noqa: PLC0415 - main imports us
+    from schedr.runner.main import EXIT_ERROR, main  # noqa: PLC0415 - main imports us
+    from schedr.runner.protocol import FD_ENV  # noqa: PLC0415
 
     code = EXIT_ERROR
     own_exit_handlers = False

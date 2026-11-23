@@ -3606,3 +3606,68 @@ async fn started_runs_and_posted_events_are_announced_once() {
     db.mark_events_announced(&ids).await.unwrap();
     assert_eq!(db.unannounced_named_events(10).await.unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn a_flush_of_reports_keeps_only_its_workers_attempts_on_postgres() {
+    use schedr_db::extension_samples::SeenVersion;
+    use schedr_db::reports::{AttemptLink, AttemptStatus, ReportedLink, ReportedStatus};
+    let (db, _run_id) = with_instances().await;
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt_id, _) = db
+        .assign_attempt(&ready[0].instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let status = |worker: &str, phase: &str| ReportedStatus {
+        attempt_id: attempt_id.clone(),
+        worker_id: worker.to_owned(),
+        extension: "dummy".to_owned(),
+        status: AttemptStatus {
+            at: ts(NOW),
+            phase: phase.to_owned(),
+            message: None,
+            progress: Some(0.5),
+        },
+    };
+    let link = |worker: &str, url: &str| ReportedLink {
+        attempt_id: attempt_id.clone(),
+        worker_id: worker.to_owned(),
+        link: AttemptLink {
+            label: "Pod".to_owned(),
+            url: url.to_owned(),
+        },
+    };
+    // Another worker's reports of it aren't kept (decision 521: its owner checked as stored).
+    let kept = db
+        .add_attempt_reports(
+            &[status("w1", "running"), status("w2", "forged")],
+            &[link("w1", "https://a"), link("w2", "https://forged")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept, (1, 1));
+    // A label's URL replaced.
+    assert_eq!(
+        db.add_attempt_reports(&[], &[link("w1", "https://b")])
+            .await
+            .unwrap(),
+        (0, 1)
+    );
+    let (statuses, links) = db.attempt_reports(&attempt_id).await.unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].phase, "running");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].url, "https://b");
+    db.extensions_seen(
+        &[SeenVersion {
+            name: "dummy".to_owned(),
+            version: "1.0".to_owned(),
+            worker_id: "w1".to_owned(),
+            declared: Some((schedr_model::extension::Declarations::default(), 50)),
+        }],
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    assert_eq!(db.extension_versions().await.unwrap().len(), 1);
+}

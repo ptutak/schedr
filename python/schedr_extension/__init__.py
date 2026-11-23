@@ -5,7 +5,7 @@ slot. It speaks the runner protocol over the socket the worker hands it (``SCHED
 a ``hello`` naming the protocol version, then one ``extension_task`` request, answered with
 ``task_succeeded`` or ``task_failed``. This module is that loop; a plugin gives it a coroutine::
 
-    from schedr.extension import ExtensionChannel, ExtensionRequest, main
+    from schedr_extension import ExtensionChannel, ExtensionRequest, main
 
     async def run(request: ExtensionRequest, channel: ExtensionChannel) -> object:
         token = await channel.secret("spark/api", "token")
@@ -28,17 +28,20 @@ each ``schedr-ext-*`` on its ``PATH``.
 
 import asyncio
 import contextlib
+import importlib
 import json
 import os
 import signal
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
-from schedr._serialization import CodecError, check_size
-from schedr._service import (
+from schedr_extension._errors import error_summary
+from schedr_extension._log import install as install_structured_logging
+from schedr_extension._output import CodecError, check_size
+from schedr_extension._protocol import FD_ENV, Channel, ProtocolError, from_fd
+from schedr_extension._service import (
     SERVICE_FD_ENV,
     ServiceAttempt,
     ServiceCalls,
@@ -46,11 +49,6 @@ from schedr._service import (
     ServiceError,
     serve,
 )
-from schedr.log import install as install_structured_logging
-from schedr.runner.main import FD_ENV
-from schedr.runner.parse import import_error
-from schedr.runner.protocol import Channel, ProtocolError, from_fd
-from schedr.types import Json
 
 __all__ = [
     "PROTOCOL",
@@ -80,7 +78,7 @@ type ExtensionJson = (
 """Decoded JSON, as the worker sends it: what a plugin is given (its payload, the run, its
 handles, a secret, a connection's values, an API answer).
 
-Precise where :data:`schedr.types.Json` (what a task may return) is lenient: a ``dict``'s values
+Precise where ``schedr.types.Json`` (what a task may return) is lenient: a ``dict``'s values
 narrow to ``ExtensionJson``, not ``object``, so a plugin reads its payload with ``isinstance``
 checks alone.
 """
@@ -414,7 +412,7 @@ class ExtensionChannel:
             raise ExtensionError("unexpected", f"expected `stop_reason`, got `{answer['type']}`")
         return answer.get("reason"), int(answer.get("grace_ms", 0)) / 1000
 
-    async def add_handle(self, handle_type: str, value: Json) -> None:
+    async def add_handle(self, handle_type: str, value: ExtensionJson) -> None:
         """Registers what the cleanup needs, made by this attempt (a job's ID, a pod's name).
 
         Kept by the worker as it is registered: a worker lost after it still has it, and its
@@ -449,7 +447,12 @@ class ExtensionChannel:
         return self._service
 
     async def api(
-        self, method: str, path: str, body: Json = None, *, idempotency_key: str | None = None
+        self,
+        method: str,
+        path: str,
+        body: ExtensionJson = None,
+        *,
+        idempotency_key: str | None = None,
     ) -> tuple[int, ExtensionJson]:
         """A call to schedr's REST API, made by the master as the task (``schedr.api``'s).
 
@@ -475,7 +478,23 @@ type Run = Callable[[ExtensionRequest, ExtensionChannel], Awaitable[object]]
 """A plugin's task or cleanup: given the request and the channel, returns the output."""
 
 
+# The frames before a plugin's own code: this package's and `importlib`'s.
+_INTERNAL = (
+    os.path.dirname(os.path.abspath(__file__)) + os.sep,
+    os.path.dirname(os.path.abspath(importlib.__file__)) + os.sep,
+    "<frozen importlib",
+)
+
+
+def import_error(error: BaseException) -> dict[str, str]:
+    """`error` as sent to the agent, its traceback from the plugin's code on."""
+    return error_summary(error, _INTERNAL)
+
+
 def _plugin_version() -> str:
+    # Imported here: `importlib.metadata` costs a plugin's start, and only the hello needs it.
+    from importlib.metadata import PackageNotFoundError, version  # noqa: PLC0415
+
     try:
         return version("schedr")
     except PackageNotFoundError:
@@ -535,7 +554,7 @@ def main(
         return _EXIT_USAGE
     channel = from_fd(int(value))
     try:
-        declared: dict[str, Json] = {}
+        declared: dict[str, object] = {}
         if metrics:
             declared["metrics"] = [dict(m) for m in metrics]
         if panels:
@@ -558,10 +577,10 @@ def _serve(
     channel: Channel,
     run: Run,
     cleanup: Run | None,
-    given: tuple[Mapping[str, Json], ServiceCalls | None],
+    given: tuple[Mapping[str, object], ServiceCalls | None],
 ) -> int:
     declared, service = given
-    hello: dict[str, Json] = {
+    hello: dict[str, object] = {
         "type": "hello",
         "schedr_version": _plugin_version(),
         "mode": "extension",

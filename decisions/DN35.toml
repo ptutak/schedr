@@ -1,0 +1,17 @@
+title = "A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr"
+date = 2026-11-23
+by = "user"  # user, claude
+on = "D518"
+kind = "adds"  # corrects (update the decision's summary too), adds
+summary = '''
+schedr measures every service itself: `service_memory_bytes` (a gauge, the worker's measure at
+each memory check), `service_accept_seconds` (a histogram, an attempt's connection to its
+`attempt_accepted`, timed by the worker) and `service_call_seconds{method}` (a histogram, each
+call timed by Python's `serve`, sent once a second as plain metric points). schedr declares them
+beside the extension's own; names starting with `service_` are schedr's, a hello or a config
+declaring one refused. A panel places one by name; those no panel names share one Service row at
+the bottom of the page (memory a line, `combine: max`; the times quantiles).
+`[extensions.<name>] builtin_service_metrics`: `true` (all, the default), `false`, or the names
+kept; one left out isn't collected, an unknown name refused at load.
+'''
+history = "JOURNAL.md#DN35"

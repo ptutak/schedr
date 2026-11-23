@@ -70,6 +70,23 @@ const TURN_MESSAGES: MetricDoc = MetricDoc {
     labels: &["part"],
     help: "How many messages each part of a worker's turn handled",
 };
+const EXTENSION_QUERY: MetricDoc = MetricDoc {
+    name: "master_extension_query_seconds",
+    kind: MetricKind::Histogram,
+    labels: &["query"],
+    help: "How long each write of extensions' reports took, off the master's round (decision \
+        521; reports: a flush's attempt statuses and links, seen: the versions' seen times and \
+        declarations, series: the hour's series read, minutes: the minute's samples merged, \
+        events: their events)",
+};
+const EXTENSION_REPORTS_DROPPED: MetricDoc = MetricDoc {
+    name: "master_extension_reports_dropped",
+    kind: MetricKind::Counter,
+    labels: &["reason"],
+    help: "Extensions' reports the master dropped rather than be slowed by them (decision 521; \
+        full: its queue was full, failed: their write failed, slow: their write took too long, \
+        many: events past what a flush keeps of one extension)",
+};
 const RUNS: MetricDoc = MetricDoc {
     name: "runs",
     kind: MetricKind::Gauge,
@@ -265,6 +282,8 @@ pub const METRICS: &[MetricDoc] = &[
     TURN_PART,
     TURN_MESSAGES,
     ROUND_PART,
+    EXTENSION_QUERY,
+    EXTENSION_REPORTS_DROPPED,
     RUNS,
     RUNS_FINISHED,
     RUNS_LATE_FAILED,
@@ -375,6 +394,13 @@ pub struct PartLabels {
 
 type Histograms<L> = Family<L, Histogram, fn() -> Histogram>;
 
+/// A query, of those timed.
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct QueryLabels {
+    /// Its name: see `master_extension_query_seconds`.
+    pub query: String,
+}
+
 /// The master's metrics (cheap to clone; clones share them).
 #[derive(Debug, Clone)]
 pub struct MasterMetrics {
@@ -390,6 +416,10 @@ pub struct MasterMetrics {
     pub turn_messages: Histograms<PartLabels>,
     /// How long each part of a round took.
     pub round_part: Histograms<PartLabels>,
+    /// How long each write of extensions' reports took, by query.
+    pub extension_query: Histograms<QueryLabels>,
+    /// Extensions' reports dropped, by reason.
+    pub extension_reports_dropped: Family<ReasonLabels, Counter>,
     /// Runs by state and kind.
     pub runs: Family<RunLabels, Gauge>,
     /// Runs finished, by DAG and result.
@@ -476,6 +506,10 @@ impl Default for MasterMetrics {
             round_part: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(0.0001, 2.0, 19))
             }),
+            extension_query: Family::new_with_constructor(|| {
+                Histogram::new(exponential_buckets(0.0001, 2.0, 19))
+            }),
+            extension_reports_dropped: Family::default(),
             // 1 to 128 messages.
             turn_messages: Family::new_with_constructor(|| {
                 Histogram::new(exponential_buckets(1.0, 2.0, 8))
@@ -528,6 +562,34 @@ impl MasterMetrics {
             self.turn_messages.clone(),
         );
         r.register(ROUND_PART.name, ROUND_PART.help, self.round_part.clone());
+        r.register(
+            EXTENSION_QUERY.name,
+            EXTENSION_QUERY.help,
+            self.extension_query.clone(),
+        );
+        r.register(
+            EXTENSION_REPORTS_DROPPED.name,
+            EXTENSION_REPORTS_DROPPED.help,
+            self.extension_reports_dropped.clone(),
+        );
+    }
+
+    /// Records a write of extensions' reports, `query`, that took `took`.
+    pub fn extension_query_done(&self, query: &str, took: Duration) {
+        self.extension_query
+            .get_or_create(&QueryLabels {
+                query: query.to_owned(),
+            })
+            .observe(took.as_secs_f64());
+    }
+
+    /// Counts `count` extensions' reports dropped for `reason`.
+    pub fn count_extension_dropped(&self, reason: &str, count: u64) {
+        self.extension_reports_dropped
+            .get_or_create(&ReasonLabels {
+                reason: reason.to_owned(),
+            })
+            .inc_by(count);
     }
 
     /// Records a wait of `took` for the core lock by `by`.

@@ -41,7 +41,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from schedr.extension import (
+from schedr_extension import (
     ExtensionChannel,
     ExtensionJson,
     ExtensionRequest,
@@ -53,7 +53,6 @@ from schedr.extension import (
     main,
     serve,
 )
-from schedr.types import Json
 
 
 def _parts(value: ExtensionJson, count: int, step: str) -> list[ExtensionJson]:
@@ -193,9 +192,9 @@ STEPS: dict[str, Callable[[ExtensionChannel, ExtensionJson], Awaitable[None]]] =
 }
 
 
-async def run(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
+async def run(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
     """Does the payload's steps."""
-    output: Json = None
+    output: ExtensionJson = None
     steps = request.payload if isinstance(request.payload, list) else [request.payload]
     for step in steps:
         if not isinstance(step, dict) or len(step) != 1:
@@ -212,7 +211,7 @@ async def run(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
     return output
 
 
-async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> Json:
+async def cleanup(request: ExtensionRequest, channel: ExtensionChannel) -> ExtensionJson:
     """Prints the handles it was given: what a real cleanup would undo."""
     del channel
     for handle in request.handles:

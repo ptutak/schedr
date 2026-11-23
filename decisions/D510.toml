@@ -25,7 +25,7 @@ slot (decision note 15: no watcher-slot form, as decision 512 rules out work sha
 The Python helper's API is a coroutine (`async def run(request, channel)`) its `main` runs in a
 process. A plugin registers handles as it runs, and after any end of the attempt, a lost
 worker's too, the worker runs the plugin's cleanup with them (`extension_cleanup`), as a Python
-task's cleanup: what a `@sensor` can't (no `cleanup=`, no handles, decision 323). For authors: `schedr.extension` (Python) and a published Rust crate of the
+task's cleanup: what a `@sensor` can't (no `cleanup=`, no handles, decision 323). For authors: `schedr_extension` (Python) and a published Rust crate of the
 protocol's types and loop; an example plugin, a Python dummy, a worker test.
 '''
 history = "JOURNAL.md#D510"

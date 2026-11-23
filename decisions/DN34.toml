@@ -1,0 +1,14 @@
+title = "The Python plugin and service API is the package schedr_extension, which imports nothing of schedr"
+date = 2026-11-23
+by = "user"  # user, claude
+on = "D510"
+kind = "corrects"  # corrects (update the decision's summary too), adds
+summary = '''
+A plugin's and a service's Python helpers are the top-level package `schedr_extension`, in the
+same `schedr` distribution on PyPI (one `pip install schedr`), and it imports nothing of the
+`schedr` package: importing `schedr.extension` loaded schedr's whole DAG API, about 1.3 s of a
+plugin's 1.6 s start (B283). `schedr.extension` is gone (never released); the DAG side
+(`ExtensionTask`) stays in `schedr`. The runner protocol's framing, structured logging, the output
+size check and the error summary live in `schedr_extension`, and `schedr` imports them from it.
+'''
+history = "JOURNAL.md#DN34"

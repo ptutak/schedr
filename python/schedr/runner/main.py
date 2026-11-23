@@ -9,9 +9,7 @@ from schedr.runner.fork_server import run_fork_server
 from schedr.runner.parse import run_parse
 from schedr.runner.protocol import Channel, ProtocolError, from_fd
 from schedr.runner.task import run_task
-
-FD_ENV = "SCHEDR_AGENT_FD"
-"""The environment variable with the descriptor of the socket the agent handed over."""
+from schedr_extension._protocol import FD_ENV
 
 MODES = ("parse", "task", "fork_server", "watchers")
 """The modes the runner can be started in."""

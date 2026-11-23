@@ -9,7 +9,7 @@ Beside its per-attempt plugins, an extension may have a service: one long-runnin
 worker for what its attempts share (a client, a watch, a warm session), configured as
 `[extensions.<name>] service = ["cmd", ...]` beside `command`; without it nothing changes. Any
 program speaking our protocol over its control socket (`SCHEDR_SERVICE_FD`); in Python the
-functions of `schedr.extension`: `serve(on_call, start=, on_closed=, stop=, name=, versions=)`.
+functions of `schedr_extension`: `serve(on_call, start=, on_closed=, stop=, name=, versions=)`.
 It says `hello`, then `ready` within `service_ready_timeout` (60 s; else a crash); the worker
 offers the extension's versions only while it is ready, only those it serves. Each attempt gets
 a private connection (option C): a socket pair, one end the plugin's, the other passed to the
@@ -35,7 +35,7 @@ code = [
   "crates/schedr-agent/src/agent.rs::service_link",
   "crates/schedr/src/roles.rs::service_specs",
   "crates/schedr/src/roles.rs::services_memory",
-  "python/schedr/_service.py",
+  "python/schedr_extension/_service.py",
   "crates/schedr/src/shell_plugin.rs",
 ]
 checked = 2026-11-23

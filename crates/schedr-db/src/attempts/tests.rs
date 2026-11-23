@@ -876,3 +876,74 @@ async fn an_attempts_reports_keep_the_first_and_latest_statuses_and_links_by_lab
         []
     );
 }
+
+#[tokio::test]
+async fn a_flush_of_reports_keeps_only_its_workers_attempts_and_trims_as_one_by_one() {
+    use crate::reports::{
+        AttemptLink, AttemptStatus, MAX_LINKS, MAX_STATUSES, ReportedLink, ReportedStatus,
+    };
+    let (db, _run_id) = with_run().await;
+    let instance_id = db.ready_instances(ts(NOW)).await.unwrap()[0]
+        .instance_id
+        .clone();
+    let (attempt, _) = db
+        .assign_attempt(&instance_id, "w1", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let status = |worker: &str, n: i64| ReportedStatus {
+        attempt_id: attempt.clone(),
+        worker_id: worker.to_owned(),
+        extension: "dummy".to_owned(),
+        status: AttemptStatus {
+            at: ts(NOW),
+            phase: format!("phase {n}"),
+            message: None,
+            progress: None,
+        },
+    };
+    let link = |worker: &str, label: &str| ReportedLink {
+        attempt_id: attempt.clone(),
+        worker_id: worker.to_owned(),
+        link: AttemptLink {
+            label: label.to_owned(),
+            url: "https://x".to_owned(),
+        },
+    };
+    let statuses: Vec<ReportedStatus> = (0..=MAX_STATUSES).map(|n| status("w1", n)).collect();
+    let links: Vec<ReportedLink> = (0..=MAX_LINKS)
+        .map(|n| link("w1", &format!("l{n}")))
+        .collect();
+    let kept = db.add_attempt_reports(&statuses, &links).await.unwrap();
+    assert_eq!(
+        kept,
+        (
+            usize::try_from(MAX_STATUSES + 1).unwrap(),
+            usize::try_from(MAX_LINKS).unwrap()
+        ),
+        "past MAX_LINKS, a new label isn't kept"
+    );
+    // Another worker's aren't kept: the attempt isn't its (decision 521).
+    assert_eq!(
+        db.add_attempt_reports(&[status("w2", 999)], &[link("w2", "l0")])
+            .await
+            .unwrap(),
+        (0, 0)
+    );
+    let (stored, links) = db.attempt_reports(&attempt).await.unwrap();
+    assert_eq!(stored.len(), usize::try_from(MAX_STATUSES).unwrap());
+    assert_eq!(stored[0].phase, "phase 0");
+    assert_eq!(stored[1].phase, "phase 2", "the second oldest went");
+    assert_eq!(links.len(), usize::try_from(MAX_LINKS).unwrap());
+    // Ended meanwhile: its worker's last reports, sent before its end, still kept.
+    let failed = AttemptEnd::by_master(schedr_model::AttemptStatus::Failed);
+    db.end_attempts(&[(attempt.as_str(), &failed)], ts(NOW))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.add_attempt_reports(&[status("w1", 1000)], &[])
+            .await
+            .unwrap(),
+        (1, 0)
+    );
+}

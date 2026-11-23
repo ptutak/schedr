@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from schedr.runner.parse import (
-    TRACEBACK_LINES,
     extend_sys_path,
     file_result,
     import_dag_entries,
@@ -17,6 +16,7 @@ from schedr.runner.parse import (
     run_parse,
 )
 from schedr.runner.protocol import Channel
+from schedr_extension._errors import TRACEBACK_LINES
 
 SYNC = """
 from schedr import Dag, EmptyOperator, task
@@ -150,7 +150,7 @@ def test_import_error_keeps_the_type_message_and_traceback_tail(
     assert lines[-1] == "ValueError: bad value"
     assert len(lines) <= TRACEBACK_LINES
 
-    monkeypatch.setattr("schedr.runner.parse.TRACEBACK_LINES", 2)
+    monkeypatch.setattr("schedr_extension._errors.TRACEBACK_LINES", 2)
     assert len(import_error(info.value)["traceback"].splitlines()) == 2
 
 

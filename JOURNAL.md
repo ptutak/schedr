@@ -3194,3 +3194,68 @@ Claude's, building M5.2i11 alone (the user asleep, the night pre-accepted):
 - The plan's "two workers show a cluster-wide gauge once with `combine: max`" isn't shown on kind:
   `make demo-kind` runs one standalone, and standalone's in-memory TLS (M5.2i14) admits no outside
   worker. The panels declare `combine: max`; M5.2i10's tests show the combining.
+
+### 2026-11-23: M5.2i12's choices (extensions' reports off the master's round, D521)
+
+The user's (2026-11-23, "B"): an attempt's statuses are coalesced by phase within a flush, its
+consecutive statuses of one phase stored as the newest, each phase change kept. Not chosen: the
+newest status per attempt per flush (the plan's first wording: it lost phases, `preparing →
+copying → done` stored as `preparing, done`), nor no coalescing (up to ten rows a second per
+attempt, the worker's rate, filling the 100 kept and pushing out the history's middle).
+
+Claude's, building it alone (the night pre-accepted):
+
+- A report's owner is checked in the statement that stores it (`EXISTS` on the attempt and its
+  worker), no read first; an attempt ended meanwhile still takes its worker's reports: written off
+  the round, the last ones (sent before its end) come after it. Not chosen: the dispatcher's
+  memory (the writer has none of its own), nor keeping the "still open" check (it dropped the last
+  phase and link of every attempt).
+- The writer writes at most once a second (`SCHEDR_HIDDEN__MASTER__EXTENSION_FLUSH_INTERVAL`), each
+  part within 2 s (`..._EXTENSION_WRITE_TIMEOUT`), its queue 10 000 reports
+  (`..._EXTENSION_QUEUE`), 100 events of one extension a flush (`..._EXTENSION_EVENTS_PER_FLUSH`);
+  hidden values, as the other limits of what workers report.
+- A flush's parts: the attempts' statuses and links in one transaction, the versions' seen times
+  in another (each at most once a minute, its declarations whenever sent), the minute's samples
+  merged with one read per minute, the events in multi-row inserts and one trim per extension.
+- Drops are counted by reason (`full`, `failed`, `slow`, `many`) in
+  `master_extension_reports_dropped`, and warned of at most once a minute per reason.
+- The done-when's "a master whose database is slowed keeps its round time" is shown at the
+  writer: SQLite's write lock held by another connection, 1000 reports handed over in well under
+  a second, dropped as `full` and `slow`, written again once the lock goes. What handing over costs
+  the round is nothing but a queue's `try_send`.
+- Scenario 25 measures the reports from what the master stored (rows a second, minute samples,
+  drops), not new worker metrics.
+
+### <a id="DN34"></a>2026-11-23: The Python plugin and service API is the package schedr_extension, which imports nothing of schedr (decision note 34; corrects D510)
+
+The user, 2026-11-23: "we could just make it a separate package", then "if it's possible let's
+use one pypi index for both, but let's separate imports by package", "schedr_extension accepted",
+and asking why `schedr.extension` should stay: it never shipped, so it is gone, not re-exported
+(a re-export would keep the slow import within reach). Measured: `import schedr_extension` 0.3 s
+against `schedr.extension`'s 1.6 s on the same machine, no `schedr` module loaded. D518's
+mention of the old name corrected with it.
+
+### <a id="DN35"></a>2026-11-23: A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr (decision note 35; adds to D518)
+
+The user, 2026-11-23: "we should send 2 basic metrics for long-running services for free:
+memory, and call response time", then "all three in i12", "builtin_service_metrics, stops
+collecting, someone might want to keep only one of the three (two)?". Built in M5.2i12.
+
+### <a id="DN36"></a>2026-11-23: An attempt's statuses written off the round are coalesced by phase (decision note 36; adds to D521)
+
+The user, 2026-11-23: "B", of three laid out (the newest per attempt, every status, coalesced by
+phase), after the first, the plan's wording, lost a phase in the shell plugin's test.
+- After agy's and Grok's reviews: the built-in service metrics are collected once their version
+  is declared on the worker (its config's metrics or a plugin's first run there), never declared
+  alone: an idle worker's built-ins-only declarations, the newest heard, hid the plugin's metrics
+  and dropped its 7- and 30-day views. A service's memory therefore shows from that worker's
+  first task of the extension on. Only the worker measures memory and accept times; a service
+  sends its call times only, a plugin no `service_*` point. Not done: the writer pausing when
+  its master stops leading, as agy suggested: its writes are fenced, refused once another master
+  leads, and dropped within their 2 s.
+- Scenario 25 runs four times (plain, Python tasks, no-op extension tasks, extension tasks), the
+  user noting that the tasks themselves, not the extension, may be what is slow: a process per
+  task is most of either's cost on a saturated machine (idle, a task's end reaches the master in
+  13-26 ms). Not a comparison of kinds: the extension run is half shell scripts, and its Python
+  tasks are spawned, not forked (corrected 2026-11-23 after the user asked whether extensions
+  really ran faster than native Python).

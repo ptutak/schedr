@@ -80,6 +80,12 @@ pub struct Timings {
     /// How long a lost worker's cleanup waits, on top of the cancel grace, before it moves: a
     /// worker only cut off has stopped the task by then (decision 256).
     pub cleanup_move_wait: Duration,
+    /// How often the master's writer of extensions' reports writes what was queued (decision
+    /// 521): their writes at most this often.
+    pub extension_flush_interval: Duration,
+    /// The longest one write of extensions' reports may take; past it, they are dropped
+    /// (decision 521), so a slow database never holds them up for long.
+    pub extension_write_timeout: Duration,
     /// How often a master whose listening for commands failed to start (the database too slow
     /// to check for a pooler, or unreachable) tries again; it polls meanwhile.
     pub listen_retry: Duration,
@@ -290,6 +296,8 @@ impl Default for Timings {
             set_aside: Duration::from_mins(1),
             handed_call_min: Duration::from_mins(1),
             cleanup_move_wait: Duration::from_secs(10),
+            extension_flush_interval: Duration::from_secs(1),
+            extension_write_timeout: Duration::from_secs(2),
             listen_retry: Duration::from_mins(30),
             refresh_interval: Duration::from_secs(15),
             worker_connect_timeout: Duration::from_secs(5),
@@ -639,6 +647,12 @@ pub struct HiddenLimits {
     pub extension_events_pending: usize,
     /// The events the master keeps per extension, the newest. (`MASTER__EXTENSION_EVENTS_KEPT`)
     pub extension_events_kept: usize,
+    /// The extensions' reports the master holds for its writer (decision 521): past them, a
+    /// report is dropped, never waited for. (`MASTER__EXTENSION_QUEUE`)
+    pub extension_queue: usize,
+    /// The events of one extension the master's writer keeps of a flush, the rest dropped
+    /// (decision 521). (`MASTER__EXTENSION_EVENTS_PER_FLUSH`)
+    pub extension_events_per_flush: usize,
     /// The changes a slow event stream may fall behind by before it gets `refresh`. (`WEBSERVER__EVENTS_BACKLOG`)
     pub webserver_events_backlog: usize,
     /// The changes a slow browser may fall behind by before it gets `refresh`. (`UI__EVENTS_BACKLOG`)
@@ -695,6 +709,8 @@ impl Default for HiddenLimits {
             extension_reports_at_once: 50,
             extension_events_pending: 100,
             extension_events_kept: 200,
+            extension_queue: 10_000,
+            extension_events_per_flush: 100,
             webserver_events_backlog: 1024,
             ui_events_backlog: 1024,
             auth_remembered_max: 1000,
@@ -1909,6 +1925,42 @@ pub struct ExtensionPlugin {
     /// welcome, never in its environment; the service may ask for one of them again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_secrets: Vec<schedr_model::secret::SecretName>,
+    /// The built-in service metrics collected for its service: `true` (all three), `false`
+    /// (none), or the names of those kept (`["service_memory_bytes"]`); one left out isn't
+    /// collected at all.
+    #[serde(default)]
+    pub builtin_service_metrics: BuiltinServiceMetrics,
+}
+
+/// `[extensions.<name>] builtin_service_metrics`: all, none, or the ones named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum BuiltinServiceMetrics {
+    /// `true`: all three; `false`: none.
+    All(bool),
+    /// The names of those kept.
+    Named(Vec<String>),
+}
+
+impl Default for BuiltinServiceMetrics {
+    fn default() -> Self {
+        Self::All(true)
+    }
+}
+
+impl BuiltinServiceMetrics {
+    /// The names of those kept, in [`schedr_model::extension::BUILTIN_SERVICE_METRICS`]'s
+    /// order; a name not among them is left out (refused when the configuration is read).
+    #[must_use]
+    pub fn kept(&self) -> Vec<&'static str> {
+        schedr_model::extension::BUILTIN_SERVICE_METRICS
+            .into_iter()
+            .filter(|name| match self {
+                Self::All(all) => *all,
+                Self::Named(named) => named.iter().any(|n| n == name),
+            })
+            .collect()
+    }
 }
 
 const fn default_max_series() -> u32 {

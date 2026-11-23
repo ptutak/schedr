@@ -247,6 +247,36 @@ Under the lock (`assign_round`):
    **one transaction**: their `EVENT_POSTED` queued and the events marked. Nothing to
    announce: the two SELECTs only.
 
+### Not in the round: extensions' reports
+
+A worker's turn hands its extensions' reports to a queue and goes on (decision 521,
+`extension_reports.rs`): a heartbeat's figures and events (`Report::Figures`, `Report::Events`)
+and an attempt's statuses and links (`Report::Attempt`). The turn writes none of them, and holds
+the lock only for `try_send`; a full queue (`MASTER__EXTENSION_QUEUE`, 10 000) drops the report.
+A heartbeat's other parts (the worker heard from, its watcher hosts, its usage, its triggers)
+are still written in the turn (`heartbeat`, core.rs).
+
+The writer, a task of its own with no lock, takes what is queued at most once a
+`MASTER__EXTENSION_FLUSH_INTERVAL` (1 s) and writes it in parts, each within
+`MASTER__EXTENSION_WRITE_TIMEOUT` (2 s), timed as `schedr_master_extension_query_seconds{query}`:
+
+1. `reports`: the attempts' statuses and links, one transaction (`add_attempt_reports`): per
+   status an `INSERT ... SELECT ... WHERE EXISTS` (the attempt the worker's) and, when kept, the
+   trim `DELETE`; per link an `UPDATE`, then an `INSERT ... SELECT` when no row changed.
+   Consecutive statuses of one attempt and phase are one row.
+2. `series`: per metric not yet read this hour, `SELECT DISTINCT labels` (`extension_series_since`),
+   its own transaction.
+3. `seen`: the versions' seen times and declarations, one transaction (`extensions_seen`): an
+   `UPDATE` each (at most once a minute per extension, version and worker) or an upsert when
+   declarations came.
+4. `minutes`: the minute samples, one transaction (`add_extension_minutes`): one `SELECT` of the
+   minute's stored samples, then multi-row upserts of 500.
+5. `events`: one transaction (`insert_workers_extension_events`): multi-row inserts of 500, then
+   one trim `DELETE` per extension.
+
+A write failing or past its time drops its reports, counted in
+`schedr_master_extension_reports_dropped_total{reason}` (`full`, `failed`, `slow`, `many`).
+
 ## The round's trace
 
 M5.2g timed every step and point of the round with a trace of its own
@@ -268,6 +298,7 @@ The metrics (`/metrics` on the master's ops port; the stress report's `round_*` 
 | `schedr_master_round_part_seconds{part}` | Each part's time under the lock (`results`, `commands`, `scheduler`, `prepare`, `expire`, `assign`, `rest`; `triggers` is the trigger loop's). |
 | `schedr_master_core_lock_wait_seconds{by}` | The waits for the lock: `round`, `turn`, `register`, `triggers`, `stream`, `upload`, `restore`. |
 | `schedr_master_turn_part_seconds{part}` | A worker's turn under the lock: `rest` (heartbeats, warnings), `triggers` (each run of trigger messages, one transaction). |
+| `schedr_master_extension_query_seconds{query}` | Each write of extensions' reports, off the lock: `reports`, `series`, `seen`, `minutes`, `events`. |
 
 The round's time not in any part is the off-lock work: the results' and assign's reads before
 the lock, the probe, delivery, and the waits for the lock.

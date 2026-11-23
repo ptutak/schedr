@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 
-from schedr._service import ServiceAttempt, _frame, _read_frame
 from schedr.runner.protocol import Channel
+from schedr_extension._service import ServiceAttempt, _frame, _read_frame
 
 PLUGIN = (
     Path(__file__).parents[4] / "examples" / "extensions" / "kubernetes" / "schedr-ext-kubernetes"

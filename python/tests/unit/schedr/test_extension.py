@@ -16,7 +16,8 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 
-from schedr.extension import (
+from schedr.runner.protocol import Channel
+from schedr_extension import (
     PROTOCOL,
     ExtensionChannel,
     ExtensionError,
@@ -27,7 +28,6 @@ from schedr.extension import (
     Run,
     main,
 )
-from schedr.runner.protocol import Channel
 
 # The plugin protocol's schema (M5.2i4), generated from the Rust crate's types: what the helper
 # sends and what this test sends as the worker are both checked against it.
@@ -420,7 +420,7 @@ def test_the_hello_carries_the_declarations_and_describe_doesnt(
 
 _STOPPED_PLUGIN = """
 import asyncio, sys
-from schedr.extension import main
+from schedr_extension import main
 
 async def run(request, channel):
     print("waiting", flush=True)
@@ -512,3 +512,38 @@ def test_a_request_built_without_settings_takes_the_default_output_limit() -> No
     assert ExtensionRequest.from_message(message).max_output_size == 1024 * 1024
     message["task"]["settings"] = {"max_output_size": 64}
     assert ExtensionRequest.from_message(message).max_output_size == 64
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "schedr_extension",
+        "examples/extensions/dummy/schedr-ext-dummy",
+        "examples/extensions/kubernetes/schedr-ext-kubernetes",
+    ],
+)
+def test_a_plugin_imports_nothing_of_schedrs_dag_api(module: str) -> None:
+    """B283: `schedr.extension` loaded the whole `schedr` package, about 1.3 s of each plugin's
+    start; `schedr_extension` loads none of it, nor do the example plugins."""
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    root = Path(__file__).resolve().parents[4]
+    load = (
+        f"import importlib.machinery as m; m.SourceFileLoader('plugin', {str(root / module)!r})"
+        ".load_module()"
+        if "/" in module
+        else f"import {module}"
+    )
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; {load}; "
+            "print(sorted(m for m in sys.modules if m == 'schedr' or m.startswith('schedr.')))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert loaded == "[]"

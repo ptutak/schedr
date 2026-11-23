@@ -224,3 +224,53 @@ fn a_plugins_labels_declarations_and_the_events_they_make_are_masked() {
     assert!(!events.contains("s3cret"), "{events}");
     assert!(!format!("{:?}", reports.declarations()).contains("s3cret"));
 }
+
+/// Grok's review of M5.2i12: a plugin's points named as the worker's built-in service metrics
+/// never set them; the extension's own still count.
+#[test]
+fn a_plugin_cant_set_the_workers_builtin_metrics() {
+    let figures = crate::figures::Figures::default();
+    figures.set_builtins(
+        "k",
+        schedr_model::extension::BUILTIN_SERVICE_METRICS
+            .iter()
+            .filter_map(|name| schedr_model::extension::builtin_service_metric(name))
+            .collect(),
+    );
+    let reports = reports().figured(Figured {
+        figures: figures.clone(),
+        extension: "k".to_owned(),
+        version: "1".to_owned(),
+        configured: schedr_model::extension::Declarations::default(),
+        max_series: 100,
+    });
+    reports.declared(crate::channel::Declared {
+        declarations: serde_json::from_value(serde_json::json!({
+            "metrics": [{"name": "jobs", "kind": "counter", "help": "Jobs"}]
+        }))
+        .unwrap(),
+        dropped: None,
+    });
+    let point = |name: &str, value: f64| schedr_model::extension::MetricPoint {
+        name: name.to_owned(),
+        labels: std::collections::BTreeMap::new(),
+        value,
+    };
+    reports.metrics(&[
+        point("service_memory_bytes", 0.0),
+        point("service_accept_seconds", 30.0),
+        point("jobs", 1.0),
+    ]);
+    let sent = figures.take_figures();
+    let observed: Vec<&str> = sent[0]
+        .metrics
+        .iter()
+        .filter(|m| {
+            m.series
+                .iter()
+                .any(|s| s.value != 0.0 || s.counts.iter().sum::<u64>() > 0)
+        })
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(observed, ["jobs"]);
+}

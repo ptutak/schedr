@@ -7,25 +7,25 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2i12, M5.2i13, M5.2i4, M5.2j, M5.2k.
+- **Then:** M5.2i13, M5.2i4, M5.2j, M5.2k, R1.2.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 13; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely) (`BUGS.md`).
+- **Open bugs:** 12; first: B279 (medium/rare), B272 (medium/likely), B269 (medium/likely), B265 (medium/possible), B281 (low/likely) (`BUGS.md`).
 
 ## Recent
 
+- DN36 (2026-11-23): An attempt's statuses written off the round are coalesced by phase (adds to D521)
+- DN35 (2026-11-23): A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr (adds to D518)
+- DN34 (2026-11-23): The Python plugin and service API is the package schedr_extension, which imports nothing of schedr (corrects D510)
 - D521 (2026-11-23): Extensions never hold the master up: their reports are dropped first
 - DN33 (2026-11-23): A maintenance drain is told to a worker's services, which keep running (adds to D518)
-- DN32 (2026-11-22): A service answers each attempt's connection in time, timed by the worker (adds to D518)
-- DN31 (2026-11-22): A service whose attempts time out a few times in a row counts as crashed (adds to D518)
-- DN30 (2026-11-22): No stall check for a service: a hung one shows as its attempts timing out (corrects D518)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
+- M5.2i12 (2026-11-23): Stress 25: extension tasks under load, comparable with scenario 1
 - M5.2i11 (2026-11-23): The Kubernetes plugin widened: an async client with watches, and every panel kind
-- M5.2i8 (2026-11-22): Notifications: an extension's declared events; RUN_STARTED, TRIGGER_FIRED, EVENT_POSTED
 
 ## In progress
 
-- M5.2i11 finished, being pushed: the Kubernetes plugin on kubernetes_asyncio through its extension's service (watches of Jobs and pods, a Secret per Job, every chart kind, the service's pods gauge); agy's 8 findings fixed; kind passes. Its done-when's two-worker gauge can't be shown on kind (standalone's in-memory mTLS admits no outside worker), journaled. The night of 2026-11-23 pre-accepted (memory: night-2026-11-23): i12, i13, i4, then k and j alone, each pushed after review and checks. i12 grew (D521): extension writes off the master's round and batched, profiled; built-in service metrics (memory, accept, call time; `builtin_service_metrics`). B281 logged (services left out of a worker's memory split). For the user in the morning: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).
+- M5.2i12 finished, being pushed: extensions' reports off the master's round (D521; statuses coalesced by phase, DN36), built-in service metrics (DN35), plugins on `schedr_extension` (DN34, B283 fixed), stress 25 in four runs (extension tasks 3.1 to 11.9 tasks a second), a master-level round test; agy's 12 and Grok's 2 new findings fixed. Then i13 and i4, then k and j; M5.3c (a small `schedr-ctx`) after 1.2.0. The night of 2026-11-23's terms (memory: night-2026-11-23): each step reviewed, checked and pushed; a step measuring performance closes its gaps before the next. The GitLab mirror runs (its token until about 2027-11-23). For the user: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).
 
 ## Waiting for the user
 

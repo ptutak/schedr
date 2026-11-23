@@ -61,7 +61,7 @@ import aiohttp
 from kubernetes_asyncio import client, config, watch
 from kubernetes_asyncio.client.exceptions import ApiException
 
-from schedr.extension import (
+from schedr_extension import (
     ExtensionChannel,
     ExtensionJson,
     ExtensionRequest,

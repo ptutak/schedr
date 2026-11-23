@@ -10,6 +10,7 @@ pub mod core;
 pub mod discovery;
 pub mod dispatch;
 pub mod execution;
+pub mod extension_reports;
 #[cfg(test)]
 mod faults;
 pub mod figures;

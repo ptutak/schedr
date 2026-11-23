@@ -203,7 +203,12 @@ pub async fn accept_runner<S: AsyncRead + AsyncWrite + Unpin>(
         panels,
         notifications,
     };
-    if let Err(why) = schedr_model::extension::check_declarations(&declarations) {
+    // Its panels may draw any built-in: one its worker doesn't collect is dropped when the
+    // declarations are kept (`Figures::declare`).
+    if let Err(why) = schedr_model::extension::check_own_declarations(
+        &declarations,
+        &schedr_model::extension::BUILTIN_SERVICE_METRICS,
+    ) {
         tracing::warn!("a plugin's declarations not used: {why}");
         let dropped = Declared {
             declarations: Declarations::default(),

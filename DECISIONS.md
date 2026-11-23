@@ -33,6 +33,9 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN36 | 2026-11-23 | user | adds to D521 | An attempt's statuses written off the round are coalesced by phase |
+| DN35 | 2026-11-23 | user | adds to D518 | A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr |
+| DN34 | 2026-11-23 | user | corrects D510 | The Python plugin and service API is the package schedr_extension, which imports nothing of schedr |
 | DN33 | 2026-11-23 | user | adds to D518 | A maintenance drain is told to a worker's services, which keep running |
 | DN32 | 2026-11-22 | user | adds to D518 | A service answers each attempt's connection in time, timed by the worker |
 | DN31 | 2026-11-22 | user | adds to D518 | A service whose attempts time out a few times in a row counts as crashed |
@@ -71,7 +74,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D521 | 2026-11-23 | user | planned (M5.2i12) | task-processes | Extensions never hold the master up: their reports are dropped first |
+| D521 | 2026-11-23 | user | built M5.2i12 | task-processes | Extensions never hold the master up: their reports are dropped first |
 | D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
 | D518 | 2026-11-21 | user | built M5.2i9 | task-processes | An extension's service: one long-running process per worker beside its plugins |

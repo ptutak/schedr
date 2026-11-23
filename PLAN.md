@@ -279,7 +279,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i14 | A worker's identity bound to its certificate, standalone's ports under in-memory mTLS, and the trust model | done 2026-11-22 | D520 |
 | M5.2i9 | An extension's service: a long-running process per worker beside its plugins (decision 518) | done 2026-11-23 | D518 |
 | M5.2i11 | The Kubernetes plugin widened: an async client with watches, and every panel kind | done 2026-11-23 |  |
-| M5.2i12 | Stress 25: extension tasks under load, comparable with scenario 1 | planned | D521 |
+| M5.2i12 | Stress 25: extension tasks under load, comparable with scenario 1 | done 2026-11-23 | D521 |
 | M5.2i13 | Stress 21b: seeded random chaos aimed at extensions | planned |  |
 | M5.2i4 | The plugin protocol's specification, and a schema of just its messages | planned |  |
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
@@ -288,6 +288,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | R1.2 | Release 1.2.0 | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |
+| M5.3c | A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster | planned |  |
 
 ## M6: Airflow migration tools
 

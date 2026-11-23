@@ -33,6 +33,30 @@ pub struct AttemptLink {
     pub url: String,
 }
 
+/// A status a worker reported for one of its attempts, to store (decision 521).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportedStatus {
+    /// The attempt.
+    pub attempt_id: String,
+    /// The worker that reported it: kept only when the attempt is its.
+    pub worker_id: String,
+    /// The extension whose plugin reported it.
+    pub extension: String,
+    /// The status.
+    pub status: AttemptStatus,
+}
+
+/// A link a worker reported for one of its attempts, to store (decision 521).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedLink {
+    /// The attempt.
+    pub attempt_id: String,
+    /// The worker that reported it: kept only when the attempt is its.
+    pub worker_id: String,
+    /// The link.
+    pub link: AttemptLink,
+}
+
 impl Database {
     /// Appends a status to `attempt_id`'s, keeping at most [`MAX_STATUSES`]: past it, the
     /// oldest after the first goes, so the first phase and the latest stay.
@@ -124,6 +148,101 @@ impl Database {
                     true
                 }
             }
+        });
+        Ok(kept)
+    }
+
+    /// Stores a flush of reports at once (decision 521): one transaction, each kept only when
+    /// its attempt is the reporting worker's (checked in the statements, no read first), each
+    /// status appended as [`Self::add_attempt_status`] does and each link set as
+    /// [`Self::set_attempt_link`] does. How many of each were kept. An attempt ended meanwhile
+    /// still takes them: written off the round, its last reports, sent before its end, come
+    /// after it.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn add_attempt_reports(
+        &self,
+        statuses: &[ReportedStatus],
+        links: &[ReportedLink],
+    ) -> Result<(usize, usize), DbError> {
+        // The worker's attempt.
+        const OWNED: &str = "EXISTS (SELECT 1 FROM attempts WHERE id = $1{uuid} \
+            AND worker_id = $2)";
+        let add = format!(
+            "INSERT INTO attempt_statuses (attempt_id, seq, at, phase, message, progress, \
+             extension) SELECT $1{{uuid}}, COALESCE((SELECT MAX(seq) + 1 FROM attempt_statuses \
+             WHERE attempt_id = $1{{uuid}}), 0), $3{{ts}}, $4, $5, $6, $7 WHERE {OWNED}"
+        );
+        // Past MAX_STATUSES, the oldest after the first goes.
+        let drop_second = format!(
+            "DELETE FROM attempt_statuses WHERE attempt_id = $1{{uuid}} \
+             AND (SELECT COUNT(*) FROM attempt_statuses WHERE attempt_id = $1{{uuid}}) > {MAX_STATUSES} \
+             AND seq = (SELECT seq FROM attempt_statuses WHERE attempt_id = $1{{uuid}} \
+             ORDER BY seq LIMIT 1 OFFSET 1)"
+        );
+        let replace = format!(
+            "UPDATE attempt_links SET url = $4 WHERE attempt_id = $1{{uuid}} AND label = $3 \
+             AND {OWNED}"
+        );
+        let add_link = format!(
+            "INSERT INTO attempt_links (attempt_id, label, url, position) SELECT $1{{uuid}}, $3, \
+             $4, CAST((SELECT COUNT(*) FROM attempt_links WHERE attempt_id = $1{{uuid}}) AS INTEGER) \
+             WHERE {OWNED} AND (SELECT COUNT(*) FROM attempt_links WHERE attempt_id = $1{{uuid}}) \
+             < {MAX_LINKS}"
+        );
+        if statuses.is_empty() && links.is_empty() {
+            return Ok((0, 0));
+        }
+        let kept = in_tx!(self, |tx, backend| {
+            let mut kept = (0, 0);
+            for reported in statuses {
+                let status = &reported.status;
+                let added = crate::query::query(crate::query::sql_text(backend, &add))
+                    .bind(&reported.attempt_id)
+                    .bind(&reported.worker_id)
+                    .bind(db_time(status.at))
+                    .bind(&status.phase)
+                    .bind(status.message.as_deref())
+                    .bind(status.progress)
+                    .bind(&reported.extension)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                if added > 0 {
+                    kept.0 += 1;
+                    crate::query::query(crate::query::sql_text(backend, &drop_second))
+                        .bind(&reported.attempt_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
+            for reported in links {
+                let link = &reported.link;
+                let mut set = crate::query::query(crate::query::sql_text(backend, &replace))
+                    .bind(&reported.attempt_id)
+                    .bind(&reported.worker_id)
+                    .bind(&link.label)
+                    .bind(&link.url)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+                if set == 0 {
+                    set = crate::query::query(crate::query::sql_text(backend, &add_link))
+                        .bind(&reported.attempt_id)
+                        .bind(&reported.worker_id)
+                        .bind(&link.label)
+                        .bind(&link.url)
+                        .execute(&mut *tx)
+                        .await?
+                        .rows_affected();
+                }
+                if set > 0 {
+                    kept.1 += 1;
+                }
+            }
+            kept
         });
         Ok(kept)
     }

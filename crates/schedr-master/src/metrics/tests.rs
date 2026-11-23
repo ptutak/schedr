@@ -27,6 +27,8 @@ fn every_metric_is_registered_as_documented() {
     metrics.core_lock_waited("turn", Duration::from_millis(2));
     metrics.turn_part_done("started", 3, Duration::from_millis(5));
     metrics.round_part_done("assign", Duration::from_millis(7));
+    metrics.extension_query_done("statuses", Duration::from_millis(1));
+    metrics.count_extension_dropped("full", 1);
     metrics.run_finished("sync", &RunState::Success);
     metrics.run_late_failed("sync", "late_cleanup_failed");
     metrics.notification_sent("ops");

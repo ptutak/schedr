@@ -14,6 +14,19 @@ use crate::query::{db_time, from_json, in_tx, on_pool, parse_time, sql, sql_text
 /// The rows one insert writes at most: 8 parameters each.
 const ROWS_PER_INSERT: usize = 500;
 
+/// An extension version a worker was heard running, to record (decision 521).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeenVersion {
+    /// The extension.
+    pub name: String,
+    /// Its version.
+    pub version: String,
+    /// The worker.
+    pub worker_id: String,
+    /// Its declarations and series cap, when sent.
+    pub declared: Option<(Declarations, u32)>,
+}
+
 /// One extension version on one worker, as it last declared itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtensionVersion {
@@ -268,6 +281,52 @@ impl Database {
         Ok(())
     }
 
+    /// [`Self::extension_seen`] for each of `seen` (decision 521: a flush's in one transaction).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn extensions_seen(
+        &self,
+        seen: &[SeenVersion],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        const DECLARED: &str = "INSERT INTO extension_versions \
+            (name, version, worker_id, declarations, max_series, seen_at) \
+            VALUES ($1, $2, $3, $4, $5, $6{ts}) ON CONFLICT (name, version, worker_id) \
+            DO UPDATE SET declarations = $4, max_series = $5, seen_at = $6{ts}";
+        const SEEN: &str = "UPDATE extension_versions SET seen_at = $4{ts} \
+            WHERE name = $1 AND version = $2 AND worker_id = $3";
+        if seen.is_empty() {
+            return Ok(());
+        }
+        let now = db_time(now);
+        in_tx!(self, |tx, backend| {
+            for version in seen {
+                if let Some((declarations, max_series)) = &version.declared {
+                    crate::query::query(sql(backend, DECLARED))
+                        .bind(&version.name)
+                        .bind(&version.version)
+                        .bind(&version.worker_id)
+                        .bind(to_json(declarations))
+                        .bind(i64::from(*max_series))
+                        .bind(&now)
+                        .execute(&mut *tx)
+                        .await?;
+                } else {
+                    crate::query::query(sql(backend, SEEN))
+                        .bind(&version.name)
+                        .bind(&version.version)
+                        .bind(&version.worker_id)
+                        .bind(&now)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Every extension version workers ran, by name, version, then worker.
     ///
     /// # Errors
@@ -306,8 +365,10 @@ impl Database {
     ///
     /// [`DbError`] if the database fails, or a stored sample doesn't read.
     pub async fn add_extension_minutes(&self, samples: &[ExtensionSample]) -> Result<(), DbError> {
-        const STORED: &str = "SELECT metric, labels, data FROM extension_samples \
-            WHERE name = $1 AND version = $2 AND worker_id = $3 AND step_s = $4 AND at = $5{ts}";
+        // An extension's minute, all its workers' samples, in one read (decision 521): by the
+        // primary key's first columns (agy's review: without `name`, a whole table's scan).
+        const STORED: &str = "SELECT version, worker_id, metric, labels, data \
+            FROM extension_samples WHERE name = $1 AND step_s = $2 AND at = $3{ts}";
         type Key = (String, String, String, i64, String, String);
         let mut merged: BTreeMap<Key, ExtensionSample> = BTreeMap::new();
         for sample in samples {
@@ -333,33 +394,36 @@ impl Database {
         if merged.is_empty() {
             return Ok(());
         }
-        let groups: std::collections::BTreeSet<(String, String, String, i64)> = merged
+        let minutes: std::collections::BTreeSet<(String, i64)> = merged
             .keys()
-            .map(|(n, v, w, at, _, _)| (n.clone(), v.clone(), w.clone(), *at))
+            .map(|(name, _, _, at, _, _)| (name.clone(), *at))
             .collect();
         in_tx!(self, |tx, backend| {
             let mut rows: Vec<ExtensionSample> = Vec::new();
-            for (name, version, worker_id, at) in &groups {
-                let at = Timestamp::from_second(*at).unwrap_or(Timestamp::UNIX_EPOCH);
-                let stored: Vec<(String, String, String)> =
+            for (name, second) in &minutes {
+                let at = Timestamp::from_second(*second).unwrap_or(Timestamp::UNIX_EPOCH);
+                let stored: Vec<(String, String, String, String, String)> =
                     crate::query::query_as(sql(backend, STORED))
                         .bind(name)
-                        .bind(version)
-                        .bind(worker_id)
                         .bind(i64::from(crate::samples::MINUTE))
                         .bind(db_time(at))
                         .fetch_all(&mut *tx)
                         .await?;
-                let stored: BTreeMap<(String, String), String> = stored
+                let stored: BTreeMap<Key, String> = stored
                     .into_iter()
-                    .map(|(metric, labels, data)| ((metric, labels), data))
+                    .map(|(version, worker_id, metric, labels, data)| {
+                        (
+                            (name.clone(), version, worker_id, *second, metric, labels),
+                            data,
+                        )
+                    })
                     .collect();
-                for ((n, v, w, second, metric, labels), sample) in &merged {
-                    if (n, v, w, *second) != (name, version, worker_id, at.as_second()) {
+                for (key, sample) in &merged {
+                    if (&key.0, key.3) != (name, *second) {
                         continue;
                     }
                     let mut sample = sample.clone();
-                    if let Some(data) = stored.get(&(metric.clone(), labels.clone())) {
+                    if let Some(data) = stored.get(key) {
                         let earlier: SampleData = from_json("extension_samples.data", data)?;
                         sample.data = earlier.merged(sample.data);
                     }
@@ -512,8 +576,24 @@ impl Database {
         events: &[schedr_model::extension::ExtensionEvent],
         kept: usize,
     ) -> Result<(), DbError> {
-        const ADD: &str = "INSERT INTO extension_events (name, worker_id, version, kind, at, message) \
-            VALUES ($1, $2, $3, $4, $5{ts}, $6)";
+        let events: Vec<(String, schedr_model::extension::ExtensionEvent)> = events
+            .iter()
+            .map(|e| (worker_id.to_owned(), e.clone()))
+            .collect();
+        self.insert_workers_extension_events(&events, kept).await
+    }
+
+    /// [`Self::insert_extension_events`] for events of several workers, each with its worker
+    /// (decision 521: a flush's in multi-row inserts, then one trim per extension).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the database fails.
+    pub async fn insert_workers_extension_events(
+        &self,
+        events: &[(String, schedr_model::extension::ExtensionEvent)],
+        kept: usize,
+    ) -> Result<(), DbError> {
         // Past the newest kept: what is older than the KEPT-th newest goes.
         const TRIM: &str = "DELETE FROM extension_events WHERE name = $1 AND id IN \
             (SELECT id FROM extension_events WHERE name = $1 \
@@ -525,20 +605,26 @@ impl Database {
             return Ok(());
         }
         let names: std::collections::BTreeSet<&str> =
-            events.iter().map(|e| e.extension.as_str()).collect();
+            events.iter().map(|(_, e)| e.extension.as_str()).collect();
+        let queries: Vec<(String, &[(String, schedr_model::extension::ExtensionEvent)])> = events
+            .chunks(ROWS_PER_INSERT)
+            .map(|chunk| (events_insert(chunk.len()), chunk))
+            .collect();
         in_tx!(self, |tx, backend| {
-            for event in events {
-                let at =
-                    Timestamp::from_millisecond(event.at_ms).unwrap_or_else(|_| Timestamp::now());
-                crate::query::query(sql(backend, ADD))
-                    .bind(&event.extension)
-                    .bind(worker_id)
-                    .bind(event.version.as_deref().unwrap_or(""))
-                    .bind(event.kind.name())
-                    .bind(db_time(at))
-                    .bind(&event.message)
-                    .execute(&mut *tx)
-                    .await?;
+            for (query, chunk) in &queries {
+                let mut insert = crate::query::query(sql_text(backend, query));
+                for (worker_id, event) in *chunk {
+                    let at = Timestamp::from_millisecond(event.at_ms)
+                        .unwrap_or_else(|_| Timestamp::now());
+                    insert = insert
+                        .bind(event.extension.clone())
+                        .bind(worker_id.clone())
+                        .bind(event.version.clone().unwrap_or_default())
+                        .bind(event.kind.name())
+                        .bind(db_time(at))
+                        .bind(event.message.clone());
+                }
+                insert.execute(&mut *tx).await?;
             }
             let trim = if backend == crate::Backend::Postgres {
                 TRIM_PG
@@ -669,6 +755,31 @@ pub struct StoredEvent {
 
 /// The insert of `rows` samples: one already stored kept (`replace` false: a rollup run again),
 /// or replaced by the new one (a minute's merged sample).
+/// A multi-row insert of `rows` extension events.
+fn events_insert(rows: usize) -> String {
+    use std::fmt::Write as _;
+    let mut query = String::from(
+        "INSERT INTO extension_events (name, worker_id, version, kind, at, message) VALUES ",
+    );
+    for row in 0..rows {
+        let n = row * 6;
+        if row > 0 {
+            query.push_str(", ");
+        }
+        let _ = write!(
+            query,
+            "(${}, ${}, ${}, ${}, ${}{{ts}}, ${})",
+            n + 1,
+            n + 2,
+            n + 3,
+            n + 4,
+            n + 5,
+            n + 6
+        );
+    }
+    query
+}
+
 fn insert_query(rows: usize, replace: bool) -> String {
     let mut query = String::from(
         "INSERT INTO extension_samples \

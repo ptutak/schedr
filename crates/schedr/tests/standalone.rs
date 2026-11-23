@@ -3612,6 +3612,21 @@ with Dag(\"pipeline\"):
     );
 }
 
+/// `task`'s first attempt of `run` once it has `statuses` statuses and a link: written off the
+/// master's round (decision 521), they come a moment after the run's end.
+fn with_reports(standalone: &Standalone, run: &str, task: &str, statuses: usize) -> Value {
+    let mut attempts = Value::Null;
+    standalone.wait("its statuses and link", || {
+        attempts = standalone
+            .get(&format!("/api/v1/runs/{run}/tasks/{task}/attempts"))
+            .unwrap();
+        let attempt = &attempts["attempts"][0];
+        attempt["statuses"].as_array().map(Vec::len) == Some(statuses)
+            && attempt["links"].as_array().is_some_and(|l| !l.is_empty())
+    });
+    attempts["attempts"][0].clone()
+}
+
 /// The dummy extension's plugin (examples/extensions/dummy), run by the test's Python.
 fn dummy_plugin() -> String {
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3679,10 +3694,7 @@ with Dag("unserved"):
         .unwrap();
     assert_eq!(output["value"], serde_json::json!({"rows": 3}), "{output}");
     // Decision 513: its statuses and links, with the attempt.
-    let attempts = standalone
-        .get(&format!("/api/v1/runs/{run}/tasks/job/attempts"))
-        .unwrap();
-    let attempt = &attempts["attempts"][0];
+    let attempt = &with_reports(&standalone, &run, "job", 2);
     let phases: Vec<&str> = attempt["statuses"]
         .as_array()
         .unwrap()
@@ -4525,10 +4537,7 @@ with Dag("reporting_command"):
         serde_json::json!({"snapshot": format!("snap-{run}"), "files": 3}),
         "{output}"
     );
-    let attempts = standalone
-        .get(&format!("/api/v1/runs/{run}/tasks/nightly/attempts"))
-        .unwrap();
-    let attempt = &attempts["attempts"][0];
+    let attempt = &with_reports(&standalone, &run, "nightly", 3);
     let phases: Vec<&str> = attempt["statuses"]
         .as_array()
         .unwrap()
@@ -4605,10 +4614,7 @@ fn a_shell_plugin_fails_and_stops_and_a_command_task_reports(standalone: &Standa
 
     let command = standalone.trigger("reporting_command");
     standalone.wait_for_state(&command, "success");
-    let attempts = standalone
-        .get(&format!("/api/v1/runs/{command}/tasks/report/attempts"))
-        .unwrap();
-    let attempt = &attempts["attempts"][0];
+    let attempt = &with_reports(standalone, &command, "report", 1);
     assert_eq!(attempt["statuses"][0]["phase"], "working", "{attempt}");
     assert_eq!(attempt["statuses"][0]["progress"], 0.5, "{attempt}");
     assert_eq!(attempt["links"][0]["label"], "Docs", "{attempt}");

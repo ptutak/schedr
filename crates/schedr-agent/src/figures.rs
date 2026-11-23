@@ -58,6 +58,9 @@ struct Extension {
 #[derive(Debug, Clone, Default)]
 pub struct Figures {
     all: Arc<Mutex<BTreeMap<(String, String), Extension>>>,
+    /// The built-in service metrics each extension's service collects, declared with whatever
+    /// else its versions declare.
+    builtins: Arc<Mutex<BTreeMap<String, Vec<MetricDeclaration>>>>,
     /// What happened to its extensions since the last heartbeat (DN19), oldest first.
     events: Arc<Mutex<Pending>>,
 }
@@ -138,15 +141,46 @@ impl Figures {
         events.list.drain(..).collect()
     }
 
-    /// Takes `extension` `version`'s declarations: its series are kept while they stay the
-    /// same, started again when they change.
+    /// The built-in service metrics `extension`'s service collects: declared with each of its
+    /// versions' declarations from now on.
+    pub fn set_builtins(&self, extension: &str, metrics: Vec<MetricDeclaration>) {
+        self.builtins
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(extension.to_owned(), metrics);
+    }
+
+    /// Takes `extension` `version`'s declarations, with its service's built-in metrics: its
+    /// series are kept while they stay the same, started again when they change.
     pub fn declare(
         &self,
         extension: &str,
         version: &str,
-        declarations: Declarations,
+        mut declarations: Declarations,
         max_series: u32,
     ) {
+        if let Some(builtins) = self
+            .builtins
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(extension)
+        {
+            for metric in builtins {
+                if !declarations.metrics.iter().any(|m| m.name == metric.name) {
+                    declarations.metrics.push(metric.clone());
+                }
+            }
+        }
+        // A panel drawing a built-in this worker doesn't collect (turned off, or no service) is
+        // left out: the master refuses declarations whose panel names an undeclared metric
+        // (agy's review: all the extension's figures were dropped).
+        let metrics = declarations.metrics.clone();
+        declarations.panels.retain(|panel| {
+            panel.metric.as_deref().is_none_or(|name| {
+                schedr_model::extension::builtin_service_metric(name).is_none()
+                    || metrics.iter().any(|m| m.name == name)
+            })
+        });
         let mut all = self.lock();
         let key = (extension.to_owned(), version.to_owned());
         if all

@@ -316,6 +316,14 @@ pub fn master_settings(config: &Config) -> Settings {
             // Three heartbeats unheard: gone or silent.
             stale_after: config.timings.heartbeat_interval.saturating_mul(3),
         },
+        extension_reports: schedr_master::extension_reports::ReportSettings {
+            queue: config.limits.extension_queue,
+            flush_interval: config.timings.extension_flush_interval,
+            write_timeout: config.timings.extension_write_timeout,
+            events_per_flush: config.limits.extension_events_per_flush,
+            // Set from `worker_report` and `samples` by the master.
+            ..schedr_master::extension_reports::ReportSettings::default()
+        },
     }
 }
 
@@ -536,6 +544,12 @@ fn configured_plugins(config: &Config) -> schedr_agent::extensions::Plugins {
                         accept_timeout: plugin.service_accept_timeout,
                         settle: plugin.service_settle,
                         secrets: plugin.service_secrets.clone(),
+                        builtin_metrics: plugin
+                            .builtin_service_metrics
+                            .kept()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
                     }
                 }),
             };

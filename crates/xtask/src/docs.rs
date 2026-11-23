@@ -39,10 +39,12 @@ pub const PYTHON_API_PAGE: &str = "07-api/01-python.md";
 /// The Rust API page, after the Python API.
 pub const RUST_API_PAGE: &str = "07-api/02-rust.md";
 
-/// The Python API page: autosummary documents the `schedr` package from its docstrings.
+/// The Python API page: autosummary documents the `schedr` package (DAGs) and the
+/// `schedr_extension` package (extensions' plugins and services, B283) from their docstrings.
 pub const PYTHON_API: &str = "# Python API
 
-Generated from the docstrings and type hints of the `schedr` package.
+Generated from the docstrings and type hints of the `schedr` package (writing DAGs) and the
+`schedr_extension` package (writing an extension's plugins and services).
 
 ```{eval-rst}
 .. autosummary::
@@ -51,6 +53,7 @@ Generated from the docstrings and type hints of the `schedr` package.
 
    schedr
    schedr._model
+   schedr_extension
 ```
 ";
 

@@ -75,6 +75,7 @@ are in the report.
 | 23 | Many wait steps (`23_many_sensors`): 500 at once on one worker, its default `[watchers] slots`, 400 plain `@sensor`s awaiting a file and 100 pokes checking for it every 5 s | the worker's memory with its watcher hosts, idle and with all 500 in, per wait step, and what the hosts report; how soon each ends once the file is there; every one succeeds |
 | 23b | Plain pokes (`23b_plain_pokes`): 100 plain `def` pokes on one worker, each call blocking 1 s as a blocking client does, every 5 s (decision 489) | how soon each ends once the file is there, at most 7 s at p99 (its `every` and its call): on Python's default pool of at most 32 threads their calls would queue and overrun; every one succeeds |
 | 24 | Many triggers (`24_many_triggers`, M5.2f): idle `@trigger.poke`s filling the watcher slots (each reporting with every heartbeat) and `@trigger`s firing 100 events a second in all (each for 15 s, 60 s in the full profile; 20 a second before M5.2h2), each event a run of one task, beside scenario 1's kind of load | how long trigger messages hold the master's lock, events a second, an event to its run and to its task's start, tasks a second, each trigger's own pace and how far apart they started (the pokes are switched on first, then the firing triggers all at once), how long the master took to apply the unpauses; `SCHEDR_STRESS_POKES` and `SCHEDR_STRESS_FIRING` set the counts (0: none) |
+| 25 | Extension tasks (`25_extension_throughput`, M5.2i12): scenario 1's shape run plain first (`25_extension_throughput_plain`), then with every task an extension task, half the dummy's Python plugin (a status, a link, a metric point and a notification, a call to its service, a 0.1 s sleep), half a shell script through `schedr extension shell` doing the same through `schedr task-ctx` | tasks a second beside the plain run's (`tasks_per_s_vs_plain`), the master's extension queries (`query_<name>_p99_s`, `_total_s`), what it stored of the reports (`reports_per_s`, `statuses_stored`, `sample_rows`), the reports dropped (`dropped_<reason>`), and the extension page's reads under that load |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything
@@ -580,3 +581,49 @@ forked runner's start, 0.04 → 0.08 s at p50, one bucket of the histogram; and 
 and the webserver's memory in the soak, +4 and +7 MiB. These three are not explained yet. The rounds' p99 rose a bucket or two in scenarios 4, 6 and 7 (its buckets are
 1.45, 2.05, 2.90 and 4.10 s, so one slow round moves it a whole step), while the runs there
 didn't get slower.
+
+## Extension tasks (M5.2i12, 2026-11-23)
+
+Scenario 25, quick x2, the release build, the same machine (12 cores), first before and after
+decision 521 took extensions' reports off the master's round, then after their plugins stopped
+importing schedr's DAG API (`schedr_extension`, B283):
+
+| | before | after D521 | after the package split |
+|---|---|---|---|
+| Extension tasks a second | 3.10 | 5.63 | 12.0 |
+| A round, p99 | 4.10 s | 2.05 s | 0.72 s |
+| A task's end to the master storing it, p50 | 5.8 s | 2.8 s | 1.5 s |
+| A start recorded, p50 | 8.2 s | 4.1 s | 2.0 s |
+| A slot's time per extension task | 6.3 s | 4.5 s | 2.1 s |
+| Extension writes under the master's lock | 258 s of the run's 809 | none | none |
+| Reports dropped | 0 | 0 | 0 |
+
+Before, the master spent about a third of the run writing extensions' reports inside workers'
+turns, holding its lock: each status and link its own transaction after a read of its attempt,
+each heartbeat's events in theirs. After D521 a turn only queues them, and the writer stores a
+second's worth in a few transactions off the lock. Then the plugins' start: `import
+schedr.extension` loaded the whole `schedr` package, 1.3 s of its 1.6 s; `schedr_extension`
+loads none of it, 0.3 s.
+
+**What the gap with plain tasks is.** Scenario 25 now runs four times, scenario 1's shape each
+time on a fresh cluster, so an extension task's cost is read apart from its work's:
+
+| Run | Tasks a second | A slot's time per task | Its start recorded, p50 | Its end stored, p50 |
+|---|---|---|---|---|
+| Command tasks (`_plain`, scenario 1) | 64.7 | 0.27 s | 0.06 s | 0.09 s |
+| Python `@task`s sleeping 0.1 s (`_python`) | 5.8 | 5.37 s | 0.26 s | 0.23 s |
+| Extension tasks that only return (`_noop`) | 20.7 | 1.16 s | 0.18 s | 0.30 s |
+| Extension tasks reporting, then sleeping 0.1 s | 11.9 | 2.15 s | 2.05 s | 1.50 s |
+
+These rates don't compare kinds of task one to one. The reporting run is half shell scripts,
+the lightest plugin, and the Python `@task`s are spawned (no fork server: each starts an
+interpreter and imports all of `schedr` and its DAG file, where a plugin now imports only
+`schedr_extension`); forked Python tasks start far faster (scenario 13). What they show is that
+starting a process per task is most of either's cost, on a machine saturated through these
+runs (a load of 17 to 50 on 12 cores, every role, Postgres and every plugin on it). The master isn't what slows them: its
+rounds, its lock and its turns are as fast or faster with extension tasks. The start and end
+delays of the reporting run are the same saturation: on an idle machine the same tasks' ends
+reach the master in 13 to 26 ms, a notification or not; a Python plugin's run (reports, a
+service call and a 0.1 s sleep) takes 0.42 s, a shell plugin's 0.25 s, about 30 ms a
+`schedr task-ctx` call, which is nearly all the 115 MB binary's start (an idea logged for it:
+a small `schedr-ctx`, M5.3c).

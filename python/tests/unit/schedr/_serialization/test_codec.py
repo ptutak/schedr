@@ -6,18 +6,10 @@ from typing import Any, Literal, NotRequired, TypedDict
 import pytest
 
 from schedr._serialization.annotations import TypeModelError
-from schedr._serialization.codec import (
-    MAX_DEPTH,
-    CodecError,
-    check_size,
-    decode,
-    decode_any,
-    encode,
-    encode_any,
-    encoded_size,
-)
+from schedr._serialization.codec import decode, decode_any, encode, encode_any
 from schedr.outcomes import Outcome
 from schedr.types import ProcessResult
+from schedr_extension._output import MAX_DEPTH, CodecError, check_size, encoded_size
 
 MOMENT = datetime(2026, 10, 19, 3, tzinfo=UTC)
 

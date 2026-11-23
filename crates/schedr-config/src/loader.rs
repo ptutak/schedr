@@ -397,7 +397,7 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 40] = [
+const HIDDEN_LIMITS: [&str; 42] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
@@ -438,6 +438,8 @@ const HIDDEN_LIMITS: [&str; 40] = [
     "WORKER__EXTENSION_REPORTS_AT_ONCE",
     "WORKER__EXTENSION_EVENTS_PENDING",
     "MASTER__EXTENSION_EVENTS_KEPT",
+    "MASTER__EXTENSION_QUEUE",
+    "MASTER__EXTENSION_EVENTS_PER_FLUSH",
 ];
 
 /// The hidden waiting queue's factor (decision 509): a fraction from 0 to 4, not a whole number.
@@ -521,6 +523,8 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("WORKER__EXTENSION_REPORTS_AT_ONCE") => &mut limits.extension_reports_at_once,
             Some("WORKER__EXTENSION_EVENTS_PENDING") => &mut limits.extension_events_pending,
             Some("MASTER__EXTENSION_EVENTS_KEPT") => &mut limits.extension_events_kept,
+            Some("MASTER__EXTENSION_QUEUE") => &mut limits.extension_queue,
+            Some("MASTER__EXTENSION_EVENTS_PER_FLUSH") => &mut limits.extension_events_per_flush,
             Some("WEBSERVER__EVENTS_BACKLOG") => &mut limits.webserver_events_backlog,
             Some("UI__EVENTS_BACKLOG") => &mut limits.ui_events_backlog,
             Some("WEBSERVER__AUTH_REMEMBERED_MAX") => &mut limits.auth_remembered_max,
@@ -561,6 +565,8 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "MASTER__SET_ASIDE" => &mut timings.set_aside,
         "MASTER__HANDED_CALL_MIN" => &mut timings.handed_call_min,
         "MASTER__CLEANUP_MOVE_WAIT" => &mut timings.cleanup_move_wait,
+        "MASTER__EXTENSION_FLUSH_INTERVAL" => &mut timings.extension_flush_interval,
+        "MASTER__EXTENSION_WRITE_TIMEOUT" => &mut timings.extension_write_timeout,
         "MASTER__LISTEN_RETRY" => &mut timings.listen_retry,
         "WEBSERVER__REFRESH_INTERVAL" => &mut timings.refresh_interval,
         "WEBSERVER__WORKER_CONNECT_TIMEOUT" => &mut timings.worker_connect_timeout,
@@ -861,11 +867,21 @@ fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), Co
             schedr_model::task::check_extension_version(version)
                 .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
         }
-        schedr_model::extension::check_declarations(&schedr_model::extension::Declarations {
-            metrics: plugin.metrics.clone(),
-            panels: plugin.panels.clone(),
-            notifications: plugin.notifications.clone(),
-        })
+        // Its panels may draw the built-in service metrics it collects: none without a service
+        // (agy's review: one turned off passed here, then the master refused all its figures).
+        let builtins = if plugin.service.is_empty() {
+            Vec::new()
+        } else {
+            plugin.builtin_service_metrics.kept()
+        };
+        schedr_model::extension::check_own_declarations(
+            &schedr_model::extension::Declarations {
+                metrics: plugin.metrics.clone(),
+                panels: plugin.panels.clone(),
+                notifications: plugin.notifications.clone(),
+            },
+            &builtins,
+        )
         .map_err(|error| ConfigError::Extensions(format!("[extensions.{name}] {error}")))?;
         if plugin.max_series == 0 {
             return Err(ConfigError::Extensions(format!(
@@ -873,6 +889,17 @@ fn check_extensions(section: &crate::config::ExtensionsSection) -> Result<(), Co
             )));
         }
         check_service(name, plugin)?;
+        if let crate::config::BuiltinServiceMetrics::Named(named) = &plugin.builtin_service_metrics
+            && let Some(unknown) = named
+                .iter()
+                .find(|n| !schedr_model::extension::BUILTIN_SERVICE_METRICS.contains(&n.as_str()))
+        {
+            return Err(ConfigError::Extensions(format!(
+                "[extensions.{name}] builtin_service_metrics: `{unknown}` isn't one; true, false, \
+                 or some of {:?}",
+                schedr_model::extension::BUILTIN_SERVICE_METRICS
+            )));
+        }
     }
     Ok(())
 }

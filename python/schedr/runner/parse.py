@@ -9,7 +9,6 @@ import importlib
 import importlib.util
 import os
 import sys
-import traceback
 import warnings
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -25,9 +24,7 @@ from schedr.runner.sources import (
     registered_roots,
     search_for_clashes,
 )
-
-TRACEBACK_LINES = 20
-"""How many traceback lines an import error keeps."""
+from schedr_extension._errors import error_summary
 
 
 def module_name(root: str, path: str) -> str:
@@ -149,10 +146,6 @@ _SCHEDR_DIR = str(Path(__file__).resolve().parents[1]) + os.sep
 _IMPORTLIB_DIR = str(Path(importlib.__file__).resolve().parent) + os.sep
 
 
-def _internal(filename: str) -> bool:
-    return filename.startswith((_SCHEDR_DIR, _IMPORTLIB_DIR, "<frozen importlib"))
-
-
 def import_error(error: BaseException) -> dict[str, str]:
     """An import error (or a task's failure) as sent to the agent.
 
@@ -165,16 +158,7 @@ def import_error(error: BaseException) -> dict[str, str]:
     Returns:
         Its class name, message and the last :data:`TRACEBACK_LINES` lines of the traceback.
     """
-    tb = error.__traceback__
-    while tb is not None and _internal(tb.tb_frame.f_code.co_filename):
-        tb = tb.tb_next
-    shown = error.__traceback__ if tb is None else tb
-    lines = "".join(traceback.format_exception(type(error), error, shown)).splitlines()
-    return {
-        "exception": type(error).__name__,
-        "message": str(error),
-        "traceback": "\n".join(lines[-TRACEBACK_LINES:]),
-    }
+    return error_summary(error, (_SCHEDR_DIR, _IMPORTLIB_DIR, "<frozen importlib"))
 
 
 def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:

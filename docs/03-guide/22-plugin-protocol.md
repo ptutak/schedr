@@ -2,7 +2,7 @@
 
 This page is for writing an [extension](21-extensions.md)'s plugin in a language schedr has no
 helper for. It says everything a plugin must do, in the order it happens. Python
-(`schedr.extension`) and Rust (the `schedr-extension` crate) have helpers that do all of it.
+(`schedr_extension`) and Rust (the `schedr-extension` crate) have helpers that do all of it.
 
 The protocol's version is **1**. Every message is described by
 [`schema/extension.schema.json`](https://github.com/ptutak/schedr/blob/main/schema/extension.schema.json),
@@ -227,7 +227,7 @@ The Rust crate's version follows the protocol: `schedr-extension` 1.x speaks pro
 
 Each message is a JSON object whose `type` names it, framed by its 4-byte big-endian length. The
 schemas are `schema/runner.schema.json` (the plugin's channel) and `schema/extension.schema.json`.
-**In Python** is what `schedr.extension` does for you: the call that sends the message, or what
+**In Python** is what `schedr_extension` does for you: the call that sends the message, or what
 its answer becomes; a plugin or service in another language sends and reads **On the wire**
 itself.
 

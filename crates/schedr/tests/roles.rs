@@ -2167,3 +2167,109 @@ fn async_tasks_run_and_stop_cleanly_on_each_start_method_and_loop() {
         }
     }
 }
+
+/// A DAG of chatty extension tasks: the dummy's plugin reporting a status, a link, a metric point
+/// and a notification every 50 ms for about 15 s.
+const CHATTY: &str = r#"
+from schedr import Dag, ExtensionTask
+
+STEPS = []
+for i in range(300):
+    STEPS += [
+        {"status": [f"step {i % 7}", (i % 100) / 100]},
+        {"link": ["Job", f"https://example.invalid/{i % 5}"]},
+        {"metric": ["steps", 1, {"step": "s"}]},
+        {"notify": ["job_done", "done", {}]},
+        {"sleep": 0.05},
+    ]
+
+with Dag("chatty"):
+    for k in range(3):
+        ExtensionTask(f"e{k}", name="dummy", version="1.0", payload=STEPS + [{"return": 1}])
+"#;
+
+/// The tables extensions' reports go to (decision 521's writer).
+const EXTENSION_TABLES: &str =
+    "attempt_statuses, attempt_links, extension_events, extension_samples, extension_versions";
+
+/// D521's done-when, at the master: with every write of extensions' reports held up (another
+/// session holds their tables locked), the master's rounds go on: a plain DAG runs to its end
+/// while extension tasks report as fast as their worker lets them, and their reports are dropped
+/// as too slow, counted. Before decision 521 a heartbeat's figures and an attempt's status were
+/// written in the worker's turn, holding the core's lock, so the rounds waited on those tables.
+#[test]
+fn a_master_whose_extension_writes_are_held_up_keeps_its_rounds_and_drops_them() {
+    let mut cluster = Cluster::new(Some(postgres_database()), "100ms");
+    let dummy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/dummy/schedr-ext-dummy")
+        .canonicalize()
+        .unwrap();
+    let config = cluster.dir.path().join("config.toml");
+    let text = format!(
+        "{}\n[extensions.dummy]\ncommand = [\"{}\", \"{}\"]\nversions = [\"1.0\"]\n",
+        std::fs::read_to_string(&config).unwrap(),
+        support::python(),
+        dummy.display()
+    );
+    std::fs::write(&config, text).unwrap();
+    std::fs::write(cluster.root().join("chatty.py"), CHATTY).unwrap();
+    cluster.up();
+    let chatty = cluster.trigger("chatty");
+    cluster.wait("the extension tasks to report", || {
+        cluster
+            .attempts(&chatty, "e0")
+            .first()
+            .is_some_and(|a| a["statuses"].as_array().is_some_and(|s| !s.is_empty()))
+    });
+    // Another session holds the extensions' tables for 40 s: their writes wait on it.
+    let mut holder = Command::new("psql")
+        .args([
+            cluster.database_url.as_str(),
+            "-q",
+            "-c",
+            &format!(
+                "BEGIN; LOCK TABLE {EXTENSION_TABLES} IN ACCESS EXCLUSIVE MODE; \
+                 SELECT pg_sleep(40); COMMIT;"
+            ),
+        ])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    cluster.wait("the extensions' tables to be locked", || {
+        let output = Command::new("psql")
+            .args([
+                cluster.database_url.as_str(),
+                "-tAc",
+                "SELECT COUNT(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation \
+                 WHERE c.relname = 'extension_events' AND l.mode = 'AccessExclusiveLock' \
+                 AND l.granted",
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim() == "1"
+    });
+    let locked = Instant::now();
+    let (code, out, err) = cluster.cli(&["runs", "trigger", "chain", "--for", "2026-10-15"]);
+    assert_eq!(code, 0, "{out}{err}");
+    cluster.wait_for("the plain run to succeed", Duration::from_secs(30), || {
+        cluster
+            .cli_json(&["runs", "list", "chain", "--for", "2026-10-15"])
+            .is_some_and(|runs| runs["runs"][0]["state"] == "success")
+    });
+    let took = locked.elapsed();
+    assert!(
+        holder.try_wait().unwrap().is_none(),
+        "the lock ended before the run did ({took:?}): the test proves nothing"
+    );
+    let (_, metrics) = cluster.ops_get("master", "/metrics");
+    let slow: f64 = metrics
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("schedr_master_extension_reports_dropped_total{reason=\"slow\"} ")
+        })
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0.0);
+    assert!(slow > 0.0, "no report dropped as too slow:\n{metrics}");
+    let _ = holder.kill();
+    let _ = holder.wait();
+}

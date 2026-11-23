@@ -233,6 +233,14 @@ impl AttemptReports {
             return;
         };
         for point in points {
+            // The built-in service metrics are the worker's and the service's, never a plugin's
+            // (Grok's review of M5.2i12): dropped without a word.
+            if point
+                .name
+                .starts_with(schedr_model::extension::BUILTIN_SERVICE_PREFIX)
+            {
+                continue;
+            }
             // Its label values masked as its statuses are (agy's review of M5.2i5: a secret the
             // attempt read reached the figures, the master and the page).
             let mut point = point.clone();

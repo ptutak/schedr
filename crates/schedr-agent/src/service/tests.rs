@@ -124,6 +124,9 @@ fn start(mode: &str, change: impl FnOnce(&mut ServiceSpec)) -> Fake {
             accept_timeout: Duration::from_millis(500),
             settle: Duration::from_hours(24),
             secrets: Vec::new(),
+            builtin_metrics: schedr_model::extension::BUILTIN_SERVICE_METRICS
+                .map(str::to_owned)
+                .to_vec(),
         },
         versions: BTreeSet::from(["1.0".to_owned(), "2.0".to_owned()]),
         env: BTreeMap::from([
@@ -285,7 +288,13 @@ async fn a_service_past_its_memory_while_starting_is_killed() {
 /// the worker's stop waiting for the attempt connected.
 #[tokio::test]
 async fn an_attempt_connects_the_drain_is_told_and_the_stop_waits_for_it() {
-    let fake = start("serve", |_| {});
+    // Its extension's metrics configured: its version declared, so its built-ins are kept.
+    let fake = start("serve", |spec| {
+        spec.declarations = serde_json::from_value(serde_json::json!({
+            "metrics": [{"name": "jobs", "kind": "counter", "help": "Jobs"}]
+        }))
+        .unwrap();
+    });
     fake.until("ready", |f| matches!(f.state(), State::Ready(_)))
         .await;
     assert_eq!(fake.services.not_ready("fake", "1.0"), None);
@@ -300,6 +309,23 @@ async fn an_attempt_connects_the_drain_is_told_and_the_stop_waits_for_it() {
         .await
         .unwrap();
     assert_eq!(link.run(), 1);
+    // Its built-in metrics (M5.2i12): its accept time, timed by the worker, and its memory,
+    // measured each memory check, beside its extension's own.
+    let (mut accepted, mut memory) = (false, false);
+    fake.until("its built-in metrics", |f| {
+        for extension in f.figures.take_figures() {
+            for metric in extension.metrics {
+                let observed = metric
+                    .series
+                    .iter()
+                    .any(|s| s.value > 0.0 || s.counts.iter().sum::<u64>() > 0);
+                accepted |= metric.name == "service_accept_seconds" && observed;
+                memory |= metric.name == "service_memory_bytes" && observed;
+            }
+        }
+        accepted && memory
+    })
+    .await;
     let unserved = ServiceTask {
         version: "9.9".to_owned(),
         ..task
@@ -331,4 +357,17 @@ async fn an_attempt_connects_the_drain_is_told_and_the_stop_waits_for_it() {
         !events(&f.figures, &mut seen, EventKind::ServiceStopped).is_empty()
     })
     .await;
+}
+
+/// agy's review of M5.2i12: a service whose versions nothing declared yet (no config metrics,
+/// no plugin run on this worker) declares no built-ins alone: they would be its versions'
+/// newest declarations, hiding a plugin's from the page.
+#[tokio::test]
+async fn a_services_builtins_are_never_declared_alone() {
+    let fake = start("serve", |_| {});
+    fake.until("ready", |f| matches!(f.state(), State::Ready(_)))
+        .await;
+    // A few memory checks (each 200 ms).
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(fake.figures.take_figures(), Vec::new());
 }

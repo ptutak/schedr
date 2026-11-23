@@ -7,13 +7,10 @@ the run-time check (:func:`encode`).
 
 from schedr._serialization.annotations import TypeModelError
 from schedr._serialization.codec import (
-    CodecError,
-    check_size,
     decode,
     decode_any,
     encode,
     encode_any,
-    encoded_size,
     escaped,
 )
 from schedr._serialization.compatibility import (
@@ -23,6 +20,7 @@ from schedr._serialization.compatibility import (
     type_name,
 )
 from schedr._serialization.describe import describe
+from schedr_extension._output import CodecError, check_size, encoded_size
 
 __all__ = [
     "CodecError",

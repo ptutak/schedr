@@ -37,7 +37,16 @@ pub fn checked(mut figures: ExtensionFigures) -> Result<ExtensionFigures, String
     if let Some(declarations) = &figures.declarations {
         check_declarations(declarations)?;
     }
-    if figures.metrics.len() > MAX_METRICS {
+    // The built-in service metrics on top of the extension's own, as its declarations count
+    // them (agy's review: 50 own and the built-ins were refused here).
+    let own = figures
+        .metrics
+        .iter()
+        .filter(|m| schedr_model::extension::builtin_service_metric(&m.name).is_none())
+        .count();
+    if own > MAX_METRICS
+        || figures.metrics.len() - own > schedr_model::extension::BUILTIN_SERVICE_METRICS.len()
+    {
         return Err(format!("over {MAX_METRICS} metrics"));
     }
     let most = usize::try_from(figures.max_series).unwrap_or(usize::MAX) + 1;
@@ -213,6 +222,16 @@ impl SeriesSeen {
                 continue;
             }
             seen.named.insert(labels);
+        }
+    }
+
+    /// Forgets what is known of `keys`' (extension, metric) series this hour: read again from
+    /// what is stored before the next figures are folded (Grok's review of M5.2i12: a write that
+    /// failed had spent their cap's slots on series never stored).
+    pub fn forget<'a>(&mut self, keys: impl IntoIterator<Item = &'a (String, String)>) {
+        for key in keys {
+            self.seen.remove(key);
+            self.loaded.remove(key);
         }
     }
 

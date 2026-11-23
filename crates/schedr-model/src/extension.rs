@@ -489,7 +489,13 @@ fn check_metric(metric: &MetricDeclaration) -> Result<(), String> {
 ///
 /// What is wrong, naming the metric or the panel.
 pub fn check_declarations(declarations: &Declarations) -> Result<(), String> {
-    if declarations.metrics.len() > MAX_METRICS || declarations.panels.len() > MAX_PANELS {
+    // The built-in service metrics come on top of the extension's own.
+    let own = declarations
+        .metrics
+        .iter()
+        .filter(|m| builtin_service_metric(&m.name).is_none())
+        .count();
+    if own > MAX_METRICS || declarations.panels.len() > MAX_PANELS {
         return Err(format!(
             "at most {MAX_METRICS} metrics and {MAX_PANELS} panels"
         ));
@@ -628,9 +634,93 @@ fn check_functions(panel: &Panel, metrics: &[MetricDeclaration]) -> Result<(), S
     Ok(())
 }
 
+/// [`check_declarations`] for what a plugin's hello or an operator's `[extensions.<name>]`
+/// declares: no metric of the built-in service metrics' names (`service_*`, schedr's), though
+/// their panels may draw those of `builtins` (the ones collected) like the extension's own.
+///
+/// # Errors
+///
+/// What is wrong, naming the metric or the panel.
+pub fn check_own_declarations(
+    declarations: &Declarations,
+    builtins: &[&str],
+) -> Result<(), String> {
+    if let Some(metric) = declarations
+        .metrics
+        .iter()
+        .find(|m| m.name.starts_with(BUILTIN_SERVICE_PREFIX))
+    {
+        return Err(format!(
+            "metric `{}`: names starting with `{BUILTIN_SERVICE_PREFIX}` are schedr's (its built-in \
+             service metrics)",
+            metric.name
+        ));
+    }
+    let mut with_builtins = declarations.clone();
+    with_builtins.metrics.extend(
+        builtins
+            .iter()
+            .filter_map(|name| builtin_service_metric(name)),
+    );
+    check_declarations(&with_builtins)
+}
+
+/// The start of the names schedr keeps for its built-in service metrics.
+pub const BUILTIN_SERVICE_PREFIX: &str = "service_";
+
+/// The built-in service metrics (decision 521's step, M5.2i12), declared by schedr for an
+/// extension with a service: its memory, measured by the worker; the time from an attempt's
+/// connection to the service accepting it, timed by the worker; each call's time by method,
+/// timed by the service.
+pub const BUILTIN_SERVICE_METRICS: [&str; 3] = [
+    "service_memory_bytes",
+    "service_accept_seconds",
+    "service_call_seconds",
+];
+
+/// The declaration of built-in service metric `name`; none for another name.
+#[must_use]
+pub fn builtin_service_metric(name: &str) -> Option<MetricDeclaration> {
+    let times = vec![
+        0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+    ];
+    Some(match name {
+        "service_memory_bytes" => MetricDeclaration {
+            name: name.to_owned(),
+            kind: MetricKind::Gauge,
+            help: "The service's memory (its process group), measured by the worker".to_owned(),
+            unit: MetricUnit::Bytes,
+            labels: Vec::new(),
+            buckets: Vec::new(),
+        },
+        "service_accept_seconds" => MetricDeclaration {
+            name: name.to_owned(),
+            kind: MetricKind::Histogram,
+            help: "From an attempt's connection to the service accepting it, timed by the worker"
+                .to_owned(),
+            unit: MetricUnit::Seconds,
+            labels: Vec::new(),
+            buckets: times,
+        },
+        "service_call_seconds" => MetricDeclaration {
+            name: name.to_owned(),
+            kind: MetricKind::Histogram,
+            help: "How long the service took to answer a call, by method".to_owned(),
+            unit: MetricUnit::Seconds,
+            labels: vec![LabelDeclaration {
+                name: "method".to_owned(),
+                values: None,
+            }],
+            buckets: times,
+        },
+        _ => return None,
+    })
+}
+
 /// An extension's page: its declared panels, then each metric no panel shows in a `full` row
 /// of its own, one under another below them (as the Metrics page lays out its charts), with the
-/// chart its kind suggests.
+/// chart its kind suggests; the built-in service metrics no panel shows last, in one Service row
+/// (memory a line, the times quantiles).
 #[must_use]
 pub fn page_panels(declarations: &Declarations) -> Vec<Panel> {
     let shown: BTreeSet<&str> = declarations
@@ -640,8 +730,13 @@ pub fn page_panels(declarations: &Declarations) -> Vec<Panel> {
         .collect();
     let mut panels = declarations.panels.clone();
     let mut row = panels.iter().map(|p| p.row).max().unwrap_or(0);
+    let mut service: Vec<&MetricDeclaration> = Vec::new();
     for metric in &declarations.metrics {
         if shown.contains(metric.name.as_str()) {
+            continue;
+        }
+        if builtin_service_metric(&metric.name).is_some() {
+            service.push(metric);
             continue;
         }
         row = row.saturating_add(1);
@@ -663,6 +758,41 @@ pub fn page_panels(declarations: &Declarations) -> Vec<Panel> {
             group_by: None,
             limit: None,
         });
+    }
+    if !service.is_empty() {
+        row = row.saturating_add(1);
+        let cells: &[Cell] = match service.len() {
+            1 => &[Cell::Full],
+            2 => &[Cell::Left, Cell::Right],
+            _ => &[Cell::Left, Cell::Center, Cell::Right],
+        };
+        for (metric, cell) in service.into_iter().zip(cells) {
+            let memory = metric.kind == MetricKind::Gauge;
+            panels.push(Panel {
+                title: match metric.name.as_str() {
+                    "service_memory_bytes" => "Service memory",
+                    "service_accept_seconds" => "Service accept time",
+                    _ => "Service call time",
+                }
+                .to_owned(),
+                metric: Some(metric.name.clone()),
+                chart: if memory {
+                    ChartKind::Line
+                } else {
+                    ChartKind::Quantiles
+                },
+                row,
+                cell: *cell,
+                quantiles: Vec::new(),
+                color: None,
+                colors: BTreeMap::new(),
+                point: None,
+                // Each worker's service on its own: the largest on "All workers".
+                combine: memory.then_some(Combine::Max),
+                group_by: None,
+                limit: None,
+            });
+        }
     }
     panels
 }

@@ -1715,6 +1715,66 @@ service_secrets = [{path = "etl/spark", key = "token"}]
     }
 }
 
+/// M5.2i12: the built-in service metrics collected: all by default, none, or some by name; an
+/// unknown name, or a metric of their names declared by the operator, refused.
+#[test]
+fn an_extensions_builtin_service_metrics_are_all_none_or_named() {
+    use crate::config::BuiltinServiceMetrics;
+    let plain =
+        "[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\nservice = [\"/svc\"]\n";
+    let kept = |more: &str| {
+        load(Some(file(&format!("{plain}{more}"))), &env(&[]), &[])
+            .map(|c| c.extensions.plugins["spark"].builtin_service_metrics.kept())
+    };
+    assert_eq!(
+        kept("").unwrap(),
+        schedr_model::extension::BUILTIN_SERVICE_METRICS
+    );
+    assert_eq!(
+        kept("builtin_service_metrics = false\n").unwrap(),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        kept("builtin_service_metrics = [\"service_call_seconds\", \"service_memory_bytes\"]\n")
+            .unwrap(),
+        ["service_memory_bytes", "service_call_seconds"]
+    );
+    assert_eq!(
+        BuiltinServiceMetrics::default(),
+        BuiltinServiceMetrics::All(true)
+    );
+    for (more, why) in [
+        (
+            "builtin_service_metrics = [\"service_cpu\"]\n",
+            "`service_cpu` isn't one",
+        ),
+        (
+            "metrics = [{name = \"service_jobs\", kind = \"counter\", help = \"x\"}]\n",
+            "are schedr's",
+        ),
+    ] {
+        let error = kept(more).unwrap_err().to_string();
+        assert!(error.contains(why), "{more}: {error}");
+    }
+    // Its panels may draw them, as the extension's own; not one it doesn't collect (agy's
+    // review of M5.2i12), nor any without a service.
+    let panel = "panels = [{title = \"Memory\", metric = \"service_memory_bytes\", chart = \
+                 \"line\", row = 1, cell = \"full\"}]\n";
+    kept(panel).unwrap();
+    for more in [
+        format!("{panel}builtin_service_metrics = false\n"),
+        format!("{panel}builtin_service_metrics = [\"service_call_seconds\"]\n"),
+    ] {
+        let error = kept(&more).unwrap_err().to_string();
+        assert!(error.contains("isn't declared"), "{more}: {error}");
+    }
+    let no_service = format!("[extensions.spark]\ncommand = [\"/x\"]\nversions = [\"1\"]\n{panel}");
+    let error = load(Some(file(&no_service)), &env(&[]), &[])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("isn't declared"), "{error}");
+}
+
 #[test]
 fn a_bad_extension_table_is_refused_naming_it() {
     for (toml, why) in [

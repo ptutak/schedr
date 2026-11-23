@@ -25,9 +25,9 @@ from schedr._model import (
     TypeDesc,
     UnionType,
 )
-from schedr._serialization import models
+from schedr._serialization import CodecError, models
 from schedr._serialization.annotations import TypeModelError, type_hints
-from schedr._serialization.codec import CodecError, encode, json_form
+from schedr._serialization.codec import encode, json_form
 from schedr._serialization.describe import describe
 
 MAX_PARAMS_BYTES = 64 * 1024

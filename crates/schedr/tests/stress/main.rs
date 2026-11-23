@@ -49,8 +49,9 @@ fn through_pgbouncer(url: &str) -> String {
     format!("{credentials}@{bouncer}/{database}")
 }
 
-/// Scenario 1: Throughput: many DAGs of short tasks, and one wide DAG, on a few workers.
-fn throughput(database_url: String, scenario: &'static str, pooled: bool) {
+/// Scenario 1: Throughput: many DAGs of short tasks, and one wide DAG, on a few workers. Its
+/// tasks a second.
+fn throughput(database_url: String, scenario: &'static str, pooled: bool) -> f64 {
     let mut stress = Stress::new(Some(database_url));
     let size = stress.size;
     let mut report = Report::new(scenario);
@@ -80,7 +81,9 @@ fn throughput(database_url: String, scenario: &'static str, pooled: bool) {
     if pooled {
         report.broken(pooler_not_found(&stress, &["master"]));
     }
+    let tasks_per_s = report.get("tasks_per_s").unwrap_or(0.0);
     finish(&stress, report, &["success"]);
+    tasks_per_s
 }
 
 /// What the master's log says when the connection it would listen through passes a pooler in
@@ -2355,4 +2358,288 @@ fn stress_06c_pgbouncer_statements_outside_a_transaction() {
         failures.len(),
         failures.first()
     );
+}
+
+/// Scenario 25 (M5.2i12): scenario 1's shape run four times on the same machine, each on a
+/// fresh cluster, so an extension task's cost is read apart from its work's: plain command tasks
+/// (`_plain`, scenario 1 itself); Python `@task`s sleeping as long (`_python`: an interpreter per
+/// task, no extension); extension tasks that only return (`_noop`: the extension's own floor:
+/// the plugin's start, its hello, the service's connection, its end); and extension tasks doing
+/// what real plugins do (this one): half the dummy's Python plugin, half a shell script through
+/// `schedr extension shell`, each reporting a status, a link, a metric point and a notification,
+/// the dummy calling its service. Beside it: the master's extension queries (decision 521), what
+/// was stored of the reports, each plugin's run, and the extension page's reads under that load.
+#[test]
+fn stress_25_extension_throughput() {
+    let plain = throughput(postgres_database(), "25_extension_throughput_plain", false);
+    let python = sleeping_tasks("25_extension_throughput_python", Work::Python);
+    let noop = sleeping_tasks("25_extension_throughput_noop", Work::ExtensionNoop);
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new("25_extension_throughput");
+    let dags = work_cluster(&mut stress, Work::Extension, &mut report);
+    let reads = std::cell::RefCell::new(Vec::new());
+    stress.wait_for_runs(dags, size.time(20 * MINUTE, 90 * MINUTE), |stress| {
+        // The extension's page under load, as a person watching it reads it.
+        for path in [
+            "/api/v1/extensions/dummy",
+            "/api/v1/extensions/dummy/metrics?range=1h",
+        ] {
+            let began = std::time::Instant::now();
+            if stress.cluster.api_get(path).is_some() {
+                reads.borrow_mut().push(began.elapsed().as_secs_f64());
+            }
+        }
+    });
+    stress.measure(&mut report, "master", 1.0);
+    let tasks_per_s = report.get("tasks_per_s").unwrap_or(0.0);
+    for (name, baseline) in [("plain", plain), ("python", python), ("noop", noop)] {
+        report.set(&format!("{name}_tasks_per_s"), baseline);
+        report.set(
+            &format!("tasks_per_s_vs_{name}"),
+            tasks_per_s / baseline.max(1e-9),
+        );
+    }
+    let reads = reads.into_inner();
+    report.set(
+        "page_reads",
+        f64::from(u32::try_from(reads.len()).unwrap_or(u32::MAX)),
+    );
+    report.set("page_read_p50_s", quantile(&reads, 0.5));
+    report.at_most("page_read_p99_s", quantile(&reads, 0.99), 10.0);
+    extension_figures(&stress, &mut report);
+    finish(&stress, report, &["success"]);
+}
+
+/// What scenario 25's variants run in each task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Work {
+    /// A Python `@task` sleeping 0.1 s.
+    Python,
+    /// An extension task that only returns.
+    ExtensionNoop,
+    /// An extension task reporting as real plugins do, then sleeping 0.1 s.
+    Extension,
+}
+
+/// Scenario 1's cluster and DAGs, every task `work`: the DAGs' count.
+fn work_cluster(stress: &mut Stress, work: Work, report: &mut Report) -> usize {
+    let size = stress.size;
+    if work != Work::Python {
+        let config = extension_config(stress);
+        let path = stress.cluster.dir.path().join("config.toml");
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str(&config);
+        std::fs::write(&path, text).unwrap();
+    }
+    let mut dags = work_dags(stress, "many", size.n(50, 1000), size.n(10, 15), work);
+    dags.extend(work_dags(stress, "wide", 1, size.n(200, 5000), work));
+    stress.start_core("master", &[]);
+    stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
+    let parsed = stress.wait_for_dags(dags.len(), 10 * MINUTE);
+    report.set("parse_all_s", parsed.as_secs_f64());
+    stress.trigger(&dags, 1);
+    dags.len()
+}
+
+/// One of scenario 25's baselines, `work` on scenario 1's shape: its tasks a second.
+fn sleeping_tasks(name: &'static str, work: Work) -> f64 {
+    let mut stress = Stress::new(Some(postgres_database()));
+    let size = stress.size;
+    let mut report = Report::new(name);
+    let dags = work_cluster(&mut stress, work, &mut report);
+    stress.wait_for_runs(dags, size.time(20 * MINUTE, 90 * MINUTE), |_| {});
+    stress.measure(&mut report, "master", 1.0);
+    if work == Work::ExtensionNoop {
+        extension_figures(&stress, &mut report);
+    }
+    let tasks_per_s = report.get("tasks_per_s").unwrap_or(0.0);
+    finish(&stress, report, &["success"]);
+    tasks_per_s
+}
+
+/// The extensions scenario 25 runs: the dummy's Python plugin and its service, and a shell
+/// script, each declaring the metric and the notification its tasks report.
+fn extension_config(stress: &Stress) -> String {
+    let python = support::python();
+    let dummy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/extensions/dummy/schedr-ext-dummy")
+        .canonicalize()
+        .unwrap();
+    let script = stress.cluster.dir.path().join("stress-ext.sh");
+    let bin = support::BINARY;
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nset -eu\n\
+             case \"$(cat)\" in *noop*) exit 0;; esac\n\
+             {bin} task-ctx status working --progress 0.5\n\
+             {bin} task-ctx link Job \"https://example.invalid/$SCHEDR_RUN_ID\"\n\
+             {bin} task-ctx extension metric steps 1 --label step=shell\n\
+             {bin} task-ctx extension notify job_done --text done\n\
+             sleep 0.1\n\
+             {bin} task-ctx extension output set 1\n"
+        ),
+    )
+    .unwrap();
+    std::process::Command::new("chmod")
+        .args(["+x", &script.display().to_string()])
+        .status()
+        .unwrap();
+    let dummy = dummy.display();
+    let script = script.display();
+    format!(
+        "\n[extensions.dummy]\ncommand = [\"{python}\", \"{dummy}\"]\n\
+         service = [\"{python}\", \"{dummy}\", \"--service\"]\nversions = [\"1.0\"]\n\
+         \n[extensions.shellstress]\ncommand = [\"{bin}\", \"extension\", \"shell\", \"--\", \
+         \"{script}\"]\nversions = [\"1.0\"]\nmetrics = [{{name = \"steps\", kind = \
+         \"counter\", help = \"Steps done\", labels = [{{name = \"step\"}}]}}]\n\
+         notifications = [{{name = \"job_done\", help = \"A task done\"}}]\n"
+    )
+}
+
+/// `count` DAGs `<prefix>0001`, … of `tasks` tasks each doing `work`: for extension tasks,
+/// every other one the dummy's, the rest the shell script's; their IDs.
+fn work_dags(stress: &Stress, prefix: &str, count: usize, tasks: usize, work: Work) -> Vec<String> {
+    (1..=count)
+        .map(|i| {
+            let id = format!("{prefix}{i:04}");
+            let source = match work {
+                Work::Python => format!(
+                    r#"import time
+
+from schedr import Dag, task
+
+@task
+def work(k: int) -> int:
+    time.sleep(0.1)
+    return k
+
+with Dag("{id}"):
+    for k in range({tasks}):
+        work.override(task_id=f"e{{k:04}}")(k)
+"#
+                ),
+                Work::ExtensionNoop | Work::Extension => {
+                    let (dummy, shell) = if work == Work::Extension {
+                        ("STEPS", "{}")
+                    } else {
+                        ("[{\"return\": 1}]", "{\"noop\": True}")
+                    };
+                    format!(
+                        r#"from schedr import Dag, ExtensionTask
+
+STEPS = [
+    {{"status": ["working", 0.5]}},
+    {{"link": ["Job", "https://example.invalid/job"]}},
+    {{"metric": ["steps", 1, {{"step": "python"}}]}},
+    {{"notify": ["job_done", "done", {{}}]}},
+    {{"service": ["count", {{}}]}},
+    {{"sleep": 0.1}},
+    {{"return": 1}},
+]
+
+with Dag("{id}"):
+    for k in range({tasks}):
+        if k % 2 == 0:
+            ExtensionTask(f"e{{k:04}}", name="dummy", version="1.0", payload={dummy})
+        else:
+            ExtensionTask(f"e{{k:04}}", name="shellstress", version="1.0", payload={shell})
+"#
+                    )
+                }
+            };
+            stress.write_dag(&id, &source);
+            id
+        })
+        .collect()
+}
+
+/// What the master stored of the extensions' reports and how long its queries took: rows a
+/// second over the run, the minute samples the points were folded into, the reports dropped, and
+/// each query's p99 and total.
+fn extension_figures(stress: &Stress, report: &mut Report) {
+    let span = stress
+        .db
+        .floats(&format!(
+            "SELECT ({}) - ({}) FROM (SELECT MIN(started_at) AS a, MAX(ended_at) AS b \
+             FROM attempts) t",
+            stress.db.epoch("b"),
+            stress.db.epoch("a")
+        ))
+        .first()
+        .copied()
+        .unwrap_or(0.0)
+        .max(1e-9);
+    #[expect(clippy::cast_precision_loss, reason = "row counts, far below 2^52")]
+    let count = |sql: &str| stress.db.count(sql) as f64;
+    let tasks = count("SELECT COUNT(*) FROM attempts WHERE status = 'success'");
+    let statuses = count("SELECT COUNT(*) FROM attempt_statuses");
+    let links = count("SELECT COUNT(*) FROM attempt_links");
+    let events = count("SELECT COUNT(*) FROM extension_events");
+    report.set("statuses_stored", statuses);
+    report.set("links_stored", links);
+    report.set("events_stored", events);
+    report.set("reports_per_s", (statuses + links + events) / span);
+    report.set(
+        "sample_rows",
+        count("SELECT COUNT(*) FROM extension_samples"),
+    );
+    report.set("tasks_succeeded", tasks);
+    // Each plugin's run on its worker: the dummy's Python (even task numbers) and the shell
+    // script's (odd), where the gap with plain tasks is spent.
+    for (kind, digits) in [
+        ("python", "'0','2','4','6','8'"),
+        ("shell", "'1','3','5','7','9'"),
+    ] {
+        let runs = stress.db.floats(&format!(
+            "SELECT ({}) - ({}) FROM attempts a JOIN task_instances ti \
+             ON ti.id = a.task_instance_id WHERE a.ended_at IS NOT NULL \
+             AND substr(ti.task_id, 5, 1) IN ({digits})",
+            stress.db.epoch("a.ended_at"),
+            stress.db.epoch("a.started_at")
+        ));
+        report.set(&format!("run_{kind}_p50_s"), quantile(&runs, 0.5));
+        report.set(&format!("run_{kind}_p99_s"), quantile(&runs, 0.99));
+    }
+    let (_, metrics) = stress.cluster.ops_get("master", "/metrics");
+    // Before decision 521, the attempt's read and its status or link were timed apart.
+    for query in [
+        "attempt", "statuses", "links", "reports", "seen", "series", "minutes", "events",
+    ] {
+        let labels = format!("query=\"{query}\"");
+        report.set(
+            &format!("query_{query}_p99_s"),
+            check::labelled_quantile(
+                &metrics,
+                "schedr_master_extension_query_seconds",
+                &labels,
+                0.99,
+            ),
+        );
+        report.set(
+            &format!("query_{query}_total_s"),
+            metric_value(
+                &metrics,
+                &format!("schedr_master_extension_query_seconds_sum{{{labels}}}"),
+            ),
+        );
+    }
+    for reason in ["full", "failed", "slow", "many"] {
+        report.set(
+            &format!("dropped_{reason}"),
+            metric_value(
+                &metrics,
+                &format!("schedr_master_extension_reports_dropped_total{{reason=\"{reason}\"}}"),
+            ),
+        );
+    }
+}
+
+/// The value of the `/metrics` line that starts with `series` (its name and labels), or 0.
+fn metric_value(metrics: &str, series: &str) -> f64 {
+    metrics
+        .lines()
+        .find_map(|line| line.strip_prefix(series)?.trim().parse().ok())
+        .unwrap_or(0.0)
 }
