@@ -159,8 +159,9 @@ test-integration: ## Run integration tests (real processes, the binary; Postgres
 	keys=$$(mktemp -d); \
 	: "set before any container starts: a start failing leaves none behind"; \
 	trap '$(CONTAINER) rm -f '$$name' '$$vault' '$$mysql' '$$mariadb' '$$mongo' '$$sshd' >/dev/null 2>&1; rm -rf '$$keys EXIT; \
+	: "room for 12 tests at once, each a master and a webserver with pools of their own (B280)"; \
 	$(CONTAINER) run -d --rm --name $$name -e POSTGRES_PASSWORD=schedr -p 127.0.0.1::5432 \
-		$(POSTGRES_IMAGE) >/dev/null; \
+		$(POSTGRES_IMAGE) -c max_connections=500 >/dev/null; \
 	vault_port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'); \
 	$(CONTAINER) run -d --rm --name $$vault --network host -e VAULT_DEV_ROOT_TOKEN_ID=root \
 		-e VAULT_DEV_LISTEN_ADDRESS=127.0.0.1:$$vault_port -e SKIP_SETCAP=1 $(VAULT_IMAGE) >/dev/null; \

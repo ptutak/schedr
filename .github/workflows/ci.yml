@@ -200,6 +200,14 @@ jobs:
       - run: uv sync --python 3.14
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       # The stress suite runs nightly instead (stress.yml).
+      # Room for the tests running at once, each a master and a webserver with pools of their
+      # own (B280: the default 100 ran out). A service container takes no arguments: set and
+      # restarted.
+      - name: Postgres with max_connections = 500
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_connections = 500"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - run: cargo nextest run --workspace -E 'kind(test) & not binary(stress)'
       # A process per runner core; the tests sharing the containers' names stay on one.
       - run: uv run pytest python/tests/integration examples -n auto --dist loadgroup
