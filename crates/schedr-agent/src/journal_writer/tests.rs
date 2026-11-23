@@ -140,8 +140,9 @@ async fn a_removal_of_files_never_written_is_no_error() {
 #[tokio::test]
 async fn another_attempts_request_doesnt_wait_for_a_group_in_flight() {
     // Two groups at once: a2, handed in while a1's group is on a slow disk, is written beside
-    // it, not after it (one stall's time for both, not two).
-    let stall = Duration::from_millis(300);
+    // it, not after it (one stall's time for both, not two). The stall long beside the bound's
+    // slack: at 300 ms against 500, a loaded `make check` took 673 ms (2026-11-23).
+    let stall = Duration::from_secs(1);
     let (_dir, journal, writer, _reported) = writer(stall);
     let began = Instant::now();
     writer.submit("a1", Op::Write(Box::new(finished("a1"))), "first");
@@ -150,7 +151,7 @@ async fn another_attempts_request_doesnt_wait_for_a_group_in_flight() {
     writer.flush().await;
     assert_eq!(ids(&journal), ["a1", "a2"]);
     assert!(
-        began.elapsed() < Duration::from_millis(500),
+        began.elapsed() < Duration::from_millis(1700),
         "beside it, not after it: {:?}",
         began.elapsed()
     );
