@@ -465,6 +465,12 @@ impl Instance {
     fn stream(&self) -> Option<u64> {
         self.session.or(self.connecting)
     }
+
+    /// Whether it runs a process with a cleanup gate (a task whose cleanup may move, or such a
+    /// cleanup), as the agent's `gates`: only then does the cutoff stop it.
+    fn gated(&self) -> bool {
+        self.procs.values().any(|p| !p.ordinary)
+    }
 }
 
 /// When one process of a task instance ran.
@@ -1229,8 +1235,11 @@ impl Sim {
         }
     }
 
-    /// A worker's alive check: its cutoff (it stops its tasks and closes its stream), and a
-    /// connection tried again.
+    /// A worker's alive check: its cutoff, and a connection tried again.
+    ///
+    /// As the agent: silent for the lease, it closes its stream; past the cutoff it stops the
+    /// tasks whose cleanup may move and closes its stream only while it runs one of them (its
+    /// cleanup gates, `cut_off_at`), else it keeps the stream for the master's word (B265).
     fn alive(&mut self, inst: usize) {
         if !self.instances[inst].alive {
             return;
@@ -1242,10 +1251,11 @@ impl Sim {
             .is_some_and(|lease| local.boot >= i.heard_boot + lease)
             && i.stream().is_some();
         let past = i.cutoff_at.is_some_and(|at| self.now >= at);
-        if !i.cut_off && (silent || past) {
+        let gated = i.gated();
+        if !i.cut_off && gated && (silent || past) {
             self.cut_off(inst);
         }
-        if silent || (past && self.instances[inst].session.is_some()) {
+        if silent || (past && gated && self.instances[inst].session.is_some()) {
             self.worker_closes(inst);
         }
         let i = &self.instances[inst];
@@ -1498,7 +1508,7 @@ impl Sim {
         if i.lease
             .is_some_and(|lease| local.boot >= i.heard_boot + lease)
         {
-            if !i.cut_off {
+            if !i.cut_off && i.gated() {
                 self.cut_off(inst);
             }
             self.worker_closes(inst);

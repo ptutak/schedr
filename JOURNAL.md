@@ -3444,3 +3444,12 @@ go to `resolve`, `render`, `build` and `mapped_arguments` as a keyword. `waited`
 callable, as a `@sensor.poke` may be a plain `def`, and checks an `@sensor`'s call returned a
 coroutine. `typing.Any` stays only as a value: the annotation of a parameter with none, handed
 to the codec.
+
+### 2026-11-24: M5.2k, B265: the clock simulator's worker keeps its stream past the cutoff
+
+The user's choice (A): the simulator models the agent as it is. Past its master-time cutoff, or
+silent for the lease, its worker stops its `cleanup_anywhere` processes and closes its stream
+only while it runs one of them (the agent's cleanup gates, `cut_off_at`); without one it keeps
+the stream for the master's word. The simulator now explores streams kept open past the cutoff;
+300 fresh scenarios of the master's simulation passed. Not chosen: the agent ending its stream
+at the cutoff for every worker (a behaviour change against decisions 252, 281 and 445).

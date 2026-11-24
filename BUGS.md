@@ -54,9 +54,8 @@ step touches their code or the user schedules them.
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
-| 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 3 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 4 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk
 
@@ -68,20 +67,6 @@ step touches their code or the user schedules them.
   and `@trigger.poke`): the log of its current attempt, read from the worker's log endpoint as a
   task's is, with the earlier attempts' logs reachable from there; the CLI to match (`schedr
   triggers show` naming the attempt, its log by `schedr logs`).
-
-## B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates
-
-- **Rating:** severity **medium**, probability **possible**, tests (score 4): clock_sim/master.rs's alive() ends the session once master time passes the cutoff, tasks with cleanup_anywhere or not; the agent ends its stream then only with cleanup gates (cut_off_at), so the simulator never shows a stream kept open past the cutoff.
-- **Found:** 2026-11-19, Codex's review of DN14 (M5.2e): a queued task kept past the cutoff on a
-  stream the agent didn't close started after a late heartbeat answer, though the master had
-  ended it `lost` (fixed in M5.2e: the queue goes back before the next stamp counts). The
-  simulator couldn't find it: its worker closes the session at the cutoff
-  (`clock_sim/master.rs`, `alive`: `past && session`), the agent only at `cut_off_at`, which is
-  `None` without gates (`agent.rs`).
-- **The choice (the user's):** model the agent as it is (the simulator then explores streams kept
-  past the cutoff, and may find more there), or have the agent end its stream at the cutoff for
-  every worker (a behaviour change: a worker cut one way re-registers instead of waiting for the
-  master's word; decisions 252, 281, 445).
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 
