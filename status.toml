@@ -1,17 +1,16 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-24
+updated = 2026-11-25
 
 in_progress = [
-    "R1.2: 1.2.0 being released: rc2 tagged (B292 changed migration 0003), B293 and B294 fixed (stress and test checks), the version commit 1.2.0 next pushed, then its tag v1.2.0 once CI and make check pass, the release workflow to PyPI.",
+    "R1.2: 1.2.0 released 2026-11-25 (PyPI, ghcr.io, GitHub). Left: the full Stress run on CI against v1.2.0, dispatched 2026-11-25 (run 45511092157), read and its table put on the stress page (the guide's Stress tests). Then M5.3 (a to d).",
 ]
 
 waiting = [
 ]
 
 rules = [
-    "1.2.0rc2 and 1.2.0 pre-accepted (the user, 2026-11-24: \"you're free to push 1.2.0 with the fixes\", then rc2 for the changed migration).",
     "One review per step: agy (gemini-4-neon-high, the agy skill), Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
     "Stress tests on CI, not locally (the user, 2026-11-24): the Stress workflow after a push, filtered to what a change touches (cut scenarios 17-21 for recovery changes), full for a release; locally only a quick single scenario aimed at a feature.",
@@ -21,6 +20,6 @@ rules = [
 ]
 
 colleagues = """
-agy reviewed M5.2k, M5.2j and the All view (2026-11-24); Grok M5.2k's trust boundaries."""
+agy reviewed M5.2k, M5.2j, the All view, DN40 and B292 (2026-11-24); Grok M5.2k's trust boundaries."""
 
 resume = "claude --resume 4e0d63dd-fd58-4f9c-9aeb-589a35746903"

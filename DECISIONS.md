@@ -94,7 +94,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 | D509 | 2026-11-18 | user | built M5.2e | assignment | A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster |
 | D508 | 2026-11-18 | user | rule | development | Journal entries: decisions, decision notes, the user's notes, plain entries |
 | D507 | 2026-11-18 | user | built M5.2d | workers | A worker's journal writes beside its loop; a start in flight holds its assignment unreported |
-| D506 | 2026-11-18 | user | planned (M5.2cB4) | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |
+| D506 | 2026-11-18 | user | built M5.2cB4 | assignment | The round's slow parts on due flags; what is read before the lock is only what the round alone writes |
 | D505 | 2026-11-17 | user | built M5.2cB | workers | Only the round moves runs forward: turns queue a worker's starts and results for it |
 | D504 | 2026-11-17 | user | built (B255 fixed) | cleanup | A movable cleanup's try waits at a barrier for the master's word, asked only once it waits |
 | D503 | 2026-11-17 | user | built M5.2b | state | Queries stay prepared on their connections by default; off, each is an unnamed statement |

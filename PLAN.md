@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.2cB4, The path from a task's result to its slot's next assignment.
+**Next:** R1.2, Release 1.2.0.
 
 ## M0: Foundations
 
@@ -258,7 +258,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2cA | Assign's reads before the core lock | done 2026-11-17 | D501 |
 | M5.2cB | Only the round moves runs forward | done 2026-11-17 | D505 |
 | M5.2cB3 | The round's results part: one set of statements, its reads before the lock | done 2026-11-18 |  |
-| M5.2cB4 | The path from a task's result to its slot's next assignment | **next** | D506 |
+| M5.2cB4 | The path from a task's result to its slot's next assignment | done 2026-11-24 | D506 |
 | M5.2d | The worker's start path | done 2026-11-18 | D507 |
 | M5.2e | A worker's waiting queue (lookahead with a barrier) | done 2026-11-19 | D509 |
 | M5.2f | Many DAG triggers: a stress scenario, and poke reports in the heartbeat | done 2026-11-19 |  |
@@ -285,7 +285,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
 | M5.2j | Runs and DAGs in numbered pages (decision 517) | done 2026-11-24 | D517 |
 | M5.2k | The bugs found and left before 1.2.0 fixed | done 2026-11-24 | D522 |
-| R1.2 | Release 1.2.0 | planned |  |
+| R1.2 | Release 1.2.0 | **next** |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |
 | M5.3c | A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster | planned |  |

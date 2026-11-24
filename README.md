@@ -38,14 +38,17 @@ with Dag(
 
 ## Status
 
-**1.1.0 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
+**1.2.0 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
 stable one, brought M1 to M4B of `PLAN.md`: standalone and distributed, the fork server, the
-web UI and the native API. 1.1.0 adds M5.1: a faster master (34-67 % more tasks a second in
-the stress suite than 1.0.0) and metrics in the web UI. Within 1.x the database schema changes
+web UI and the native API. 1.1.0 added M5.1: a faster master (34-67 % more tasks a second in
+the stress suite than 1.0.0) and metrics in the web UI. 1.2.0 adds M5.2: a faster master again
+(107-112 tasks a second in the stress suite's throughput scenario on CI's runner) and
+extensions, task kinds run by a plugin in any language, with a Kubernetes plugin. Within 1.x the database schema changes
 only through new migrations (`schedr db migrate`), and the protocol between schedr's processes
 (2.x) only additively, so the master is upgraded first; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a
-fresh database. The master's throughput comes next (M5.2), then an Airflow DAG translator (M6); see `PLAN.md`.
+fresh database. Next come hot standby masters in the chart and extension tasks placed by the
+plugins workers offer (M5.3), then an Airflow DAG translator (M6); see `PLAN.md`.
 
 What works:
 
@@ -69,6 +72,10 @@ What works:
   last one.
 - **Plain scripts:** script roots (`SCHEDR_SCRIPT_PATH`) with `schedr.toml` declarations,
   standalone jobs, the `script` task kind and `ScriptOperator`.
+- **Extensions:** `ExtensionTask` runs a task kind's plugin, in any language (`schedr_extension`
+  for Python, `schedr extension shell` for a script), found by configuration or on the worker's
+  `PATH`; it reports its status, links, metrics and events, and may keep a service on each
+  worker. A Kubernetes plugin runs each task as a pod.
 - **Notifications and retention:** webhooks and email on eight events (`Dag(notify=...)`,
   `channel.send` from tasks); `[retention]` for runs, outputs, events and commands.
 - **Testing DAGs:** `schedr dags check`, `schedr dags test`, and `schedr.testing`
@@ -96,7 +103,8 @@ What works:
   tasks), logs and outputs live, import errors, resources, cleanups and connections, actions
   with confirmations, several deployments in one UI; the Metrics page (memory, CPU, throughput
   and start latency per deployment), a Status block on the Deployments page, and each task's
-  memory over its last attempts.
+  memory over its last attempts; the Extensions page (a tab per extension, one version at a
+  time, its deployments and workers, its panels and events); runs and DAGs in numbered pages.
 
 ## Documentation
 
@@ -134,8 +142,8 @@ Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each ca
 the package: standalone and workers, the base for your own image), `ghcr.io/ptutak/schedr-slim`
 (the same without the task libraries and connection clients) and
 `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), on Debian
-(glibc), tagged with the version (`1.1.0`) and its series (`1.1`); the same on Alpine add
-`-alpine` (`1.1.0-alpine`). There is no `latest`: a deployment names the version it runs.
+(glibc), tagged with the version (`1.2.0`) and its series (`1.2`); the same on Alpine add
+`-alpine` (`1.2.0-alpine`). There is no `latest`: a deployment names the version it runs.
 
 ## Trying it
 
