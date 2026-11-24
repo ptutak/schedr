@@ -4269,6 +4269,23 @@ async fn a_master_gone_silent_stops_a_task_whose_cleanup_may_move() {
 }
 
 #[tokio::test]
+async fn a_master_gone_silent_stops_a_trigger_with_no_gated_task_beside_it() {
+    // B290: past the lease the master may have counted this worker lost and started its
+    // trigger elsewhere; it stopped here only beside a task whose cleanup may move.
+    let stops = Arc::new(Mutex::new(Vec::new()));
+    let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
+    let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
+    let mut script = silent_master_leased(false, 300);
+    script.truncate(1);
+    script.push(assign_trigger("t1", "found"));
+    against_script_with(2, Start::With(vec![]), script, done, |agent| {
+        agent.executor.stops = seen_stops;
+    })
+    .await;
+    assert_eq!(*stops.lock().unwrap(), [StopReason::CutOff]);
+}
+
+#[tokio::test]
 async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));

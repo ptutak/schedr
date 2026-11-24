@@ -3453,3 +3453,15 @@ only while it runs one of them (the agent's cleanup gates, `cut_off_at`); withou
 the stream for the master's word. The simulator now explores streams kept open past the cutoff;
 300 fresh scenarios of the master's simulation passed. Not chosen: the agent ending its stream
 at the cutoff for every worker (a behaviour change against decisions 252, 281 and 445).
+
+### 2026-11-24: M5.2k, B290: a cut-off worker stops its triggers, with or without gated tasks
+
+Found while fixing B265 (a side agent pointed out it wasn't logged): the agent stopped its
+triggers at the cutoff only inside `stop_cut_off`, which runs only while a `cleanup_anywhere` task
+holds a cleanup gate; a worker running only triggers kept them going past the moment the master
+may have counted it lost and started them elsewhere, two copies at once. Not a regression: so
+since triggers came (M4.11b part 1). Now `cut_off_if_late` stops them at the lease deadline in
+any case, each once (`RunningTrigger.cut_off`); the stream is kept for the master's word, as the
+user chose for B265. The deadlines are read before the time they are judged at:
+`master_cutoff` gives "now plus what is left", so read after `now` a passed cutoff was never late
+(the first version of this fix broke the gated cutoff that way).

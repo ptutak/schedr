@@ -2160,13 +2160,29 @@ impl<E: Executor> Agent<E> {
     /// Cuts the tasks off ([`Self::stop_cut_off`]) if the lease has run out since the master's
     /// last word; whether it had.
     fn cut_off_if_late(&mut self) -> bool {
-        let late = self
-            .cut_off_at()
-            .is_some_and(|at| at <= tokio::time::Instant::now());
+        // The deadlines before the time they are judged at: a cutoff passed reads as the
+        // moment it is computed (`master_cutoff`: now plus nothing left), never later.
+        let (cut_off_at, deadline) = (self.cut_off_at(), self.lease_deadline());
+        let now = tokio::time::Instant::now();
+        let late = cut_off_at.is_some_and(|at| at <= now);
         if late {
             self.stop_cut_off();
+        } else if deadline.is_some_and(|at| at <= now) {
+            // With no task whose cleanup may move, its triggers all the same (B290): the master
+            // may have counted it lost and started them elsewhere, from their bookmarks. The
+            // stream is kept for the master's word, as without triggers.
+            self.stop_triggers_cut_off();
         }
         late
+    }
+
+    /// Stops the triggers running here, each once: their bookmarks are the master's, one
+    /// elsewhere takes over from there.
+    fn stop_triggers_cut_off(&mut self) {
+        for trigger in self.triggers.values_mut().filter(|t| !t.cut_off) {
+            trigger.cut_off = true;
+            let _ = trigger.stop.send(StopReason::CutOff);
+        }
     }
 
     /// Stops the tasks whose cleanup may move: it mustn't run during them. Their cleanups wait
@@ -2174,10 +2190,7 @@ impl<E: Executor> Agent<E> {
     fn stop_cut_off(&mut self) {
         self.cut_off = true;
         self.hold_cleanups();
-        // Its bookmark is the master's: one elsewhere takes over from there.
-        for trigger in self.triggers.values() {
-            let _ = trigger.stop.send(StopReason::CutOff);
-        }
+        self.stop_triggers_cut_off();
         for id in self.gates.keys() {
             if !self.cleaning.contains_key(id)
                 && let Some(stop) = self.running.get(id)
@@ -4161,19 +4174,8 @@ impl<E: Executor> Agent<E> {
         };
         self.remember_code(&task_assign, &spec);
         let (stop, stops) = Stops::new();
-        self.triggers.insert(
-            instance_id.clone(),
-            RunningTrigger {
-                dag_id: assign.dag_id.clone(),
-                stop,
-                next_seq: 0,
-                unstored: BTreeMap::new(),
-                poke: PokeReport {
-                    failures: assign.failures,
-                    ..PokeReport::default()
-                },
-            },
-        );
+        let trigger = RunningTrigger::new(assign.dag_id.clone(), stop, assign.failures);
+        self.triggers.insert(instance_id.clone(), trigger);
         let executor = self.executor.clone();
         let ended = self.done_tx.clone();
         tokio::spawn(async move {
@@ -5514,10 +5516,29 @@ struct PokeReport {
 struct RunningTrigger {
     dag_id: String,
     stop: StopSender,
+    /// Stopped for no word from the master ([`Agent::stop_triggers_cut_off`]).
+    cut_off: bool,
     next_seq: u64,
     /// What it found that the master hasn't said it has, by its place.
     unstored: BTreeMap<u64, (pb::TriggerEvent, tokio::sync::oneshot::Sender<()>)>,
     poke: PokeReport,
+}
+
+impl RunningTrigger {
+    /// One just started, with its failures in a row so far.
+    fn new(dag_id: String, stop: StopSender, failures: u32) -> Self {
+        Self {
+            dag_id,
+            stop,
+            cut_off: false,
+            next_seq: 0,
+            unstored: BTreeMap::new(),
+            poke: PokeReport {
+                failures,
+                ..PokeReport::default()
+            },
+        }
+    }
 }
 
 /// Where in `ids` (sorted) a heartbeat's reports start: after `cursor`, the last one the
