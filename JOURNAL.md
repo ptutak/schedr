@@ -3618,3 +3618,17 @@ published alone; corrected.
 The user, the same day: no local stress comparison against 1.1.0 for this release; CI's stress
 runs after the push stand for it (R1.2's done-when corrected). After 1.2.0rc1 the user tests
 standalone and the kind demo, and if all is well goes straight to 1.2.0.
+
+### 2026-11-24: stress checks tell a stalled runner from slow code (B291 fixed)
+
+The full Stress run on 1.2.0rc1 failed scenario 24 on one number, the round's p99 at 5.8 s
+against 5, during a 14.2 s full I/O stall of the runner (every part of the round under 0.82 s);
+scenario 14 had failed the same way the night before (a 3.9 s stall), then passed three times
+on CI (ratios 1.0 to 1.19). The user: the timing limits are too strict for the runners' load,
+and chose option A of four: a scenario's limits on timings and rates (names ending `_s`,
+`_ratio`, `_per_file`) failing while the runner stalled over 2 s of full I/O stall
+(`NOISY_STALL_MS`) is no failure but `noisy_runner` in its report, and the Stress workflow runs
+it once more, a second stall a warning; every other check (tasks run once, none lost, counts)
+fails as before. Each report gains `io_full_stall_s`. Scenario 14's p99 ratio, read from buckets
+a square root of 2 apart, allows two steps (limit 2.0, was 1.5). Not chosen: wider limits
+everywhere; timing checked only on quiet runs, never rerun; leaving it.

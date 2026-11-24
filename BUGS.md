@@ -53,25 +53,8 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B291: stress 14 (quiet DAGs) fails on a slow runner: its round ratios are timing-strict and counted in steps of the square root of 2 | 3 | low | likely | tests |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B291: stress 14 (quiet DAGs) fails on a slow runner: its round ratios are timing-strict and counted in steps of the square root of 2
-
-- **Rating:** severity **low**, probability **likely**, tests (score 3): stress 14's round ratios fail on a slow or stalled runner.
-- **Found:** 2026-11-24, the nightly Stress runs of 2026-11-23 (`ca875735`: `round_p99_ratio`
-  2.0, limit 1.5) and 2026-11-24 (`c753a694`: `round_mean_ratio` 6.2, limit 2,
-  `round_p99_ratio` 22.6; the runner's I/O stalled 3.9 s whole, rounds of about a second). It
-  passed on 2026-11-22 (1.39 and 1.41).
-- **Known flaky** (the user, 2026-11-24: "a flaky one with strict timing and it fails if the
-  machine is too slow"). The p99 is read from histogram buckets a square root of 2 apart, so
-  one bucket's step (1.41) passes and two (2.0) fail against the 1.5 limit; a stall of the
-  runner lands a few rounds at a second, which moves both ratios far.
-- **Not a release blocker:** 1.2.0rc1 tagged with it open.
-- **Ideas:** the p99 ratio's limit set to a bucket step (or compared by buckets); rounds taken
-  while the system's pressure stall information (PSI) shows a stall left out, or the scenario
-  rerun once when the run's I/O stall is over a bound.
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 

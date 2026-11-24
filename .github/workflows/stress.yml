@@ -129,12 +129,29 @@ jobs:
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
       - run: uv sync --python 3.14
       - run: echo "SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      # A scenario whose timing limits alone failed while the runner stalled on I/O reports
+      # `noisy_runner` and passes: run once more, its second report the one kept (the user,
+      # 2026-11-24); stalled again, a warning on the run, not a failure.
       - name: ${{ matrix.scenario }}
         env:
           SCENARIO: ${{ matrix.scenario }}
-        run: >-
-          cargo nextest run -p schedr --test stress --test-threads 1 --no-capture
-          -E "test(/(^|::)${SCENARIO}$/)"
+        run: |
+          run() {
+            cargo nextest run -p schedr --test stress --test-threads 1 --no-capture \
+              -E "test(/(^|::)${SCENARIO}$/)"
+          }
+          noisy() {
+            python3 -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get("noisy_runner") else 1)' \
+              "target/stress/${SCENARIO#stress_}.json"
+          }
+          run
+          if noisy; then
+            echo "::warning::${SCENARIO}: the runner stalled on I/O, timing limits not applied; running it once more"
+            run
+            if noisy; then
+              echo "::warning::${SCENARIO}: stalled again: its timing limits not applied on this run"
+            fi
+          fi
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

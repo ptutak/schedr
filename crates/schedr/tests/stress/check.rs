@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sqlx::AssertSqlSafe;
 
@@ -663,13 +663,29 @@ pub fn histogram_quantile(metrics: &str, name: &str, q: f64) -> f64 {
         .map_or(0.0, |(le, _)| *le)
 }
 
+/// The whole system's full I/O stall during a scenario past which its timing limits are not a
+/// failure (the user, 2026-11-24): a runner stalled this long slows every round, whatever the
+/// code (stress 24: a 5.8 s round in a 14 s stall; stress 14 in a 3.9 s one).
+pub const NOISY_STALL_MS: u64 = 2_000;
+
+/// Whether a number is a timing or a rate (its name ends `_s`, `_ratio` or `_per_file`): what a
+/// stalled runner moves, unlike a count of tasks run, lost or cancelled.
+pub fn is_timing(name: &str) -> bool {
+    name.ends_with("_s") || name.ends_with("_ratio") || name.ends_with("_per_file")
+}
+
 /// A scenario's numbers, written to `target/stress/<scenario>.json`, and its gross-regression
 /// floors.
 pub struct Report {
     scenario: &'static str,
     started: Instant,
+    /// The system's I/O stall counters at the start: a stall past [`NOISY_STALL_MS`] makes the
+    /// timing limits inconclusive.
+    io_at_start: Option<crate::support::IoStall>,
     metrics: BTreeMap<String, f64>,
     failures: Vec<String>,
+    /// The limits on timings and rates that failed, apart from the rest (see [`is_timing`]).
+    timing_failures: Vec<String>,
     diagnosis: serde_json::Value,
     seed: Option<u64>,
 }
@@ -680,8 +696,10 @@ impl Report {
         Self {
             scenario,
             started: Instant::now(),
+            io_at_start: crate::support::IoStall::now(),
             metrics: BTreeMap::new(),
             failures: Vec::new(),
+            timing_failures: Vec::new(),
             diagnosis: serde_json::Value::Null,
             seed: None,
         }
@@ -700,8 +718,16 @@ impl Report {
     pub fn at_most(&mut self, name: &str, value: f64, limit: f64) {
         self.set(name, value);
         if value > limit {
-            self.failures
-                .push(format!("{name} = {value:.3}, over its limit {limit}"));
+            self.limit_failed(name, format!("{name} = {value:.3}, over its limit {limit}"));
+        }
+    }
+
+    /// A limit failed: a timing's apart (see [`is_timing`]).
+    fn limit_failed(&mut self, name: &str, failure: String) {
+        if is_timing(name) {
+            self.timing_failures.push(failure);
+        } else {
+            self.failures.push(failure);
         }
     }
 
@@ -709,8 +735,10 @@ impl Report {
     pub fn at_least(&mut self, name: &str, value: f64, floor: f64) {
         self.set(name, value);
         if value < floor {
-            self.failures
-                .push(format!("{name} = {value:.3}, under its floor {floor}"));
+            self.limit_failed(
+                name,
+                format!("{name} = {value:.3}, under its floor {floor}"),
+            );
         }
     }
 
@@ -726,7 +754,14 @@ impl Report {
 
     /// Whether anything failed so far.
     pub fn failed(&self) -> bool {
-        !self.failures.is_empty()
+        !self.failures.is_empty() || !self.timing_failures.is_empty()
+    }
+
+    /// The whole system's full I/O stall since the scenario started, in ms (`None`: no
+    /// `/proc/pressure/io`).
+    fn full_stall_ms(&self) -> Option<u64> {
+        let (start, now) = (self.io_at_start?, crate::support::IoStall::now()?);
+        Some(now.full.saturating_sub(start.full) / 1000)
     }
 
     /// The scenario's own directory in `target/stress/` (`<scenario>/`), made empty: its
@@ -743,9 +778,36 @@ impl Report {
         self.seed = Some(seed);
     }
 
-    /// Writes the report and fails the scenario on any failure, with `logs` for context.
+    /// Writes the report and fails the scenario on any failure, with `logs` for context. Its
+    /// timing limits alone failing while the runner stalled past [`NOISY_STALL_MS`] is no failure
+    /// but `noisy_runner` in the report, which the Stress workflow runs once more (the user,
+    /// 2026-11-24); every other check fails as before.
     pub fn finish(mut self, logs: impl FnOnce() -> String) {
         self.set("wall_s", self.started.elapsed().as_secs_f64());
+        let stall = self.full_stall_ms();
+        if let Some(stall) = stall {
+            self.set(
+                "io_full_stall_s",
+                Duration::from_millis(stall).as_secs_f64(),
+            );
+        }
+        let noisy = stall.is_some_and(|ms| ms > NOISY_STALL_MS) && !self.timing_failures.is_empty();
+        let noisy_runner = noisy.then(|| {
+            serde_json::json!({
+                "io_full_stall_ms": stall,
+                "timing_failures": self.timing_failures,
+            })
+        });
+        if noisy {
+            eprintln!(
+                "stress {}: the runner stalled {} ms on I/O: timing limits not applied ({})",
+                self.scenario,
+                stall.unwrap_or_default(),
+                self.timing_failures.join("; ")
+            );
+        } else {
+            self.failures.append(&mut self.timing_failures);
+        }
         let dir = report_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let report = serde_json::json!({
@@ -753,6 +815,7 @@ impl Report {
             "profile": crate::load::Size::get().describe(),
             "metrics": self.metrics,
             "failures": self.failures,
+            "noisy_runner": noisy_runner,
             "diagnosis": self.diagnosis,
             "seed": self.seed,
         });
@@ -779,4 +842,29 @@ impl Report {
 /// `target/stress/` of the workspace.
 fn report_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/stress")
+}
+
+#[cfg(test)]
+mod noisy_tests {
+    /// Timings and rates are what a stalled runner moves; counts aren't (the user, 2026-11-24).
+    #[test]
+    fn timings_and_rates_are_told_from_counts() {
+        for timing in [
+            "round_p99_s",
+            "tasks_per_s",
+            "round_mean_ratio",
+            "slowest_fork_s_per_file",
+        ] {
+            assert!(super::is_timing(timing), "{timing}");
+        }
+        for count in [
+            "lost_attempts",
+            "success",
+            "cancelled",
+            "hosts_reported_mib",
+            "fork_share",
+        ] {
+            assert!(!super::is_timing(count), "{count}");
+        }
+    }
 }

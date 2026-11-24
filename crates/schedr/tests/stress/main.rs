@@ -1106,10 +1106,12 @@ fn stress_14_quiet_dags() {
         beside.mean() / alone.mean().max(1e-6),
         2.0,
     );
+    // Read from buckets a square root of 2 apart, so the ratio steps 1, 1.41, 2, 2.83: two
+    // steps allowed (B291: 1.5 failed a runner's one bucket of noise more).
     report.at_most(
         "round_p99_ratio",
         beside.quantile(0.99) / alone.quantile(0.99).max(1e-6),
-        1.5,
+        2.0,
     );
     // No quiet DAG fired.
     let fired = stress
