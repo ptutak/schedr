@@ -742,3 +742,14 @@ done_when = '''
 first, its premise measured: a small binary of `task-ctx`'s code alone against `schedr`'s start on an idle machine (2026-11-23, loaded: `schedr --version` 20-70 ms, `/bin/ls` ~10 ms, mostly kernel time; 86 MB of mapped code; a stripped copy no faster); no clear gain and the step is dropped with those numbers. Otherwise: a script's `task-ctx` calls run through the small program with the same results (the existing task-ctx tests passing through it); one call's time measured idle before and after; scenario 25's shell plugin run measured again; the guide's pages on `task-ctx` and shell plugins say how it is found
 '''
 status = "planned"
+
+[[steps]]
+id = "M5.3d"
+title = "Extension tasks placed by the plugins workers offer, beside their queue"
+scope = '''
+(the user, 2026-11-25: "we can think about automatic queues for extensions based on name@version", then "record it in M5.3 after 1.2.0") today an extension task goes by its queue alone: a worker of the queue without the plugin, or not serving the task's exact version, gives it back with `EXTENSION_UNDEFINED` and the next is tried, until every one has refused and the task is `unschedulable`; the operator keeps the plugins and the queues in agreement by hand. Instead, a filter beside the queue, not generated `name@version` queues (a queue says where a task runs, the plugin what a worker can run: `queue="gpu"` with `spark@1.0` needs both): the dispatcher's `Needs` gains the task's extension and version, the worker registry the offers `Register.extensions` already sends (the master's connections keep them today only for the parse's warnings), and `eligible()` checks `(name, version)` in them beside `serves(queue)`. Extension tasks then need no `queue=` of their own; a rolling upgrade from 1.0 to 1.1 routes each pinned task to the workers still serving it; no config or protocol change. The give-back stays, for a plugin that crashed or a service not ready (DN29). To settle when it starts (the user): a task no live worker of its queue serves waits, its reason said ("no worker of queue `default` serves `spark@2.0`"), placed when one registers, or ends `unschedulable` after a while (a typo in its version fails fast); and whether `explain_waiting` and the UI's task view say so
+'''
+done_when = '''
+an extension task assigned only to workers of its queue offering its name and version (a test with workers offering 1.0, 1.0 and 1.1, and none: each task to the right ones, no give-back); the user's choice for a task nobody serves built and said in its waiting reason; the guide's extensions page saying routing needs no queue of its own; stress 25 on CI unchanged or faster
+'''
+status = "planned"

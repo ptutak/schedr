@@ -289,6 +289,7 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |
 | M5.3c | A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster | planned |  |
+| M5.3d | Extension tasks placed by the plugins workers offer, beside their queue | planned |  |
 
 ## M6: Airflow migration tools
 
