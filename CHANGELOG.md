@@ -24,7 +24,9 @@ task as a pod.
   and events, whether a run's start and a posted event were announced (runs and events before
   the upgrade count as announced: nothing already going is announced again), the services' part
   of a worker's memory, and each trigger's runs: run `schedr db migrate` (or start the master
-  with `--migrate`) before the webservers.
+  with `--migrate`) before the webservers. A database migrated by 1.2.0rc1 isn't taken by
+  1.2.0rc2 or later (that migration changed after rc1): start from a copy of the 1.1.0 database
+  instead.
 - **A worker's certificate must name the worker** (decision 520): with TLS, the master takes a
   worker's client certificate only if it names `[tls] worker_name` (the chart's do), so another
   role's certificate can't act as a worker. Certificates made by hand need that name. With

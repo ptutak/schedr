@@ -3589,7 +3589,7 @@ async fn an_attempts_statuses_and_links_are_read_back_with_it() {
         message: Some("image".to_owned()),
         progress: Some(0.25),
     };
-    db.add_attempt_status(&attempt_id, "dummy", &status)
+    db.add_attempt_status(&attempt_id, ("dummy", "1.0"), &status)
         .await
         .unwrap();
     let link = AttemptLink {
@@ -3603,16 +3603,25 @@ async fn an_attempts_statuses_and_links_are_read_back_with_it() {
         (vec![status.clone()], vec![link])
     );
     // DN19: its extension's attempts, with its latest phase.
-    let listed = db.extension_attempts("dummy", None, 10).await.unwrap();
+    let listed = db
+        .extension_attempts("dummy", (None, None), 10)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(
-        db.extension_attempts("dummy", Some("nobody"), 10)
+        db.extension_attempts("dummy", (Some("nobody"), None), 10)
             .await
             .unwrap()
             .len(),
         0
     );
     assert_eq!(listed[0].attempt_id, attempt_id);
+    // B292: by its version, alone and with its worker.
+    let count = |worker, version| db.extension_attempts("dummy", (worker, Some(version)), 10);
+    assert_eq!(count(None, "1.0").await.unwrap().len(), 1);
+    assert_eq!(count(Some("w1"), "1.0").await.unwrap().len(), 1);
+    assert_eq!(count(None, "1.1").await.unwrap(), []);
+    assert_eq!(count(Some("nobody"), "1.0").await.unwrap(), []);
     assert_eq!(listed[0].status, status);
     assert_eq!(
         (listed[0].task_id.as_str(), listed[0].map_index),
@@ -3807,6 +3816,7 @@ async fn a_flush_of_reports_keeps_only_its_workers_attempts_on_postgres() {
         attempt_id: attempt_id.clone(),
         worker_id: worker.to_owned(),
         extension: "dummy".to_owned(),
+        version: "1.0".to_owned(),
         status: AttemptStatus {
             at: ts(NOW),
             phase: phase.to_owned(),

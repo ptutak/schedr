@@ -32,9 +32,12 @@ CREATE TABLE attempt_statuses (
     progress    DOUBLE PRECISION CHECK (progress >= 0 AND progress <= 1),
     -- The extension whose plugin reported it (DN19): its page lists its attempts' phases.
     extension   TEXT NOT NULL DEFAULT '',
+    -- Its version (DN40): a version's page lists its own attempts (B292).
+    extension_version TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (attempt_id, seq)
 );
-CREATE INDEX attempt_statuses_extension ON attempt_statuses (extension, at);
+-- By version too (B292): a version's page reads its own attempts' rows only.
+CREATE INDEX attempt_statuses_extension ON attempt_statuses (extension, extension_version, at);
 CREATE TABLE attempt_links (
     attempt_id  UUID NOT NULL REFERENCES attempts (id) ON DELETE CASCADE,
     label       TEXT NOT NULL,

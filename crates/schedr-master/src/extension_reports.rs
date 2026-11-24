@@ -495,6 +495,7 @@ fn attempt_report(flush: &mut Flush, worker_id: String, reported: pb::AttemptRep
                 attempt_id: reported.attempt_id,
                 worker_id,
                 extension: cut(reported.extension),
+                version: cut(reported.extension_version),
                 status,
             };
             // The same phase again: the newest replaces it, in its place.

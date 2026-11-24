@@ -409,7 +409,7 @@ pub async fn get_extension(
         .collect();
     let attempts = state
         .db
-        .extension_attempts(&name, worker.as_deref(), LISTED)
+        .extension_attempts(&name, (worker.as_deref(), shown.as_deref()), LISTED)
         .await?
         .into_iter()
         .map(|a| ExtensionAttemptView {

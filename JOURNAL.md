@@ -3660,3 +3660,18 @@ twice (its redirect).
 The separate-UI demo, for the user to see two versions: the dummy plugin and service serve 1.0
 and 1.1, the second deployment configured with both and `extension_newer` (1.1 every 2 minutes,
 reporting every metric), and the version dropdown shown always ("none" with no version known).
+
+### 2026-11-24: B292 fixed in migration 0003; rc2 before 1.2.0
+
+The user: "we can edit migration 3 no problem there was no release yet" (an rc isn't one), then
+"changed migration means another intermediate rc version before 1.2.0" (decision 498). Migration
+0003's `attempt_statuses` gains `extension_version`, stored from the worker's report (it was
+already sent, `AttemptReported.extension_version`), and an extension's attempts are listed by
+it: a version's page lists its own. A database migrated by 1.2.0rc1 isn't taken by rc2 or later.
+Stress 25's Python part, failing its round limit on the full profile under CPU load, logged as
+B293 and left for after 1.2.0; routing extension tasks by the workers' announced plugins instead
+of queues asked about and kept manual for 1.2.0 (the user).
+agy's review of the B292 fix (3 findings, all fixed): the other writer of `attempt_statuses`,
+`add_attempt_status`, now takes the version too; the index is `(extension, extension_version, at)`
+and a version's read names it directly (an `IS NULL OR` kept it from the index); tests on
+Postgres, the API and the master's report for the version.

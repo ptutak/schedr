@@ -2628,6 +2628,36 @@ async fn an_extensions_version_is_chosen_highest_first_or_as_asked() {
     of_highest.sort();
     assert_eq!(of_highest, ["found it", "of 1.10"]);
     assert_eq!(highest["workers"].as_array().unwrap().len(), 1, "{highest}");
+    // B292: a version's attempts only, by the version stored with their statuses.
+    let ready = db.ready_instances(ts(NOW)).await.unwrap();
+    let (attempt, _) = db
+        .assign_attempt(&ready[0].instance_id, "w2", ts(NOW))
+        .await
+        .unwrap()
+        .unwrap();
+    let status = schedr_db::reports::AttemptStatus {
+        at: ts(NOW),
+        phase: "running".to_owned(),
+        message: None,
+        progress: None,
+    };
+    db.add_attempt_status(&attempt, ("dummy", "1.10"), &status)
+        .await
+        .unwrap();
+    let attempts = |view: &Json| view["attempts"].as_array().map_or(0, Vec::len);
+    assert_eq!(attempts(&get(&app, "/api/v1/extensions/dummy").await.1), 1);
+    assert_eq!(
+        attempts(&get(&app, "/api/v1/extensions/dummy?version=1.9").await.1),
+        0
+    );
+    assert_eq!(
+        attempts(
+            &get(&app, "/api/v1/extensions/dummy?version=1.10&worker=w1")
+                .await
+                .1
+        ),
+        0
+    );
 }
 
 /// DN40: versions in the order people read them, total (a sort never sees two equal ones).

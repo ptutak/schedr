@@ -180,6 +180,12 @@ fn an_attempts_phase_changes_are_kept_its_progress_ticks_coalesced_and_its_links
         "w1".to_owned(),
         link("Bad", "javascript:alert(1)"),
     );
+    // B292: each status keeps its extension's version, as reported.
+    assert!(
+        flush.statuses.iter().all(|s| s.version == "1.0"),
+        "{:?}",
+        flush.statuses
+    );
     let kept: Vec<(&str, &str, Option<f64>)> = flush
         .statuses
         .iter()

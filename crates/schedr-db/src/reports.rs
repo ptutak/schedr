@@ -42,6 +42,8 @@ pub struct ReportedStatus {
     pub worker_id: String,
     /// The extension whose plugin reported it.
     pub extension: String,
+    /// Its version (DN40, B292).
+    pub version: String,
     /// The status.
     pub status: AttemptStatus,
 }
@@ -67,14 +69,14 @@ impl Database {
     pub async fn add_attempt_status(
         &self,
         attempt_id: &str,
-        extension: &str,
+        (extension, version): (&str, &str),
         status: &AttemptStatus,
     ) -> Result<(), DbError> {
         const NEXT: &str = "SELECT CAST(COALESCE(MAX(seq) + 1, 0) AS BIGINT), COUNT(*) FROM attempt_statuses \
             WHERE attempt_id = $1{uuid}";
         const ADD: &str = "INSERT INTO attempt_statuses \
-            (attempt_id, seq, at, phase, message, progress, extension) \
-            VALUES ($1{uuid}, $2, $3{ts}, $4, $5, $6, $7)";
+            (attempt_id, seq, at, phase, message, progress, extension, extension_version) \
+            VALUES ($1{uuid}, $2, $3{ts}, $4, $5, $6, $7, $8)";
         const DROP_SECOND: &str = "DELETE FROM attempt_statuses WHERE attempt_id = $1{uuid} \
             AND seq = (SELECT seq FROM attempt_statuses WHERE attempt_id = $1{uuid} \
             ORDER BY seq LIMIT 1 OFFSET 1)";
@@ -98,6 +100,7 @@ impl Database {
                 .bind(status.message.as_deref())
                 .bind(status.progress)
                 .bind(extension)
+                .bind(version)
                 .execute(&mut *tx)
                 .await?;
         });
@@ -172,8 +175,9 @@ impl Database {
             AND worker_id = $2)";
         let add = format!(
             "INSERT INTO attempt_statuses (attempt_id, seq, at, phase, message, progress, \
-             extension) SELECT $1{{uuid}}, COALESCE((SELECT MAX(seq) + 1 FROM attempt_statuses \
-             WHERE attempt_id = $1{{uuid}}), 0), $3{{ts}}, $4, $5, $6, $7 WHERE {OWNED}"
+             extension, extension_version) SELECT $1{{uuid}}, COALESCE((SELECT MAX(seq) + 1 \
+             FROM attempt_statuses WHERE attempt_id = $1{{uuid}}), 0), $3{{ts}}, $4, $5, $6, $7, $8 \
+             WHERE {OWNED}"
         );
         // Past MAX_STATUSES, the oldest after the first goes.
         let drop_second = format!(
@@ -207,6 +211,7 @@ impl Database {
                     .bind(status.message.as_deref())
                     .bind(status.progress)
                     .bind(&reported.extension)
+                    .bind(&reported.version)
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
@@ -300,29 +305,11 @@ impl Database {
     pub async fn extension_attempts(
         &self,
         extension: &str,
-        worker: Option<&str>,
+        (worker, version): (Option<&str>, Option<&str>),
         limit: u32,
     ) -> Result<Vec<ExtensionAttempt>, DbError> {
-        const LATEST: &str = "SELECT a.id{text}, r.dag_id, r.id{text}, ti.task_id, \
-            CAST(ti.map_index AS BIGINT), CAST(a.try_number AS BIGINT), a.status, \
-            {ts<}s.at{>ts}, s.phase, s.message, s.progress \
-            FROM attempt_statuses s \
-            JOIN attempts a ON a.id = s.attempt_id \
-            JOIN task_instances ti ON ti.id = a.task_instance_id \
-            JOIN runs r ON r.id = ti.run_id \
-            WHERE s.extension = $1 AND s.seq = \
-            (SELECT MAX(l.seq) FROM attempt_statuses l WHERE l.attempt_id = s.attempt_id) \
-            ORDER BY s.at DESC, a.id DESC LIMIT $2";
-        const OF_WORKER: &str = "SELECT a.id{text}, r.dag_id, r.id{text}, ti.task_id, \
-            CAST(ti.map_index AS BIGINT), CAST(a.try_number AS BIGINT), a.status, \
-            {ts<}s.at{>ts}, s.phase, s.message, s.progress \
-            FROM attempt_statuses s \
-            JOIN attempts a ON a.id = s.attempt_id \
-            JOIN task_instances ti ON ti.id = a.task_instance_id \
-            JOIN runs r ON r.id = ti.run_id \
-            WHERE s.extension = $1 AND s.seq = \
-            (SELECT MAX(l.seq) FROM attempt_statuses l WHERE l.attempt_id = s.attempt_id) \
-            AND a.worker_id = $3 ORDER BY s.at DESC, a.id DESC LIMIT $2";
+        // `worker`'s only when given (DN21; agy's review of M5.2i5: a worker's tab listed the
+        // attempts other workers ran), and `version`'s (DN40, B292).
         type Row = (
             String,
             String,
@@ -336,15 +323,31 @@ impl Database {
             Option<String>,
             Option<f64>,
         );
-        // `worker`'s only when given (DN21; agy's review of M5.2i5: a worker's tab listed the
-        // attempts other workers ran).
-        let latest = if worker.is_some() { OF_WORKER } else { LATEST };
+        // A direct `extension_version = $4` when a version is given, so the index
+        // (extension, extension_version, at) serves it (agy's review of B292: an `IS NULL OR`
+        // kept it from the index, every other version's rows read).
+        const SELECT: &str = "SELECT a.id{text}, r.dag_id, r.id{text}, ti.task_id, \
+            CAST(ti.map_index AS BIGINT), CAST(a.try_number AS BIGINT), a.status, \
+            {ts<}s.at{>ts}, s.phase, s.message, s.progress \
+            FROM attempt_statuses s \
+            JOIN attempts a ON a.id = s.attempt_id \
+            JOIN task_instances ti ON ti.id = a.task_instance_id \
+            JOIN runs r ON r.id = ti.run_id \
+            WHERE s.extension = $1 AND s.seq = \
+            (SELECT MAX(l.seq) FROM attempt_statuses l WHERE l.attempt_id = s.attempt_id) \
+            AND ($3{text} IS NULL OR a.worker_id = $3)";
+        let latest = if version.is_some() {
+            format!("{SELECT} AND s.extension_version = $4 ORDER BY s.at DESC, a.id DESC LIMIT $2")
+        } else {
+            format!("{SELECT} ORDER BY s.at DESC, a.id DESC LIMIT $2")
+        };
         let rows: Vec<Row> = on_pool!(self, |pool, backend| {
-            let query = crate::query::query_as(sql(backend, latest))
+            let query = crate::query::query_as(crate::query::sql_text(backend, &latest))
                 .bind(extension)
-                .bind(i64::from(limit));
-            match worker {
-                Some(worker) => query.bind(worker),
+                .bind(i64::from(limit))
+                .bind(worker);
+            match version {
+                Some(version) => query.bind(version),
                 None => query,
             }
             .fetch_all(pool)

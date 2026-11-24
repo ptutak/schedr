@@ -909,7 +909,7 @@ async fn an_attempts_reports_keep_the_first_and_latest_statuses_and_links_by_lab
             message: (n == 0).then(|| "first".to_owned()),
             progress: (n == 1).then_some(0.5),
         };
-        db.add_attempt_status(&attempt, "dummy", &status)
+        db.add_attempt_status(&attempt, ("dummy", "1.0"), &status)
             .await
             .unwrap();
     }
@@ -951,7 +951,10 @@ async fn an_attempts_reports_keep_the_first_and_latest_statuses_and_links_by_lab
     assert_eq!(links[0], link("Pod", "https://b"));
     assert_eq!(links.len(), usize::try_from(MAX_LINKS).unwrap());
     // DN19: its extension's page lists it with its latest phase; another extension's doesn't.
-    let listed = db.extension_attempts("dummy", None, 10).await.unwrap();
+    let listed = db
+        .extension_attempts("dummy", (None, None), 10)
+        .await
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].attempt_id, attempt);
     assert_eq!(listed[0].status.phase, format!("phase {MAX_STATUSES}"));
@@ -959,17 +962,22 @@ async fn an_attempts_reports_keep_the_first_and_latest_statuses_and_links_by_lab
         (listed[0].try_number, listed[0].ended.as_deref()),
         (1, None)
     );
-    assert_eq!(db.extension_attempts("other", None, 10).await.unwrap(), []);
+    assert_eq!(
+        db.extension_attempts("other", (None, None), 10)
+            .await
+            .unwrap(),
+        []
+    );
     // DN21: a worker's tab lists only what it ran (agy's review of M5.2i5).
     assert_eq!(
-        db.extension_attempts("dummy", Some("w1"), 10)
+        db.extension_attempts("dummy", (Some("w1"), None), 10)
             .await
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        db.extension_attempts("dummy", Some("w2"), 10)
+        db.extension_attempts("dummy", (Some("w2"), None), 10)
             .await
             .unwrap(),
         []
@@ -994,6 +1002,7 @@ async fn a_flush_of_reports_keeps_only_its_workers_attempts_and_trims_as_one_by_
         attempt_id: attempt.clone(),
         worker_id: worker.to_owned(),
         extension: "dummy".to_owned(),
+        version: "1.0".to_owned(),
         status: AttemptStatus {
             at: ts(NOW),
             phase: format!("phase {n}"),
@@ -1034,6 +1043,10 @@ async fn a_flush_of_reports_keeps_only_its_workers_attempts_and_trims_as_one_by_
     assert_eq!(stored[0].phase, "phase 0");
     assert_eq!(stored[1].phase, "phase 2", "the second oldest went");
     assert_eq!(links.len(), usize::try_from(MAX_LINKS).unwrap());
+    // B292: a version's page lists its own attempts only, by the version stored with them.
+    let of = |version| db.extension_attempts("dummy", (None, Some(version)), 10);
+    assert_eq!(of("1.0").await.unwrap().len(), 1);
+    assert_eq!(of("1.1").await.unwrap(), []);
     // Ended meanwhile: its worker's last reports, sent before its end, still kept.
     let failed = AttemptEnd::by_master(schedr_model::AttemptStatus::Failed);
     db.end_attempts(&[(attempt.as_str(), &failed)], ts(NOW))

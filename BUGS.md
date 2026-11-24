@@ -53,22 +53,23 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B292: an extension's page lists the attempts of every version, whichever version is shown | 2 | low | possible | usability |
+| 1 | B293: stress 25's Python part fails its round limit at full size: a Python process per task takes the runner's CPU from the master | 3 | low | likely | tests |
 | 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
 | 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
-## B292: an extension's page lists the attempts of every version, whichever version is shown
+## B293: stress 25's Python part fails its round limit at full size: a Python process per task takes the runner's CPU from the master
 
-- **Rating:** severity **low**, probability **possible**, usability (score 2): an extension's version page lists every version's attempts.
-- **Found:** 2026-11-24, agy's review of DN40. The Extensions page shows one version at a time,
-  its panels, figures and events that version's alone, but its "What happened" list also merges
-  the extension's attempts (their latest status), read by `Database::extension_attempts`, which
-  can't filter by version: `attempt_statuses` doesn't store the extension's version.
-- **Repro:** `dummy` 1.9 on w1 with no attempts, 1.10 on w2 with one; `GET
-  /api/v1/extensions/dummy?version=1.9` lists w2's 1.10 attempt.
-- **Fix:** the extension's version stored with an attempt's statuses (a column in the next open
-  migration, 0004: 0003 shipped in 1.2.0rc1), filtered as events are. Not done in 1.2.0: a
-  schema change after the rc for a list shown beside the panels.
+- **Rating:** severity **low**, probability **likely**, tests (score 3): stress 25's Python part overruns its round limit at full size.
+- **Found:** 2026-11-24, the full Stress run on 1.2.0rc1 (45420747758): `round_p99_s` 16.4 s
+  against 5, every one of its 20,000 tasks succeeded, 7.3 tasks a second (as M5.2i12 measured,
+  3.1 to 11.9); its plain-plugin part passed (53.4 a second, round p99 4.1 s). The first full
+  run of scenario 25.
+- **Why:** each Python plugin task starts an interpreter on the 2-CPU runner beside the master,
+  whose rounds wait for the CPU (results p99 13 s, assignment 6.5 s): load, not a stall, so the
+  stall-aware check (B291's) doesn't set it aside.
+- **Released with it open:** 1.2.0 (the user: rc2, then the release).
+- **Ideas:** the Python part's round limit scaled to its process load, or its full-profile size
+  cut; or its workers' processes capped below the runner's CPUs.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 
