@@ -63,6 +63,9 @@ pub struct Settings {
     pub takeover_wait: Duration,
     /// The time between SIGTERM and SIGKILL when an attempt is cancelled.
     pub cancel_grace: Duration,
+    /// The same for a trigger (`[triggers] cancel_grace`): a lost worker's trigger is placed
+    /// elsewhere only after it.
+    pub trigger_cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     pub switch_off_after: u32,
     /// Queued event runs of a DAG that stop its trigger.
@@ -274,6 +277,7 @@ impl Default for Settings {
             takeover_wait: crate::lease::DEFAULT_LEASE_PERIOD
                 .saturating_sub(schedr_db::database::DEFAULT_QUERY_TIMEOUT),
             cancel_grace: DEFAULT_CANCEL_GRACE,
+            trigger_cancel_grace: Duration::from_secs(5),
             switch_off_after: 3,
             max_queued_events: 1000,
             trigger_runs_kept: 20,
@@ -881,6 +885,7 @@ impl MasterCore {
         .with_max_message_size(settings.max_message_size);
         discovery.set_wakes(wakes.clone());
         let mut dispatcher = Dispatcher::new(db.clone(), settings.cancel_grace)
+            .with_trigger_cancel_grace(settings.trigger_cancel_grace)
             .with_switch_off_after(settings.switch_off_after)
             .with_sensor_max_wait(settings.sensor_max_wait)
             .with_max_message_size(settings.max_message_size)

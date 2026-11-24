@@ -164,13 +164,14 @@ pub(crate) enum TriggersFailed {
 impl MasterCore {
     /// How long a trigger instance this master doesn't know holds the `@trigger(wait_for=...)`
     /// DAGs at most (B279): the cancel grace and a lease, by when an honest worker killed it.
+    /// Its grace the larger of a task's and a trigger's: whoever gave it may have sent either.
     fn unknown_hold(&self) -> jiff::SignedDuration {
-        jiff::SignedDuration::try_from(
-            self.settings
-                .cancel_grace
-                .saturating_add(self.settings.lease_timeout),
-        )
-        .unwrap_or(jiff::SignedDuration::MAX)
+        let grace = self
+            .settings
+            .cancel_grace
+            .max(self.settings.trigger_cancel_grace);
+        jiff::SignedDuration::try_from(grace.saturating_add(self.settings.lease_timeout))
+            .unwrap_or(jiff::SignedDuration::MAX)
     }
 
     /// Ends a run of a DAG's trigger in the database ([`schedr_db::Database::trigger_ended`]),
@@ -557,11 +558,11 @@ impl MasterCore {
         let (Some(instance), Some(worker)) = (&record.instance_id, &record.worker_id) else {
             return Ok(());
         };
-        // Its worker lost: it ran on there until the worker's deadline, then had the cancel
+        // Its worker lost: it ran on there until the worker's deadline, then had a trigger's
         // grace to stop (B290); started elsewhere only after it (the user, 2026-11-24, on
         // Grok's review of M5.2k: two copies at once otherwise, one ignoring SIGTERM).
         let not_before = (keep == Keep::Forget)
-            .then(|| jiff::SignedDuration::try_from(self.settings.cancel_grace).ok())
+            .then(|| jiff::SignedDuration::try_from(self.settings.trigger_cancel_grace).ok())
             .flatten()
             .and_then(|grace| now.checked_add(grace).ok());
         self.trigger_run_ended(&record.dag_id, instance, None, not_before, now)

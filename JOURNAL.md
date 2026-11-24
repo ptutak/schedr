@@ -3522,3 +3522,12 @@ restart).
 Scenario 1 on CI for the user (quick profile, `3dc2936b`, one scenario a run, the simulator then
 skipped): 86.3, 112.2 and 72.6 tasks a second, the same code; 20 November's runs gave 111.3 and
 107.5. The runners' spread, not a loss.
+
+### <a id="D522"></a>2026-11-24: a trigger's own cancel grace (decision 522)
+
+Asked to choose how long a lost worker's trigger may overlap its replacement (Grok's review of
+M5.2k), the user first chose the master waiting the cancel grace (30 s) before placing it
+elsewhere, then, seeing the grace was one for tasks and triggers, a grace of triggers' own,
+short, for every stop: `[triggers] cancel_grace`, 5 s (the user's pick of 2, 5, 10). The master
+gives it with each trigger and waits it after a lost worker; an unknown instance holds `wait_for`
+DAGs for the larger of the two graces and a lease, as whoever gave it may have sent either.

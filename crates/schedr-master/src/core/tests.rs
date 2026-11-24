@@ -3363,8 +3363,8 @@ async fn a_trigger_given_nowhere_keeps_no_slot() {
 }
 
 /// The user, 2026-11-24, on Grok's review of M5.2k: a lost worker's trigger runs on there until
-/// the worker's deadline, then has the cancel grace to stop; placed elsewhere only after it,
-/// not beside one ignoring SIGTERM.
+/// the worker's deadline, then has a trigger's grace (`[triggers] cancel_grace`, its own, short)
+/// to stop; placed elsewhere only after it, not beside one ignoring SIGTERM.
 #[tokio::test]
 async fn a_lost_workers_trigger_goes_elsewhere_only_after_the_cancel_grace() {
     let (mut core, assign) = Box::pin(with_trigger()).await;
@@ -3374,8 +3374,13 @@ async fn a_lost_workers_trigger_goes_elsewhere_only_after_the_cancel_grace() {
     let secs = |d: std::time::Duration| i64::try_from(d.as_secs()).unwrap();
     let (lease, grace) = (
         secs(core.settings.lease_timeout),
-        secs(core.settings.cancel_grace),
+        secs(core.settings.trigger_cancel_grace),
     );
+    assert!(
+        grace < secs(core.settings.cancel_grace),
+        "a trigger's own, shorter"
+    );
+    assert_eq!(assign.cancel_grace_ms, 5_000, "given with its trigger");
     let beat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
     // w1, which runs it, goes silent; w2 beats on.
     let mut at = 1;
@@ -3401,6 +3406,10 @@ async fn a_lost_workers_trigger_goes_elsewhere_only_after_the_cancel_grace() {
             assert!(
                 at >= lost + grace,
                 "given again at {at} s, forgotten at {lost} s"
+            );
+            assert!(
+                at <= lost + grace + 5,
+                "given again soon after its grace, at {at} s"
             );
             assert_ne!(given.instance_id, assign.instance_id);
             return;

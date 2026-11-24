@@ -437,6 +437,16 @@ pub struct TriggersSection {
     pub max_queued_events: u32,
     /// How many errors in a row make a trigger `failing`.
     pub failing_after: u32,
+    /// The time between SIGTERM and SIGKILL when a trigger is stopped (a restart, a cancel, a
+    /// drain, its worker losing the master): short, as a trigger's work is its source's, read
+    /// again from its bookmark. A lost worker's trigger is started elsewhere only after it, so
+    /// one never runs in two places. Tasks and wait steps keep `[master] cancel_grace`.
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration"
+    )]
+    #[schemars(with = "DurationText")]
+    pub cancel_grace: Duration,
 }
 
 impl Default for TriggersSection {
@@ -444,6 +454,7 @@ impl Default for TriggersSection {
         Self {
             max_queued_events: 1000,
             failing_after: 5,
+            cancel_grace: Duration::from_secs(5),
         }
     }
 }

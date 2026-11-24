@@ -239,6 +239,7 @@ pub fn master_settings(config: &Config) -> Settings {
             .lease_period
             .saturating_sub(config.timings.query_timeout),
         cancel_grace: config.master.cancel_grace,
+        trigger_cancel_grace: config.triggers.cancel_grace,
         switch_off_after: config.watchers.switch_off_after,
         max_queued_events: config.triggers.max_queued_events,
         trigger_runs_kept: config.limits.trigger_runs_kept,

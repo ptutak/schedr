@@ -455,6 +455,8 @@ pub struct Dispatcher {
     /// lease it gave them, they may come back with their attempts in their journals (F14).
     away: BTreeSet<String>,
     cancel_grace: Duration,
+    /// A trigger's (`[triggers] cancel_grace`), sent with its assignment.
+    trigger_cancel_grace: Duration,
     /// After how many host kills in a row a wait step is switched off (0: never).
     switch_off_after: u32,
     /// How long a wait step without a `max_wait` waits (`[sensors] default_max_wait`).
@@ -660,6 +662,7 @@ impl Dispatcher {
             workers: Workers::new(),
             away: BTreeSet::new(),
             cancel_grace,
+            trigger_cancel_grace: cancel_grace,
             switch_off_after: 3,
             sensor_max_wait: Duration::from_hours(24),
             rejections: BTreeMap::new(),
@@ -913,6 +916,14 @@ impl Dispatcher {
     #[must_use]
     pub fn with_code_retry_delay(mut self, delay: Duration) -> Self {
         self.code_retry_delay = SignedDuration::try_from(delay).unwrap_or(SignedDuration::MAX);
+        self
+    }
+
+    /// The dispatcher with a trigger's grace (`[triggers] cancel_grace`), sent with each
+    /// trigger it gives; a task's by default.
+    #[must_use]
+    pub fn with_trigger_cancel_grace(mut self, grace: Duration) -> Self {
+        self.trigger_cancel_grace = grace;
         self
     }
 
@@ -4664,7 +4675,8 @@ impl Dispatcher {
             expected_code_hash: code.clone(),
             after,
             failures,
-            cancel_grace_ms: u64::try_from(self.cancel_grace.as_millis()).unwrap_or(u64::MAX),
+            cancel_grace_ms: u64::try_from(self.trigger_cancel_grace.as_millis())
+                .unwrap_or(u64::MAX),
             connections_json: match self.registry(root) {
                 Some(registry) if !task.connections.is_empty() => {
                     serde_json::to_vec(&registry.only(&task.connections)).unwrap_or_default()

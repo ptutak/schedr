@@ -55,6 +55,8 @@ fn precedence_is_flags_then_environment_then_file() {
     assert_eq!(config.ops.port, 9003);
     assert_eq!(config.log.level, "debug");
     assert_eq!(config.master.cancel_grace, Duration::from_secs(60));
+    // A trigger's own, apart (the user, 2026-11-24): 5 s unless set.
+    assert_eq!(config.triggers.cancel_grace, Duration::from_secs(5));
 }
 
 #[test]

@@ -1,0 +1,24 @@
+title = "A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it"
+date = 2026-11-24
+by = "user"
+status = "active"
+topic = "triggers"
+section = "Placement and ordering"
+summary = '''
+`[triggers] cancel_grace` (5 s by default) is the time between SIGTERM and SIGKILL for every stop
+of a trigger: a restart, a cancel, a drain, its worker cut off from the master. A trigger's work
+is its source's, read again from its bookmark, so it needs little time to stop; tasks and wait
+steps keep `[master] cancel_grace` (30 s). The master places a lost worker's trigger elsewhere
+only after this grace (its worker stops it at its deadline, B290), so one trigger never runs in
+two places; an instance the master doesn't know holds `wait_for` DAGs for the larger of the two
+graces and a lease (B279). Not chosen: a short grace only for the cutoff's stop, the master's
+wait the task grace (Claude's first suggestion, then the user's choice of the master waiting
+30 s); keeping the overlap.
+'''
+history = "JOURNAL.md#D522"
+step = "M5.2k"
+code = [
+  "crates/schedr-config/src/config.rs::TriggersSection",
+  "crates/schedr-master/src/dispatch.rs::with_trigger_cancel_grace",
+  "crates/schedr-master/src/core/triggers.rs::stop_trigger",
+]

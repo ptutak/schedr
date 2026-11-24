@@ -76,6 +76,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D522 | 2026-11-24 | user | planned (M5.2k) | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |
 | D521 | 2026-11-23 | user | built M5.2i12 | task-processes | Extensions never hold the master up: their reports are dropped first |
 | D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
@@ -1050,6 +1051,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### triggers
 
+- D522: A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it
 - D487: A waiting wait_for step stores its deadline and what it waits for
 - D486: The trigger loop runs after any write, at a stored moment, or for a posted event
 - D459: A DAG's trigger has its own row with its switch; no row, no trigger
