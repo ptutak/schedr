@@ -3398,3 +3398,13 @@ measured them (0 while none runs): `WorkerUsage.services_bytes` in the heartbeat
 buckets as the other parts are, in the API's usage and parts views (0 from an older worker or
 webserver), and on the Metrics page as a kind of its own, "extension services". The bucket row,
 past a tuple's 16 columns, is read into a struct by its columns' names.
+
+### 2026-11-24: M5.2k, B270: the gauges' refresh off the master's loop
+
+The gauges' refresh (`state_counts`: every run kept counted by state and kind, every 15 s) runs
+in a task of its own; one still counting when the next is due is left to finish. Measured on
+Postgres: 300,000 runs of about 300 bytes each, the count 98-143 ms, growing with history (some
+1 s at three million), all of which the loop used to wait through, no round starting meanwhile.
+Not chosen: counting the unfinished runs through `runs_unfinished` and keeping the finished as
+running totals (the same figures, with totals to carry over a master's restart, for a count no
+round waits on any more).

@@ -56,9 +56,8 @@ step touches their code or the user schedules them.
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
 | 3 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
-| 4 | B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected) | 2 | low | possible | performance |
-| 5 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 6 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 4 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 5 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]`
 
@@ -78,21 +77,6 @@ step touches their code or the user schedules them.
   and `@trigger.poke`): the log of its current attempt, read from the worker's log endpoint as a
   task's is, with the earlier attempts' logs reachable from there; the CLI to match (`schedr
   triggers show` naming the attempt, its log by `schedr logs`).
-
-## B270: the gauge refresh counts every run in history every 15 s, inside the master's loop: its time grows with the history kept (Suspected)
-
-- **Rating:** severity **low**, probability **possible**, performance (score 2): `state_counts` (crates/schedr-db/src/reads.rs) runs `SELECT state, kind, COUNT(*) FROM runs GROUP BY state, kind`, a scan of every run kept, each `gauge_refresh` (15 s), awaited in the master's loop (`run_with`, `Wake::Refresh`), so no round starts meanwhile: with a long `[retention] runs` (or `forever`) and many runs a day, each refresh holds the rounds for longer.
-- **Found:** 2026-11-20, by reading, answering "is the master operational with 300,000 runs in
-  history?" (M5.2g); Codex's review of the round named the refresh as work between rounds.
-  The round's own reads go through partial indexes on unfinished state (`runs_unfinished`,
-  `task_instances_ready`, `attempts_open`) and don't grow with history; this one does. Not
-  measured: no stress scenario starts with a filled history.
-- **To confirm:** a stress scenario with, say, 300,000 finished runs stored first, then scenario
-  1 on top: the refresh's time (a trace point around `refresh_gauges`) and the rounds' gap
-  against an empty history.
-- **A fix:** count only the unfinished runs through `runs_unfinished` and keep the finished
-  ones' counts as running totals (or read them less often), or refresh the gauges in a task
-  of their own, off the master's loop.
 
 ## B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates
 

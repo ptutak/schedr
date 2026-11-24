@@ -146,6 +146,8 @@ pub struct Hub {
     /// The workers' queue head ages, for the slow-equals each `HeartbeatAck` carries
     /// (decision 509).
     slow_equals: Arc<crate::slow_equals::SlowEquals>,
+    /// Whether the gauges' refresh is counting (B270: it runs in a task of its own).
+    refreshing: Arc<AtomicBool>,
     /// The most a round assigns: its upstream is read before the core lock (M5.2cA).
     assignments_per_round: usize,
     /// The workers' results (`Finished`, `TaskEnded`, `Rejected`) a turn received, for the next
@@ -234,6 +236,7 @@ impl Hub {
             max_message_size: core.settings().max_message_size,
             messages_per_turn: core.settings().messages_per_turn.max(1),
             alone_per_turn: core.settings().failed_group_messages_per_turn.max(1),
+            refreshing: Arc::new(AtomicBool::new(false)),
             slow_equals: Arc::new(crate::slow_equals::SlowEquals::new(
                 core.settings().slow_equals,
             )),
@@ -503,6 +506,19 @@ impl Hub {
                 () = tokio::time::sleep(settings.interval) => {}
             }
         }
+    }
+
+    /// Starts the gauges' refresh in a task of its own, its count of every run kept never
+    /// holding a round up (B270); one still counting is left to finish.
+    fn refresh_in_background(&self) {
+        if self.refreshing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let hub = self.clone();
+        tokio::spawn(async move {
+            hub.refresh_gauges().await;
+            hub.refreshing.store(false, Ordering::SeqCst);
+        });
     }
 
     /// Refreshes the gauges taken from the database; a failure is logged (the gauges keep
@@ -876,7 +892,7 @@ impl Hub {
                     continue;
                 }
                 Wake::Refresh => {
-                    self.refresh_gauges().await;
+                    self.refresh_in_background();
                     continue;
                 }
                 Wake::Command => {
