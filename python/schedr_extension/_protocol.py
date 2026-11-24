@@ -191,6 +191,7 @@ def as_wire(value: object, what: str) -> Wire:
 
     Raises:
         TypeError: If it holds anything else (as ``json.dumps`` would).
+        ValueError: For a NaN or infinite number as a key.
     """
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -202,7 +203,8 @@ def as_wire(value: object, what: str) -> Wire:
             if isinstance(key, str):
                 wired[key] = as_wire(item, what)
             elif key is None or isinstance(key, (bool, int, float)):
-                wired[json.dumps(key)] = as_wire(item, what)  # as `json.dumps` writes it
+                # As `json.dumps` writes it; NaN and infinity refused, as the channel refuses them.
+                wired[json.dumps(key, allow_nan=False)] = as_wire(item, what)
             else:
                 raise TypeError(f"{what}: a key {key!r} isn't a string")
         return wired

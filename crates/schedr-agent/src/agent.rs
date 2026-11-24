@@ -1919,10 +1919,11 @@ impl<E: Executor> Agent<E> {
         let mut tick = tokio::time::interval(timeouts.drain_tick);
         let mut alive = tokio::time::interval(timeouts.alive);
         loop {
-            let cut_off_at = self.cut_off_at();
+            let (cut_off_at, triggers_at) = (self.cut_off_at(), self.triggers_cut_off_at());
             tokio::select! {
                 _ = alive.tick() => self.on_alive(),
                 () = at(cut_off_at) => self.stop_cut_off(),
+                () = at(triggers_at) => self.stop_triggers_cut_off(),
                 out = &mut work => return Some(out),
                 Some(done) = self.done_rx.recv() => self.on_done_group(done, None, None).await,
                 count = next_request(&mut self.shutdown) => {
@@ -1955,7 +1956,9 @@ impl<E: Executor> Agent<E> {
             self.heard = self.heard.max(*seen.borrow());
             self.publish_deadline();
             let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
+            let triggers_at = self.triggers_cut_off_at();
             tokio::select! {
+                () = at(triggers_at) => self.stop_triggers_cut_off(),
                 fetched = &mut fetching => {
                     return match fetched {
                         Fetched::Bytes(bytes) => Some(Ok(bytes)),
@@ -2017,6 +2020,15 @@ impl<E: Executor> Agent<E> {
     }
 
     /// The executor's warnings and this session's clock-skew one, to the master.
+    /// The warnings changed (`open`) or no one reports any more: reported, or not watched again
+    /// (nothing will change); whether they are still watched.
+    fn warnings_changed(&mut self, open: bool, to_master: &ToMaster) -> bool {
+        if open {
+            self.report_warnings(to_master);
+        }
+        open
+    }
+
     fn report_warnings(&mut self, to_master: &ToMaster) {
         let mut warnings = self.warnings.borrow_and_update().clone();
         warnings.extend(self.clock_skew.clone());
@@ -2174,6 +2186,16 @@ impl<E: Executor> Agent<E> {
             self.stop_triggers_cut_off();
         }
         late
+    }
+
+    /// When the triggers running here are stopped for the master's silence: its deadline,
+    /// while one runs not stopped yet (Grok's and agy's reviews of M5.2k: only the alive tick
+    /// did it, up to its interval late, and never during a fetch).
+    fn triggers_cut_off_at(&self) -> Option<tokio::time::Instant> {
+        if self.triggers.values().all(|trigger| trigger.cut_off) {
+            return None;
+        }
+        self.lease_deadline()
     }
 
     /// Stops the triggers running here, each once: their bookmarks are the master's, one
@@ -2802,6 +2824,7 @@ impl<E: Executor> Agent<E> {
                     self.cut_off_if_late();
                     return SessionEnd::Lost(NO_WORD.to_owned());
                 }
+                () = at(self.triggers_cut_off_at()) => self.stop_triggers_cut_off(),
                 count = next_request(&mut self.shutdown) => self.shutdown_asked(count, &to_master),
                 _ = tick.tick(), if self.drain.is_some() => {
                     if self.drain_step(true) == DrainStep::Finish {
@@ -2852,12 +2875,7 @@ impl<E: Executor> Agent<E> {
                 _ = alive.tick() => self.on_alive(),
                 _ = queue_check.tick(), if !self.queue.is_empty() => self.check_queue(&to_master),
                 changed = self.warnings.changed(), if warnings_open => {
-                    if changed.is_ok() {
-                        self.report_warnings(&to_master);
-                    } else {
-                        // No one reports any more: nothing will change.
-                        warnings_open = false;
-                    }
+                    warnings_open = self.warnings_changed(changed.is_ok(), &to_master);
                 }
             }
             // A slot freed with tasks queued: the head goes in at once, no round between
@@ -3459,9 +3477,7 @@ impl<E: Executor> Agent<E> {
                 self.slow_equals = Duration::from_millis(ack.slow_equals_ms);
             }
             master_message::Message::ConnectionJob(job) => self.connection_job(job),
-            master_message::Message::AssignTrigger(assign) => {
-                self.start_trigger(&assign, to_master);
-            }
+            master_message::Message::AssignTrigger(assign) => self.take_trigger(assign, to_master),
             master_message::Message::CancelTrigger(cancel) => {
                 if let Some(trigger) = self.triggers.get(&cancel.instance_id) {
                     let _ = trigger.stop.send(StopReason::Cancelled);
@@ -4096,6 +4112,27 @@ impl<E: Executor> Agent<E> {
         }
     }
 
+    /// A trigger given: started, unless the master may have counted this worker lost (Grok's
+    /// review of M5.2k, as a task's assignment, decision 281), as it may have placed it
+    /// elsewhere. That one is told as a clean end: a master that forgot the run ignores it, one
+    /// that didn't places it again, no failure counted.
+    fn take_trigger(&mut self, assign: pb::AssignTrigger, to_master: &ToMaster) {
+        if !(self.cut_off || self.may_be_counted_lost()) {
+            self.start_trigger(&assign, to_master);
+            return;
+        }
+        tracing::warn!(
+            instance_id = assign.instance_id,
+            "a trigger given past the master's deadline: not started"
+        );
+        let ended = pb::TriggerStopped {
+            dag_id: assign.dag_id,
+            instance_id: assign.instance_id,
+            ..pb::TriggerStopped::default()
+        };
+        let _ = to_master.send(wrap(worker_message::Message::TriggerStopped(ended)));
+    }
+
     /// Starts a DAG's trigger here: as a wait step's attempt would run, but no attempt, so nothing
     /// of it is journaled and the master keeps no result of it.
     fn start_trigger(&mut self, assign: &pb::AssignTrigger, to_master: &ToMaster) {
@@ -4552,6 +4589,12 @@ impl<E: Executor> Agent<E> {
         };
         self.settings.setup.live_logs.remove(instance_id);
         let mut stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
+        if trigger.cut_off && finished.error_kind.is_empty() {
+            // Stopped for the master's silence, not failing (Grok's review of M5.2k): a master
+            // that still holds it would count a strike and back off. Its host dying stays one.
+            stopped.error_kind.clear();
+            stopped.message.clear();
+        }
         stopped.returned_event = trigger.next_seq > 0;
         if let Some(code) = code {
             stopped.code_hash = code;

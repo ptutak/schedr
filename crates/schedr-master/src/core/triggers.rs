@@ -162,6 +162,17 @@ pub(crate) enum TriggersFailed {
 }
 
 impl MasterCore {
+    /// How long a trigger instance this master doesn't know holds the `@trigger(wait_for=...)`
+    /// DAGs at most (B279): the cancel grace and a lease, by when an honest worker killed it.
+    fn unknown_hold(&self) -> jiff::SignedDuration {
+        jiff::SignedDuration::try_from(
+            self.settings
+                .cancel_grace
+                .saturating_add(self.settings.lease_timeout),
+        )
+        .unwrap_or(jiff::SignedDuration::MAX)
+    }
+
     /// Ends a run of a DAG's trigger in the database ([`schedr_db::Database::trigger_ended`]),
     /// its runs kept as `trigger_runs_kept` says. Gives whether it was the current one.
     async fn trigger_run_ended(
@@ -445,12 +456,7 @@ impl MasterCore {
         // delivered within a lease or the worker lost (B279: one that never stops it would
         // otherwise hold them all, against decision 520).
         let id = dag.dag.id.as_str();
-        let held_until = jiff::SignedDuration::try_from(
-            self.settings
-                .cancel_grace
-                .saturating_add(self.settings.lease_timeout),
-        )
-        .unwrap_or(jiff::SignedDuration::MAX);
+        let held_until = self.unknown_hold();
         let master_now = (self.steady)(now);
         let unknown_holds = |instance: &str| {
             self.unknown_stopping_since
@@ -551,7 +557,14 @@ impl MasterCore {
         let (Some(instance), Some(worker)) = (&record.instance_id, &record.worker_id) else {
             return Ok(());
         };
-        self.trigger_run_ended(&record.dag_id, instance, None, None, now)
+        // Its worker lost: it ran on there until the worker's deadline, then had the cancel
+        // grace to stop (B290); started elsewhere only after it (the user, 2026-11-24, on
+        // Grok's review of M5.2k: two copies at once otherwise, one ignoring SIGTERM).
+        let not_before = (keep == Keep::Forget)
+            .then(|| jiff::SignedDuration::try_from(self.settings.cancel_grace).ok())
+            .flatten()
+            .and_then(|grace| now.checked_add(grace).ok());
+        self.trigger_run_ended(&record.dag_id, instance, None, not_before, now)
             .await?;
         if keep == Keep::Forget {
             self.dispatcher.trigger_released(instance);
@@ -1148,17 +1161,14 @@ impl MasterCore {
             // Done with the run it was given (decision 353), the call ended in the same
             // statement: the next call gets the next. Asked to stop, it keeps its run. One that
             // returned an event was passed when it was stored; if it wasn't, it is handed again.
-            let passed = match (waiting, stopped.done && !stopped.returned_event) {
-                (Some((wait, _)), true) => {
-                    self.call_done(&stopped.dag_id, wait, Some(&stopped.instance_id))
-                        .await?
-                }
-                _ => false,
-            };
-            if !passed {
-                self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, None, None, now)
+            if let (Some((wait, _)), true) = (waiting, stopped.done && !stopped.returned_event) {
+                self.call_done(&stopped.dag_id, wait, Some(&stopped.instance_id))
                     .await?;
             }
+            // Passed or not, this run of it ended (agy's review: a passed call's run stayed
+            // "running", never pruned); a passed one's progress is left as the pass left it.
+            self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, None, None, now)
+                .await?;
             return Ok(Vec::new());
         }
         if stopped.error_kind == TRIGGER_RETURNED {
@@ -1195,13 +1205,11 @@ impl MasterCore {
             let tries = record.failures.saturating_add(1);
             let why = format!("failed {tries} times, the last: {why}");
             let call = Some(stopped.instance_id.as_str());
-            if pass_handed_run(&self.db, &dag.dag, &why, call)
-                .await?
-                .is_err()
-            {
-                self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, None, None, now)
-                    .await?;
-            }
+            let passed = pass_handed_run(&self.db, &dag.dag, &why, call).await?;
+            // Its run ended with why, passed or not (agy's review, as above).
+            let error = passed.is_ok().then_some(why.as_str());
+            self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, error, None, now)
+                .await?;
             return Ok(Vec::new());
         }
         self.trigger_failed(
@@ -1580,6 +1588,10 @@ impl MasterCore {
             .iter()
             .filter_map(|r| r.instance_id.as_deref())
             .collect();
+        let master_now = (self.steady)(now);
+        let kept = self.unknown_hold().saturating_mul(2);
+        self.unknown_first_seen
+            .retain(|_, since| master_now.duration_since(*since) < kept);
         for instance in reported {
             // Another worker's slot isn't this one's to keep, nor to free with a stop
             // (decision 520: a worker acts only on its own; agy's review of M5.2i14).
@@ -1600,9 +1612,14 @@ impl MasterCore {
                 self.stopping_triggers
                     .entry(instance.clone())
                     .or_insert_with(|| (worker_id.to_owned(), String::new()));
+                // Since it was first reported, whatever reconnects came between.
+                let first = *self
+                    .unknown_first_seen
+                    .entry(instance.clone())
+                    .or_insert(master_now);
                 self.unknown_stopping_since
                     .entry(instance.clone())
-                    .or_insert((self.steady)(now));
+                    .or_insert(first);
             }
         }
         self.heartbeat_triggers(worker_id, reported, &[], now).await

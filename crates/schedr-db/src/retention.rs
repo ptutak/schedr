@@ -315,13 +315,15 @@ impl Database {
         const STILL_SQLITE: &str = "SELECT dag_id FROM dags WHERE dag_id = $1 \
             AND removed_at IS NOT NULL";
         const RUNS: &str = "SELECT 1 FROM runs WHERE dag_id = $1 LIMIT 1";
-        const DEPENDENTS: [&str; 9] = [
+        const DEPENDENTS: [&str; 10] = [
             "UPDATE dags SET current_version_id = NULL WHERE dag_id = $1",
             "DELETE FROM backfills WHERE dag_id = $1",
             "DELETE FROM dag_versions WHERE dag_id = $1",
             "DELETE FROM events WHERE dag_id = $1",
             "DELETE FROM trigger_progress WHERE dag_id = $1",
             "DELETE FROM trigger_progress_passed WHERE dag_id = $1",
+            // B272's runs: a DAG whose ID appears again starts with none (agy's review).
+            "DELETE FROM trigger_runs WHERE dag_id = $1",
             "DELETE FROM wait_step_strikes WHERE dag_id = $1",
             "DELETE FROM dag_triggers WHERE dag_id = $1",
             "DELETE FROM dags WHERE dag_id = $1",

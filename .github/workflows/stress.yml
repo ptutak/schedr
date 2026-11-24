@@ -167,7 +167,9 @@ jobs:
   # The clock simulator's master side with 600 fresh scenarios every night, whether main changed
   # or not (each push runs the same dozen): the faults that break a rule need rare timings
   # (B234 came from 60). A failure prints the smallest scenario.
+  # Not when chosen scenarios are run by hand (the user, 2026-11-24: "it runs every single time").
   simulator:
+    if: github.event_name == 'schedule' || inputs.filter == ''
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:

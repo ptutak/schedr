@@ -2572,6 +2572,7 @@ impl Dispatcher {
             // It found a worker: who rejected it before doesn't matter any more.
             self.rejections.remove(&attempt.instance_id);
             self.code_missing.remove(&attempt.instance_id);
+            self.wants.remove(&attempt.instance_id);
             return Ok(None);
         }
         Ok(Some(cancel(worker_id, &started.attempt_id)))
@@ -2683,6 +2684,7 @@ impl Dispatcher {
             // It found a worker: who rejected it before doesn't matter any more.
             self.rejections.remove(&attempt.instance_id);
             self.code_missing.remove(&attempt.instance_id);
+            self.wants.remove(&attempt.instance_id);
         }
         Ok(batch
             .iter()
@@ -4285,6 +4287,7 @@ impl Dispatcher {
         if let TaskRetry::Queued(instance_id) = &retried {
             self.rejections.remove(instance_id);
             self.code_missing.remove(instance_id);
+            self.wants.remove(instance_id);
         }
         Ok(retried)
     }

@@ -3362,6 +3362,53 @@ async fn a_trigger_given_nowhere_keeps_no_slot() {
     assert_eq!(core.dispatcher.worker("w1").unwrap().wait_steps.len(), 0);
 }
 
+/// The user, 2026-11-24, on Grok's review of M5.2k: a lost worker's trigger runs on there until
+/// the worker's deadline, then has the cancel grace to stop; placed elsewhere only after it,
+/// not beside one ignoring SIGTERM.
+#[tokio::test]
+async fn a_lost_workers_trigger_goes_elsewhere_only_after_the_cancel_grace() {
+    let (mut core, assign) = Box::pin(with_trigger()).await;
+    core.register(&register("w2", "i2", vec![]), later(1))
+        .await
+        .unwrap();
+    let secs = |d: std::time::Duration| i64::try_from(d.as_secs()).unwrap();
+    let (lease, grace) = (
+        secs(core.settings.lease_timeout),
+        secs(core.settings.cancel_grace),
+    );
+    let beat = || worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    // w1, which runs it, goes silent; w2 beats on.
+    let mut at = 1;
+    let mut lost_at = None;
+    while at < 1 + lease + grace + 20 {
+        at += 5;
+        core.handle_in_round("w2", beat(), later(at)).await.unwrap();
+        let given = assign_of(&core.tick(later(at)).await.unwrap());
+        if lost_at.is_none()
+            && core
+                .db
+                .trigger("sync")
+                .await
+                .unwrap()
+                .unwrap()
+                .instance_id
+                .is_none()
+        {
+            lost_at = Some(at);
+        }
+        if let Some(given) = given {
+            let lost = lost_at.expect("forgotten before it is given again");
+            assert!(
+                at >= lost + grace,
+                "given again at {at} s, forgotten at {lost} s"
+            );
+            assert_ne!(given.instance_id, assign.instance_id);
+            return;
+        }
+    }
+    panic!("never given again (forgotten at {lost_at:?})");
+}
+
 #[tokio::test]
 async fn what_a_trigger_of_an_older_version_found_starts_nothing() {
     let (mut core, assign) = Box::pin(with_trigger()).await;
@@ -4543,6 +4590,17 @@ async fn a_registration_over_the_limits_is_refused_not_stored() {
             config_json: format!("\"{}\"", "c".repeat(256 * 4096)),
             ..register("w1", "i1", vec![])
         },
+        // Its running triggers too (agy's review of M5.2k): past the records and twice its
+        // watcher slots, or one too long.
+        pb::Register {
+            running_triggers: (0..257).map(|n| format!("t{n}")).collect(),
+            watcher_slots: 100,
+            ..register("w1", "i1", vec![])
+        },
+        pb::Register {
+            running_triggers: vec![long.clone()],
+            ..register("w1", "i1", vec![])
+        },
     ];
     for case in cases {
         let refused = core.register(&case, ts(NOW)).await.unwrap_err();
@@ -4554,6 +4612,13 @@ async fn a_registration_over_the_limits_is_refused_not_stored() {
             .await
             .is_ok()
     );
+    // Many watcher slots: as many running triggers as twice them are taken.
+    let many = pb::Register {
+        running_triggers: (0..600).map(|n| format!("t{n}")).collect(),
+        watcher_slots: 300,
+        ..register("w2", "i2", vec![])
+    };
+    assert!(core.register(&many, ts(NOW)).await.is_ok());
 }
 
 /// [`run_of_file`] with `sync` started by an `@trigger(wait_for=RunOf("orders"))` instead.
@@ -4649,6 +4714,11 @@ async fn a_trigger_waiting_for_runs_is_called_once_for_each_that_ends_with_it() 
     );
     let record = core.db.trigger("sync").await.unwrap().unwrap();
     assert_eq!(record.failures, 0);
+    // Each call's run ended, passed or not (agy's review of M5.2k: a passed one stayed
+    // "running", never pruned).
+    let runs = core.db.trigger_runs("sync", 10).await.unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().all(|r| r.ended_at.is_some()), "{runs:?}");
 }
 
 #[tokio::test]
@@ -4687,6 +4757,25 @@ async fn a_trigger_waiting_for_runs_gets_the_same_run_after_failing_until_its_re
     assert_eq!(record.failures, 0);
     let next = assign_of(&core.tick(later(61)).await.unwrap()).unwrap();
     assert_eq!(handed_run(&next), second, "passed: the next at once");
+    // The passed call's run ended with why; the new one runs, the only one open.
+    let runs = core.db.trigger_runs("sync", 10).await.unwrap();
+    let open: Vec<&str> = runs
+        .iter()
+        .filter(|r| r.ended_at.is_none())
+        .map(|r| r.instance_id.as_str())
+        .collect();
+    assert_eq!(open, [next.instance_id.as_str()], "{runs:?}");
+    let passed = runs
+        .iter()
+        .find(|r| r.instance_id == again.instance_id)
+        .unwrap();
+    assert!(
+        passed
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("failed 2 times")),
+        "{passed:?}"
+    );
 }
 
 #[tokio::test]
@@ -5106,6 +5195,58 @@ async fn an_unknown_call_never_stopped_holds_waiting_triggers_back_for_a_bounded
             .unwrap();
     }
     let call = assign_of(&core.tick(later(past)).await.unwrap()).unwrap();
+    assert_eq!(handed_run(&call), first);
+}
+
+#[tokio::test]
+async fn an_unknown_call_held_from_its_first_report_whatever_reconnects_came_between() {
+    // agy's review of M5.2k: a worker lost and back, still reporting the call it never
+    // stops, started the hold again each time.
+    let mut core = Box::pin(with_waiting_trigger(None)).await;
+    let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
+    let mut back = register("w2", "i2", vec![]);
+    back.running_triggers = vec!["from-before".to_owned()];
+    core.register(&back, later(3)).await.unwrap();
+    let secs = |d: std::time::Duration| i64::try_from(d.as_secs()).unwrap();
+    let held = secs(
+        core.settings
+            .cancel_grace
+            .saturating_add(core.settings.lease_timeout),
+    );
+    let lease = secs(core.settings.lease_timeout);
+    let beat = |triggers: Vec<String>| {
+        worker_message::Message::Heartbeat(pb::Heartbeat {
+            running_triggers: triggers,
+            ..pb::Heartbeat::default()
+        })
+    };
+    // w2 silent past its lease: lost; w1 alive.
+    let mut at = 3;
+    while at < 3 + lease + 5 {
+        at += 10;
+        core.handle_in_round("w1", beat(vec![]), later(at))
+            .await
+            .unwrap();
+        assert!(
+            assign_of(&core.tick(later(at)).await.unwrap()).is_none(),
+            "held at {at} s"
+        );
+    }
+    let mut again = register("w2", "i3", vec![]);
+    again.running_triggers = vec!["from-before".to_owned()];
+    core.register(&again, later(at)).await.unwrap();
+    assert!(
+        assign_of(&core.tick(later(at)).await.unwrap()).is_none(),
+        "back with it: held still"
+    );
+    let past = 3 + held + 1;
+    for worker in ["w1", "w2"] {
+        core.handle_in_round(worker, beat(vec!["from-before".to_owned()]), later(past))
+            .await
+            .unwrap();
+    }
+    let call =
+        assign_of(&core.tick(later(past)).await.unwrap()).expect("held from its first report");
     assert_eq!(handed_run(&call), first);
 }
 

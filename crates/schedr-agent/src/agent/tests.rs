@@ -5301,6 +5301,105 @@ fn a_worker_past_the_master_time_cutoff_may_be_counted_lost() {
     assert!(!stamped_long_ago(dir.path(), Duration::from_secs(30)).may_be_counted_lost());
 }
 
+/// Grok's review of M5.2k: a trigger given past the master's deadline started all the same,
+/// though the master may have placed it elsewhere; told as a clean end instead, no failure.
+#[test]
+fn a_trigger_given_past_the_deadline_is_not_started_and_told_ended() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(61));
+    let (sender, mut from_agent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    let Some(master_message::Message::AssignTrigger(assign)) =
+        assign_trigger("t1", "found").message
+    else {
+        panic!("expected a trigger assignment")
+    };
+    agent.take_trigger(assign, &to_master);
+    assert!(agent.triggers.is_empty(), "not started");
+    let told: Vec<pb::TriggerStopped> = std::iter::from_fn(|| from_agent.try_recv().ok())
+        .filter_map(|m| match m.message {
+            Some(worker_message::Message::TriggerStopped(stopped)) => Some(stopped),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        (told[0].instance_id.as_str(), told[0].error_kind.as_str()),
+        ("t1", "")
+    );
+}
+
+/// Grok's review of M5.2k: a trigger stopped for the master's silence ends `Lost`, which was
+/// told as `trigger_failed`: a strike and a backoff from a master still holding it.
+#[test]
+fn a_trigger_stopped_for_the_cutoff_is_told_stopped_not_failed() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(61));
+    let (sender, mut from_agent) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    for (instance, cut_off, host_lost) in [
+        ("t1", true, false),
+        ("t2", false, false),
+        ("t3", true, true),
+    ] {
+        let (stop, _stops) = Stops::new();
+        let mut trigger = RunningTrigger::new("sync".to_owned(), stop, 0);
+        trigger.cut_off = cut_off;
+        agent.triggers.insert(instance.to_owned(), trigger);
+        let finished = pb::Finished {
+            attempt_id: instance.to_owned(),
+            status: pb::AttemptStatus::Lost as i32,
+            error_kind: if host_lost {
+                "watcher_host_lost".to_owned()
+            } else {
+                String::new()
+            },
+            ..pb::Finished::default()
+        };
+        agent.trigger_ended(instance, &finished, Some(&to_master));
+    }
+    let kinds: Vec<(String, String)> = std::iter::from_fn(|| from_agent.try_recv().ok())
+        .filter_map(|m| match m.message {
+            Some(worker_message::Message::TriggerStopped(s)) => Some((s.instance_id, s.error_kind)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("t1".to_owned(), String::new()),
+            ("t2".to_owned(), "trigger_failed".to_owned()),
+            ("t3".to_owned(), "watcher_host_lost".to_owned()),
+        ],
+        "cut off: stopped; lost otherwise: failed; its host gone: as it said"
+    );
+}
+
+/// Grok's and agy's reviews of M5.2k: with no gated task, nothing woke at the master's
+/// deadline; the triggers stopped only on the alive tick (up to its interval late) and never
+/// during a fetch. The loops now wake at it while a trigger runs, and not again once each is
+/// stopped (no spinning on a deadline passed).
+#[test]
+fn a_running_trigger_wakes_the_agent_at_the_masters_deadline_once() {
+    let dir = TempDir::new().unwrap();
+    let mut agent = stamped_long_ago(dir.path(), Duration::from_secs(61));
+    assert_eq!(
+        agent.triggers_cut_off_at(),
+        None,
+        "no trigger: nothing to wake for"
+    );
+    let (stop, _stops) = Stops::new();
+    agent.triggers.insert(
+        "t1".to_owned(),
+        RunningTrigger::new("sync".to_owned(), stop, 0),
+    );
+    let due = agent.triggers_cut_off_at().expect("due while it runs");
+    assert!(due <= tokio::time::Instant::now(), "past already");
+    agent.stop_triggers_cut_off();
+    assert!(agent.triggers["t1"].cut_off);
+    assert_eq!(agent.triggers_cut_off_at(), None, "stopped: not again");
+}
+
 /// Codex's review of DN14: a queue kept past the master-time cutoff (a cut one way: the master
 /// heard nothing, ended its tasks `lost`, tried them elsewhere) goes back when the master's next
 /// word comes, before that word's stamp moves the deadline: started then, a task ran twice.

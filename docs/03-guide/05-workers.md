@@ -40,7 +40,11 @@ by default) without word from the master, the agent stops those with `cleanup_an
 also stops them once master time may have passed that message's stamp plus the lease, or a
 lease after it sent the last heartbeat the master says it heard (its own messages lost while the
 master's still arrive), over a reconnect too (see [Master time](17-master-clock.md)). Their cleanup waits for the master's decision, including if a task
-ends on its own while disconnected. A master outage longer than the lease has the same effect.
+ends on its own while disconnected. A master outage longer than the lease has the same effect. Its triggers stop then too, whatever else it runs, at that
+moment and not on its next check, and a trigger given to it past that moment isn't started: the
+master may have counted the worker lost. It places a lost worker's triggers elsewhere only
+after the cancel grace, the time the worker gives them to stop, so one trigger never runs in
+two places.
 The agent ends any stream silent for a lease, whatever it runs, and acts on no message
 arriving past that limit. This also applies while fetching inputs: a late chunk is ignored,
 the task is not started and no rejection is sent. On its first stream, before it knows the

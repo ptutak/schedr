@@ -584,11 +584,11 @@ def main(
     try:
         declared: Message = {}
         if metrics:
-            declared["metrics"] = as_wire(metrics, "metrics")
+            declared["metrics"] = as_wire([*metrics], "metrics")
         if panels:
-            declared["panels"] = as_wire(panels, "panels")
+            declared["panels"] = as_wire([*panels], "panels")
         if notifications:
-            declared["notifications"] = as_wire(notifications, "notifications")
+            declared["notifications"] = as_wire([*notifications], "notifications")
         # Its `logging` as structured lines (decision 514), unless it configures its own.
         install_structured_logging()
         service = environ.get(SERVICE_FD_ENV, "")

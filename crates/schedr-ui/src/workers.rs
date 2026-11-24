@@ -222,12 +222,9 @@ fn row<T>(page: &Page, deployment: &Deployment<T>, worker: &WorkerView) -> Worke
         state: worker.state.clone(),
         drained: worker.drained,
         queues: worker.queues.join(", "),
-        // Wait steps are attempts, but use their own slots.
-        load: format!(
-            "{} / {}",
-            worker.running.saturating_sub(wait_steps),
-            worker.slots
-        ),
+        // Its tasks only: wait steps are counted apart (B254; agy's review of M5.2k: they
+        // were taken off a second time).
+        load: format!("{} / {}", worker.running, worker.slots),
         wait_steps: format!("{wait_steps} / {}", worker.watcher_slots),
         hosts: hosts.iter().map(HostRow::of).collect(),
         memory: worker

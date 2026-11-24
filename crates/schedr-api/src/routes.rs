@@ -1611,11 +1611,11 @@ async fn read_log_part(
     })
 }
 
-/// A DAG's trigger runs, the newest first, with where each one's log is (B272): `404` for a
-/// DAG without an event trigger.
+/// A DAG's trigger runs, the newest first, with where each one's log is (B272): none for a DAG
+/// whose trigger hasn't run (or that has none).
 #[utoipa::path(get, path = "/api/v1/dags/{dag_id}/trigger/runs", tag = "triggers",
     params(("dag_id" = String, Path, description = "The DAG's ID")),
-    responses((status = 200, body = TriggerRunList), (status = 404, body = ErrorBody)))]
+    responses((status = 200, body = TriggerRunList), (status = 400, body = ErrorBody)))]
 pub async fn list_trigger_runs(
     State(state): State<ApiState>,
     Path(dag_id): Path<String>,

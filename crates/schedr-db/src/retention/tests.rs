@@ -209,6 +209,17 @@ async fn a_removed_dag_keeps_no_run_and_goes_with_its_last() {
             .to_owned(),
     )
     .await;
+    // A run of its trigger (B272): gone with it too (agy's review of M5.2k).
+    db.trigger_assigned(
+        "sync",
+        "inst-1",
+        "w1",
+        "v1",
+        "h1",
+        ts("2026-01-02T00:00:00Z"),
+    )
+    .await
+    .unwrap();
     let cut = ts("2026-01-10T00:00:00Z");
     // Not removed yet: its only run is kept, and so is the DAG.
     assert_eq!(db.delete_old_runs(cut, 100).await.unwrap(), 0);
@@ -231,7 +242,7 @@ async fn a_removed_dag_keeps_no_run_and_goes_with_its_last() {
     );
     assert_eq!(db.delete_old_runs(cut, 100).await.unwrap(), 1);
     assert_eq!(db.delete_removed_dags(cut).await.unwrap(), 1);
-    for table in ["dags", "dag_versions", "events", "runs"] {
+    for table in ["dags", "dag_versions", "events", "runs", "trigger_runs"] {
         assert_eq!(
             count(&db, &format!("SELECT COUNT(*) FROM {table}")).await,
             0,

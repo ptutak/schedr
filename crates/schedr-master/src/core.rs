@@ -359,6 +359,18 @@ impl ReportLimits {
                 ));
             }
         }
+        // Its triggers, as many as its watcher slots run and the stops not told yet
+        // (agy's review of M5.2k: they were kept, however many and however long).
+        let triggers = self.triggers(register.watcher_slots);
+        if register.running_triggers.len() > triggers {
+            return Some(format!("it reports over {triggers} running triggers"));
+        }
+        if register.running_triggers.iter().any(|text| long(text)) {
+            return Some(format!(
+                "one of its running triggers is over {} characters",
+                self.text
+            ));
+        }
         let config_limit = self.text.saturating_mul(self.records);
         (register.config_json.len() > config_limit)
             .then(|| format!("its configuration is over {config_limit} bytes"))
@@ -373,18 +385,30 @@ impl ReportLimits {
     }
 
     /// `records` within the limit, saying in the log when some were dropped.
-    fn take<T>(self, worker_id: &str, what: &str, mut records: Vec<T>) -> Vec<T> {
-        if records.len() > self.records {
-            tracing::warn!(
-                worker_id,
-                sent = records.len(),
-                kept = self.records,
-                "worker sent more {what} than the master keeps: the rest are dropped"
-            );
-            records.truncate(self.records);
-        }
-        records
+    fn take<T>(self, worker_id: &str, what: &str, records: Vec<T>) -> Vec<T> {
+        take_up_to(worker_id, what, records, self.records)
     }
+
+    /// The most triggers a worker with `watcher_slots` reports running: its slots twice (the
+    /// stops it hasn't told yet beside them), and never fewer than the records.
+    fn triggers(self, watcher_slots: u32) -> usize {
+        let slots = usize::try_from(watcher_slots).unwrap_or(usize::MAX);
+        self.records.max(slots.saturating_mul(2))
+    }
+}
+
+/// `records`, at most `kept` of them, saying in the log when some were dropped.
+fn take_up_to<T>(worker_id: &str, what: &str, mut records: Vec<T>, kept: usize) -> Vec<T> {
+    if records.len() > kept {
+        tracing::warn!(
+            worker_id,
+            sent = records.len(),
+            kept,
+            "worker sent more {what} than the master keeps: the rest are dropped"
+        );
+        records.truncate(kept);
+    }
+    records
 }
 
 /// Why the master refused or failed something.
@@ -827,6 +851,10 @@ pub struct MasterCore {
     /// when (master time): each holds every `@trigger(wait_for=...)` DAG for at most
     /// `cancel_grace` and a lease (B279: a worker that never stops one stalled them all).
     unknown_stopping_since: BTreeMap<String, Timestamp>,
+    /// When each unknown instance was first reported (master time), kept across its worker's
+    /// reconnects so one that never stops it doesn't restart the hold each time (agy's review
+    /// of M5.2k); forgotten once past twice the hold.
+    unknown_first_seen: BTreeMap<String, Timestamp>,
     /// The API tasks call through their agents (M4.11h); none: they are refused.
     task_api: Option<Arc<dyn task_api::TaskApi>>,
     /// `[notifications]`.
@@ -891,6 +919,7 @@ impl MasterCore {
             connection_jobs: BTreeMap::new(),
             stopping_triggers: BTreeMap::new(),
             unknown_stopping_since: BTreeMap::new(),
+            unknown_first_seen: BTreeMap::new(),
             task_api: None,
             notifications: Arc::default(),
             steady: crate::clock::as_given,
@@ -1522,7 +1551,15 @@ impl MasterCore {
             .map(|service| (limits.cut(service.name), service.readies))
             .collect();
         self.dispatcher.report_services(worker_id, readies);
-        self.heartbeat_triggers(worker_id, &beat.running_triggers, &beat.pokes, now)
+        let slots = self
+            .dispatcher
+            .workers()
+            .get(worker_id)
+            .map_or(0, |worker| worker.watcher_slots);
+        let most = limits.triggers(slots);
+        let running = take_up_to(worker_id, "running triggers", beat.running_triggers, most);
+        let pokes = take_up_to(worker_id, "pokes", beat.pokes, most);
+        self.heartbeat_triggers(worker_id, &running, &pokes, now)
             .await
     }
 

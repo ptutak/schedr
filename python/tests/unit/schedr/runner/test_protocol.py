@@ -228,6 +228,9 @@ def test_as_wire_copies_plain_json_and_refuses_the_rest() -> None:
         as_wire({"a": {1}}, "v")
     with pytest.raises(TypeError, match="isn't a string"):
         as_wire({(1, 2): 3}, "v")
+    # agy's review of M5.2k: a NaN key passed as "NaN", which the channel refuses as a value.
+    with pytest.raises(ValueError, match="not JSON compliant"):
+        as_wire({float("nan"): 1}, "v")
 
 
 def test_given_secrets_are_read_by_name_or_refused() -> None:

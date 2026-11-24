@@ -3185,6 +3185,51 @@ async fn a_cancelled_runs_refusals_are_dropped() {
     assert_eq!(dispatcher.refusals_kept(), 0);
 }
 
+/// agy's review of M5.2k: a refused task that started elsewhere kept its wants, offered again
+/// to each worker reporting new code while it ran.
+#[tokio::test]
+async fn a_refused_task_started_elsewhere_keeps_nothing_of_its_refusals() {
+    let (dispatcher, db, run_id) = with_run(dag(0)).await;
+    let mut dispatcher = dispatcher.with_code_wait(Duration::from_secs(60));
+    refused_by(
+        &mut dispatcher,
+        &db,
+        &run_id,
+        &[(
+            "w1",
+            pb::RejectReason::InterpreterUndefined,
+            "no python3.15",
+        )],
+    )
+    .await;
+    assert_eq!(dispatcher.refusals_kept(), 1);
+    dispatcher
+        .register("w2", "i2", &[], 2, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher.report_root("w2", "etl", "h1");
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(5))
+        .await
+        .unwrap();
+    let assigned = out
+        .iter()
+        .find_map(|o| match &o.message.message {
+            Some(Message::AssignTask(a)) if o.worker_id == "w2" => Some(a.attempt_id.clone()),
+            _ => None,
+        })
+        .expect("given to w2");
+    dispatcher
+        .started("w2", &started(&assigned), later(6))
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatcher.refusals_kept(),
+        0,
+        "started: its refusals and wants gone"
+    );
+}
+
 #[tokio::test]
 async fn retrying_needs_a_known_task_of_an_unfinished_run() {
     let (mut dispatcher, db, run_id) = with_run(dag(0)).await;

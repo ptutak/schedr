@@ -633,7 +633,9 @@ async fn the_workers_page_shows_a_workers_hosts_and_wait_steps_apart_from_its_ta
          "memory_bytes": 0, "hosts_lost": 1},
     ]);
     let mut active = worker("w1", "active", false, &json!([]));
-    active["running"] = json!(3);
+    // As the API counts since B254: its tasks, the wait steps apart (agy's review of M5.2k).
+    active["running"] = json!(1);
+    active["running_wait_steps"] = json!(2);
     active["watcher_slots"] = json!(100);
     active["watcher_hosts"] = hosts.clone();
     let mut gone = worker("w2", "lost", false, &json!([]));

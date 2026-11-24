@@ -3483,3 +3483,42 @@ one marked), followed while it runs by a tail that shares the task tail's answer
 (`live::tail_answer`). Not chosen: the log inside the page's live render (read from the worker
 on every update, its tail started again each time); a download of a trigger run's whole log
 (`schedr triggers logs` prints it whole).
+
+### 2026-11-24: M5.2k's review: agy over the fourteen commits, Grok on the boundaries
+
+agy (high) reviewed `3dc2936b..7fc12e71`, Grok (high) B276, B288 and B290 on their own. All
+findings checked against the code; fixed:
+
+- **A `wait_for` call's run left "running"** (agy): a passed call skipped `trigger_ended`, so its
+  `trigger_runs` row never ended or was pruned. Every end now ends its run; a new run also ends
+  any older one nothing said the end of (a master stopped between two writes).
+- **A removed DAG's trigger runs kept** (agy): `delete_removed_dags` deletes them with the rest.
+- **An unknown trigger's hold started again on each reconnect** (agy): its first report is kept
+  across them (pruned past twice the hold). A hostile worker rotating names is out of scope
+  (decision 520: nodes are trusted).
+- **`running_triggers` unbounded** (agy, B183): a registration reporting more than the records
+  or twice its watcher slots, or one too long, is refused; a heartbeat's are cut to that.
+- **The Workers page took wait steps off twice** (agy, B254's API counting them apart already).
+- **`wants` kept after a refused task started elsewhere** (agy): cleared with its refusals.
+- **`as_wire`** (agy): a plugin's declarations, any sequence as before; a NaN or infinite key
+  refused, as the channel refuses such values.
+- **A trigger given past the master's deadline started** (Grok): refused as a task's assignment
+  is, told as a clean end (a master that forgot the run ignores it, one that didn't places it
+  again, no strike).
+- **A cutoff told as `trigger_failed`** (Grok): a trigger stopped for the master's silence is told
+  stopped; its host dying stays a failure.
+- **No timer at the trigger deadline** (both): the agent's loops (session, reconnecting, a fetch)
+  wake at it while a trigger runs, not only on the alive tick, the stream kept.
+- **Two copies of a trigger for up to the cancel grace** (Grok): the user's choice (B of three):
+  the master places a lost worker's trigger elsewhere only after the cancel grace
+  (`not_before`). Not chosen: a short grace on a cutoff (a trigger's `finally` cut to a second);
+  keeping the overlap.
+- Smaller: the trigger runs route's doc, the gauge refresh's flag cleared on a panic too.
+
+Not taken: Grok's reordering of a late message's stamp before the cutoff check (stopping first is
+the safe side once the deadline has passed; with the cutoff no longer a failure it costs only a
+restart).
+
+Scenario 1 on CI for the user (quick profile, `3dc2936b`, one scenario a run, the simulator then
+skipped): 86.3, 112.2 and 72.6 tasks a second, the same code; 20 November's runs gave 111.3 and
+107.5. The runners' spread, not a loss.

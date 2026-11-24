@@ -289,6 +289,10 @@ impl Database {
             started_at = excluded.started_at, stopped_why = NULL, stopped_on = NULL";
         const RUN: &str = "INSERT INTO trigger_runs (instance_id, dag_id, worker_id, started_at) \
             VALUES ($1, $2, $3, $4{ts}) ON CONFLICT (instance_id) DO NOTHING";
+        // A new run means the ones before it ended, if nothing said so (a master stopped between
+        // two writes): none stays "running", unpruned, for good (agy's review of M5.2k).
+        const CLOSE: &str = "UPDATE trigger_runs SET ended_at = $3{ts} \
+            WHERE dag_id = $1 AND ended_at IS NULL AND instance_id <> $2";
         in_tx!(self, |tx, backend| {
             crate::query::query(sql(backend, SET))
                 .bind(dag_id)
@@ -303,6 +307,12 @@ impl Database {
                 .bind(instance_id)
                 .bind(dag_id)
                 .bind(worker_id)
+                .bind(db_time(now))
+                .execute(&mut *tx)
+                .await?;
+            crate::query::query(sql(backend, CLOSE))
+                .bind(dag_id)
+                .bind(instance_id)
                 .bind(db_time(now))
                 .execute(&mut *tx)
                 .await?;

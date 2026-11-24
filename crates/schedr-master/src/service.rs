@@ -215,6 +215,15 @@ enum Wake {
     ListenAgain,
 }
 
+/// Clears its flag when dropped: a background job's "running", however the job ends.
+struct ClearOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for ClearOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 impl Hub {
     /// A hub over `core`, with the system clock.
     #[must_use]
@@ -516,8 +525,10 @@ impl Hub {
         }
         let hub = self.clone();
         tokio::spawn(async move {
+            // Cleared however the refresh ends, a panic too (agy's review of M5.2k): set for
+            // good, the gauges would never refresh again.
+            let _clear = ClearOnDrop(Arc::clone(&hub.refreshing));
             hub.refresh_gauges().await;
-            hub.refreshing.store(false, Ordering::SeqCst);
         });
     }
 

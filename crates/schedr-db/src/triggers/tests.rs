@@ -283,46 +283,51 @@ async fn a_triggers_runs_are_kept_the_newest_with_their_ends() {
     // B272: where each run's log is, the newest few, a running one never pruned.
     let (db, dag, version) = with_dag().await;
     let at = |hour: u32| ts(&format!("2026-10-14T{hour:02}:00:00Z"));
-    for (instance, hour) in [("a", 1), ("b", 2), ("c", 3)] {
-        db.trigger_assigned(dag.as_str(), instance, "w1", &version, "h1", at(hour))
-            .await
-            .unwrap();
-    }
-    db.trigger_ended(dag.as_str(), "a", Some("boom"), None, (at(4), 2))
+    let assign = |instance: &'static str, hour| {
+        let (db, dag, version) = (&db, dag.as_str().to_owned(), version.clone());
+        async move {
+            db.trigger_assigned(&dag, instance, "w1", &version, "h1", at(hour))
+                .await
+                .unwrap();
+        }
+    };
+    let names = |runs: &[TriggerRun]| -> Vec<String> {
+        runs.iter().map(|r| r.instance_id.clone()).collect()
+    };
+    assign("a", 1).await;
+    db.trigger_ended(dag.as_str(), "a", Some("boom"), None, (at(2), 2))
         .await
         .unwrap();
-    db.trigger_ended(dag.as_str(), "b", None, None, (at(5), 2))
+    assign("b", 3).await;
+    db.trigger_ended(dag.as_str(), "b", None, None, (at(4), 2))
+        .await
+        .unwrap();
+    assign("c", 5).await;
+    let runs = db.trigger_runs(dag.as_str(), 10).await.unwrap();
+    assert_eq!(names(&runs), ["c", "b", "a"], "pruned only as one ends");
+    assert_eq!(runs[0].ended_at, None, "c runs");
+    assert_eq!(
+        (runs[2].error.as_deref(), runs[2].ended_at),
+        (Some("boom"), Some(at(2)))
+    );
+    db.trigger_ended(dag.as_str(), "c", None, None, (at(6), 2))
         .await
         .unwrap();
     let runs = db.trigger_runs(dag.as_str(), 10).await.unwrap();
-    let names: Vec<&str> = runs.iter().map(|r| r.instance_id.as_str()).collect();
-    assert_eq!(names, ["c", "b"], "the oldest pruned past two");
-    assert_eq!(runs[0].ended_at, None, "c still runs");
-    assert_eq!(
-        (runs[1].ended_at, runs[1].worker_id.as_str()),
-        (Some(at(5)), "w1")
-    );
-    db.trigger_assigned(dag.as_str(), "d", "w2", &version, "h1", at(6))
-        .await
-        .unwrap();
-    db.trigger_ended(dag.as_str(), "d", Some("boom"), None, (at(7), 1))
-        .await
-        .unwrap();
-    let kept: Vec<String> = db
-        .trigger_runs(dag.as_str(), 10)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|r| r.instance_id)
-        .collect();
-    assert_eq!(kept, ["d", "c"], "c runs: kept beside the newest");
+    assert_eq!(names(&runs), ["c", "b"], "the oldest pruned past two");
+    // A run nothing said the end of (a master stopped between two writes) ends with the next
+    // (agy's review of M5.2k): none stays "running" for good.
+    assign("d", 7).await;
+    assign("e", 8).await;
     let d = db.trigger_run(dag.as_str(), "d").await.unwrap().unwrap();
+    assert_eq!(d.ended_at, Some(at(8)));
+    db.trigger_ended(dag.as_str(), "d", Some("late"), None, (at(9), 1))
+        .await
+        .unwrap();
+    let runs = db.trigger_runs(dag.as_str(), 10).await.unwrap();
+    assert_eq!(names(&runs), ["e"], "the running one kept, the newest");
     assert_eq!(
-        (d.error.as_deref(), d.ended_at),
-        (Some("boom"), Some(at(7)))
-    );
-    assert_eq!(
-        db.trigger_run("other", "d").await.unwrap(),
+        db.trigger_run("other", "e").await.unwrap(),
         None,
         "another DAG's"
     );
