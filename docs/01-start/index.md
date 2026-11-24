@@ -33,8 +33,8 @@ For Kubernetes or Docker, the images are on `ghcr.io`, x86_64:
 | `ghcr.io/ptutak/schedr-slim` | the same without the task libraries and connection clients | a smaller base |
 | `ghcr.io/ptutak/schedr-server` | the binary alone | the master, the webserver and the UI |
 
-Each is built on Debian (glibc), tagged with the version (`1.1.0`) and its series (`1.1`);
-the same on Alpine adds `-alpine` (`1.1.0-alpine`). There is no `latest`: a deployment names the
+Each is built on Debian (glibc), tagged with the version (`1.2.0`) and its series (`1.2`);
+the same on Alpine adds `-alpine` (`1.2.0-alpine`). There is no `latest`: a deployment names the
 version it runs. [Deployment](../03-guide/10-deployment.md) covers the Helm chart.
 
 ## Run schedr
