@@ -248,13 +248,16 @@ pub(crate) struct Fence {
 /// on Postgres (SQLSTATE) the classes of transaction rollback (40: deadlock, serialization),
 /// insufficient resources (53), object not ready (55: lock not available), operator
 /// intervention (57: a statement cancelled at its limit, a shutdown), connection (08) and
-/// system errors (58); on SQLite (a number) busy, locked, I/O, full and can't open.
+/// system errors (58), and a transaction ended for its time (25P03: idle past the limit set
+/// at its `BEGIN`, a master stalled between two statements, B289; 25P04: Postgres 17's
+/// `transaction_timeout`); on SQLite (a number) busy, locked, I/O, full and can't open.
 fn databases_trouble(postgres: bool, code: &str) -> bool {
     if postgres {
         // SQLSTATE: five characters, often all digits (57014), so told by the backend.
         return ["40", "53", "55", "57", "08", "58"]
             .iter()
-            .any(|class| code.starts_with(class));
+            .any(|class| code.starts_with(class))
+            || matches!(code, "25P03" | "25P04");
     }
     code.parse::<i64>()
         .is_ok_and(|sqlite| matches!(sqlite & 0xff, 5 | 6 | 10 | 13 | 14))

@@ -3423,3 +3423,13 @@ interpreter of a task's stored forms in `schedr.runner.task` (references, inputs
 about 80 `Any` and a run mapping that isn't plain JSON, a rework of its own. Not chosen:
 TypedDicts per message (the record's suggestion): the narrowing helpers check at run time
 what a TypedDict only claims.
+
+### 2026-11-24: M5.2k, B289: a transaction ended for its time is the database's trouble
+
+Found in the full stress run on CI: a master starved between two statements longer than
+`query_timeout` had its transaction ended by Postgres (25P03, the idle limit set at each write's
+`BEGIN`, B10), and the worker's message was dropped as if its data were refused. 25P03 and 25P04
+(Postgres 17's `transaction_timeout`) now count as the database's trouble: the stream ends and
+the worker sends the message again. Not chosen: the whole class 25 (invalid transaction state):
+its other codes (a statement in an aborted transaction, a read-only one) are mistakes of the
+statement's own, not a moment's trouble.

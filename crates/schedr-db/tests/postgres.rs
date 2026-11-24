@@ -1673,6 +1673,32 @@ async fn a_write_past_the_query_timeout_is_stopped_by_postgres_too() {
 }
 
 /// The pool of a Postgres database (for statements of the tests' own).
+#[tokio::test]
+async fn a_transaction_ended_by_its_idle_limit_is_the_databases_trouble() {
+    // B289: Postgres ends a write's transaction left idle past `query_timeout` (B10), as when the
+    // master stalls between two statements: the data isn't at fault, so the worker's message
+    // must be handled again after a reconnect, not dropped.
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    let mut idle = admin_pool(&db).begin().await.unwrap();
+    sqlx::query("SET LOCAL idle_in_transaction_session_timeout = '100ms'")
+        .execute(&mut *idle)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let ended = sqlx::query("SELECT 1")
+        .execute(&mut *idle)
+        .await
+        .unwrap_err();
+    let code = ended
+        .as_database_error()
+        .and_then(sqlx::error::DatabaseError::code)
+        .map(std::borrow::Cow::into_owned);
+    assert_eq!(code.as_deref(), Some("25P03"), "{ended}");
+    let error = schedr_db::DbError::Sqlx(ended);
+    assert!(!error.is_data_fault(), "{error}");
+}
+
 fn admin_pool(db: &Database) -> &sqlx::PgPool {
     let schedr_db::database::Pool::Postgres(pool) = db.pool() else {
         unreachable!()
