@@ -3681,3 +3681,12 @@ Postgres, the API and the master's report for the version.
 CI on f4a6dda3 failed on `requests_pending_together_are_written_as_one_group` alone: 471 ms
 against its 400 ms bound for two groups of a 100 ms stall. It now counts the groups by the number
 each write reports (two, or three on a slow runner, never six), with no time bound.
+
+### 2026-11-24: B293, scenario 25's baselines measured without a round limit
+
+The failing part was a baseline, not a plugin: plain `@task` Python sleeping 0.1 s, 8 workers
+of 8 slots, 64 interpreters started at once on a 2-CPU runner, run only for the rate the
+extension parts are compared with. The user chose A of four: the baselines (`sleeping_tasks`)
+record their round p99 without a limit (`Stress::measure_baseline`); the main extension part
+keeps 5 s. Not chosen: slots capped to the runner (the baseline's meaning changes), a limit
+scaled by load (a formula to tune), a bigger runner.

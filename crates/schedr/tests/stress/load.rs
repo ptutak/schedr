@@ -242,6 +242,23 @@ impl Stress {
     /// Throughput and latencies of what ran, into `report`, with their floors: at least
     /// `min_tasks_per_s` successful tasks a second.
     pub fn measure(&self, report: &mut Report, master: &str, min_tasks_per_s: f64) {
+        self.measure_with(report, master, min_tasks_per_s, Some(5.0));
+    }
+
+    /// [`Self::measure`] for a baseline, a part run for its rate to compare with: its round
+    /// p99 recorded, not limited (B293: scenario 25's Python baseline, 64 interpreters started
+    /// on a 2-CPU runner, held the master's rounds 16 s; its rate was what it was for).
+    pub fn measure_baseline(&self, report: &mut Report, master: &str, min_tasks_per_s: f64) {
+        self.measure_with(report, master, min_tasks_per_s, None);
+    }
+
+    fn measure_with(
+        &self,
+        report: &mut Report,
+        master: &str,
+        min_tasks_per_s: f64,
+        round_limit_s: Option<f64>,
+    ) {
         let done = self.throughput();
         report.set("tasks", done.tasks);
         report.at_least("tasks_per_s", done.tasks_per_s, min_tasks_per_s);
@@ -257,11 +274,12 @@ impl Stress {
         self.slot_cycle(report);
         if self.cluster.ops.iter().any(|(name, _)| name == master) {
             let (_, metrics) = self.cluster.ops_get(master, "/metrics");
-            report.at_most(
-                "round_p99_s",
-                histogram_quantile(&metrics, "schedr_master_tick_duration_seconds", 0.99),
-                5.0,
-            );
+            let round_p99_s =
+                histogram_quantile(&metrics, "schedr_master_tick_duration_seconds", 0.99);
+            match round_limit_s {
+                Some(limit) => report.at_most("round_p99_s", round_p99_s, limit),
+                None => report.set("round_p99_s", round_p99_s),
+            }
         }
         self.stages(report, master);
     }

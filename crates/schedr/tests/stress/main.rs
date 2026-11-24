@@ -2480,7 +2480,8 @@ fn sleeping_tasks(name: &'static str, work: Work) -> f64 {
     let mut report = Report::new(name);
     let dags = work_cluster(&mut stress, work, &mut report);
     stress.wait_for_runs(dags, size.time(20 * MINUTE, 90 * MINUTE), |_| {});
-    stress.measure(&mut report, "master", 1.0);
+    // A baseline: its rate is what it's for, its rounds not limited (B293).
+    stress.measure_baseline(&mut report, "master", 1.0);
     if matches!(work, Work::ExtensionNoop | Work::ExtensionPython) {
         extension_figures(&stress, &mut report, work);
     }
