@@ -40,9 +40,10 @@
       <td class="mono dim">{{ row.location }}</td>
     </tr>
   {% else %}
-    <tr><td class="empty" colspan="{% if several %}5{% else %}4{% endif %}">No DAGs{% if filters.is_filtered() %} match these filters{% endif %}.</td></tr>
+    <tr><td class="empty" colspan="{% if several %}5{% else %}4{% endif %}">No DAGs{% if filters.is_filtered() %} match these filters{% endif %}{% if filters.page > 1 %} on this page{% endif %}.</td></tr>
   {% endfor %}
   </tbody>
 </table>
+{% include "pager.html" %}
 </div>
 {% endblock %}

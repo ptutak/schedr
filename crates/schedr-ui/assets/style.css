@@ -201,6 +201,12 @@ button, .button { cursor: pointer; background: var(--surface); display: inline-b
 button:hover, .button:hover { border-color: var(--dim); text-decoration: none; }
 button:disabled { cursor: not-allowed; color: var(--dim); border-color: var(--border); }
 .pager { margin: 12px 0; }
+/* Numbered pages (decision 517): `< Previous 1 2 [3] 4 5 ... Next >`. */
+.pages { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pages .page { min-width: 2em; padding: 3px 8px; text-align: center; border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+.pages .page.current { background: var(--link); border-color: var(--link); color: var(--bg); font-weight: 600; }
+.pages .page.disabled { opacity: .45; }
+.pages .page.more { border-color: transparent; }
 h2 .more { font-size: 13px; font-weight: 400; margin-left: 8px; }
 .summary { margin: -8px 0 12px; }
 

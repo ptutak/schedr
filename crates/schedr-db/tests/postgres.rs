@@ -416,6 +416,43 @@ async fn with_instances() -> (Database, String) {
     (db, run_id)
 }
 
+/// The All view's Previous and Oldest (DN39) on Postgres: oldest first, from a cursor or not.
+#[tokio::test]
+async fn every_dags_runs_are_listed_oldest_first_from_a_cursor() {
+    let (db, run_id) = with_instances().await;
+    let version = db.active_dags().await.unwrap()[0].version_id.clone();
+    let older = db
+        .insert_run(&run(
+            &version,
+            RunKind::Scheduled,
+            RunState::Success,
+            "2026-10-21T01:00:00Z",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let ids =
+        |runs: Vec<schedr_db::reads::RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    // Oldest first, from a cursor or not (DN39), with and without the DAG part.
+    for part in [None, Some("YN")] {
+        let oldest = |after: Option<&str>| RunFilter {
+            dag_contains: part.map(str::to_owned),
+            limit: 10,
+            ascending: true,
+            after: after.map(ts),
+            ..RunFilter::default()
+        };
+        let all = ids(db.runs(&oldest(None)).await.unwrap());
+        assert_eq!(all, [older.as_str(), run_id.as_str()], "{part:?}");
+        let after = ids(db
+            .runs(&oldest(Some("2026-10-21T01:00:00Z")))
+            .await
+            .unwrap());
+        assert_eq!(after, [run_id.as_str()], "{part:?}");
+        assert_eq!(db.runs_ahead(&oldest(None), 10).await.unwrap(), 0);
+    }
+}
+
 #[tokio::test]
 async fn every_dags_runs_are_listed_filtered_and_paged() {
     let (db, run_id) = with_instances().await;
@@ -437,6 +474,8 @@ async fn every_dags_runs_are_listed_filtered_and_paged() {
         before: before.map(ts),
         before_run: None,
         limit: 10,
+        offset: 0,
+        ..RunFilter::default()
     };
     let ids =
         |runs: Vec<schedr_db::reads::RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
@@ -457,6 +496,29 @@ async fn every_dags_runs_are_listed_filtered_and_paged() {
         ..RunFilter::default()
     };
     assert_eq!(db.runs(&other).await.unwrap(), []);
+    // Numbered pages (M5.2j), with and without the DAG part (its own statement here).
+    for part in [None, Some("YN")] {
+        let paged = |offset| RunFilter {
+            dag_contains: part.map(str::to_owned),
+            limit: 1,
+            offset,
+            ..RunFilter::default()
+        };
+        assert_eq!(ids(db.runs(&paged(1)).await.unwrap()), [older.as_str()]);
+        assert_eq!(db.runs_ahead(&paged(0), 10).await.unwrap(), 1, "{part:?}");
+        assert_eq!(db.runs_ahead(&paged(1), 10).await.unwrap(), 0, "{part:?}");
+    }
+    // A DAG's own list, newest planned first, on Postgres too.
+    let page = db.dag_runs_page(&sync(), None, 1, 1).await.unwrap();
+    assert_eq!(ids(page), [older.as_str()]);
+    assert_eq!(
+        db.dag_runs_ahead(&sync(), None, (1, 0), 10).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        db.dag_runs_ahead(&sync(), None, (1, 1), 10).await.unwrap(),
+        0
+    );
     // A part of the DAG's ID, any case; `_` and `%` are themselves (the user, 2026-11-16).
     let part = |part: &str| RunFilter {
         dag_contains: Some(part.to_owned()),

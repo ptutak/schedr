@@ -90,7 +90,7 @@ const MAPPED_TABS: [(&str, &str); 3] = [
     ("memory", "Memory"),
 ];
 
-/// The runs list's query: filters and the page's cursor.
+/// The runs list's query: filters and the page.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListQuery {
     /// Only this deployment's runs.
@@ -102,18 +102,45 @@ pub struct ListQuery {
     /// Only runs in this state.
     #[serde(default)]
     pub state: Option<String>,
-    /// The cursor: runs triggered before this moment...
+    /// The page, from 1 (decision 517), with one deployment shown.
+    #[serde(default)]
+    pub page: Option<u32>,
+    /// Every deployment's (the All view, DN39): the runs triggered before this moment...
     #[serde(default)]
     pub before: Option<Timestamp>,
-    /// ...or at it, with a lower ID than this run.
+    /// ...or at it, with a lower ID than this run (Next).
     #[serde(default)]
     pub before_run: Option<String>,
+    /// The runs triggered after this moment...
+    #[serde(default)]
+    pub after: Option<Timestamp>,
+    /// ...or at it, with a greater ID than this run (Previous).
+    #[serde(default)]
+    pub after_run: Option<String>,
+    /// `oldest=1`: the oldest runs (Oldest).
+    #[serde(default)]
+    pub oldest: Option<String>,
+}
+
+/// Where the All view is (DN39): its runs read from a cursor, no page numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The newest runs, or those before the cursor (Next): newest first.
+    Older,
+    /// Those after the cursor (Previous), or the oldest: read oldest first, shown newest first.
+    Newer,
 }
 
 impl ListQuery {
     /// The filters with an empty value dropped (a form sends `dag=` for "any").
     fn normalised(mut self) -> Self {
-        for value in [&mut self.deployment, &mut self.dag, &mut self.state] {
+        for value in [
+            &mut self.deployment,
+            &mut self.dag,
+            &mut self.state,
+            &mut self.before_run,
+            &mut self.after_run,
+        ] {
             if value.as_deref().is_some_and(str::is_empty) {
                 *value = None;
             }
@@ -121,26 +148,70 @@ impl ListQuery {
         self
     }
 
-    /// This query's URL with the cursor at `run` (the next page).
-    fn next_page(&self, base: &str, run: &ListedRun) -> String {
-        let mut url = format!("{base}/runs?");
+    /// The page shown, from 1.
+    fn page(&self) -> u32 {
+        self.page.unwrap_or(1).max(1)
+    }
+
+    /// This query's URL with its filters (in the address, so the live update keeps them) and
+    /// `place` (a page, a cursor; empty: the first).
+    fn href(&self, base: &str, place: &str) -> String {
+        let mut url = format!("{base}/runs");
+        let mut sep = '?';
         for (key, value) in [
             ("deployment", &self.deployment),
             ("dag", &self.dag),
             ("state", &self.state),
         ] {
             if let Some(value) = value {
-                let _ = write!(url, "{key}={}&", path_segment(value));
+                let _ = write!(url, "{sep}{key}={}", path_segment(value));
+                sep = '&';
             }
         }
-        let _ = write!(
-            url,
-            "before={}&before_run={}",
-            path_segment(&run.triggered_at.to_string()),
-            path_segment(&run.run_id)
-        );
+        if !place.is_empty() {
+            let _ = write!(url, "{sep}{place}");
+        }
         url
     }
+
+    /// This query's URL at page `number`.
+    fn page_href(&self, base: &str, number: u32) -> String {
+        self.href(base, &format!("page={number}"))
+    }
+
+    /// The All view's place and its cursor's moment and run (DN39).
+    fn place(&self) -> (Place, Option<(Timestamp, Option<String>)>) {
+        match (self.after, self.before, self.oldest.is_some()) {
+            // An `oldest` other than 1 is the newest page.
+            (Some(after), _, _) => (Place::Newer, Some((after, self.after_run.clone()))),
+            (None, _, true) if self.oldest.as_deref() == Some("1") => (Place::Newer, None),
+            (None, before, _) => (
+                Place::Older,
+                before.map(|before| (before, self.before_run.clone())),
+            ),
+        }
+    }
+}
+
+/// The All view's buttons (DN39): each one's address, none where there is nothing that way.
+#[derive(Debug, Clone, Default)]
+pub struct Cursor {
+    /// The newest runs.
+    pub newest: Option<String>,
+    /// The runs just newer than these.
+    pub previous: Option<String>,
+    /// The runs just older than these.
+    pub next: Option<String>,
+    /// The oldest runs.
+    pub oldest: Option<String>,
+}
+
+/// A run's place for a cursor: its trigger moment and ID, escaped for an address.
+fn at(run: &ListedRun) -> (String, String) {
+    (
+        path_segment(&run.triggered_at.to_string()),
+        path_segment(&run.run_id),
+    )
 }
 
 /// A run in a list.
@@ -193,12 +264,22 @@ struct RunsPage {
     deployments: Vec<String>,
     states: [&'static str; 5],
     query: ListQuery,
-    next: Option<String>,
+    pager: Option<crate::pager::Pager>,
+    /// The All view's buttons (DN39), instead of numbers.
+    cursor: Option<Cursor>,
+    /// Not the first page or the newest runs: an empty one is "on this page".
+    paged: bool,
     /// The page's read was slow: it reads again on a change at most this often (ms).
     every: Option<u128>,
     /// The deployments whose webserver matches only a whole DAG ID (older than 1.1).
     whole_ids: Vec<String>,
+    /// The deployments whose webserver lists only its first page (older than 1.2).
+    first_only: Vec<String>,
 }
+
+/// What an older webserver's answer to a later page, or to oldest first, says (see
+/// [`runs_of`]).
+const NOT_THIS_PAGE: &str = "older than 1.2: it can't list this page";
 
 /// One deployment's page of runs, and whether it matched the DAG field as a whole ID: a
 /// webserver older than `dag_contains` (1.1) refuses it as an unknown parameter, so it is asked
@@ -208,6 +289,24 @@ async fn runs_of<T: Transport + Send + Sync>(
     query: &AllRunsQuery,
 ) -> (Result<RunList, ClientError>, bool) {
     let answer = client.all_runs(query).await;
+    // Older than paging (1.2): it refuses `page` (sent only past the first) and `order=asc`;
+    // nothing of it on this page, said apart from a deployment that is down (agy's review of
+    // M5.2j).
+    let beyond_1_1 = query.page.is_some_and(|page| page > 1)
+        || query.order == Some(schedr_api::views::ListOrder::Asc);
+    if beyond_1_1
+        && matches!(&answer, Err(ClientError::Server { status: 400, message })
+            if message.contains("unknown field"))
+    {
+        let message = NOT_THIS_PAGE.to_owned();
+        return (
+            Err(ClientError::Server {
+                status: 400,
+                message,
+            }),
+            false,
+        );
+    }
     let Some(part) = &query.dag_contains else {
         return (answer, false);
     };
@@ -217,7 +316,13 @@ async fn runs_of<T: Transport + Send + Sync>(
         return (answer, false);
     }
     let Ok(dag) = schedr_model::DagId::new(part.as_str()) else {
-        return (Ok(RunList { runs: Vec::new() }), true);
+        return (
+            Ok(RunList {
+                runs: Vec::new(),
+                ahead: None,
+            }),
+            true,
+        );
     };
     let whole = AllRunsQuery {
         dag: Some(dag),
@@ -227,8 +332,92 @@ async fn runs_of<T: Transport + Send + Sync>(
     (client.all_runs(&whole).await, true)
 }
 
+/// What the deployments asked answered for a page.
+struct Answers {
+    listed: Vec<ListedRun>,
+    unavailable: Vec<String>,
+    first_only: Vec<String>,
+    whole_ids: Vec<String>,
+    /// The most any deployment has past its page.
+    ahead: schedr_api::views::Ahead,
+    /// The read was slow: the page reads again at most this often (ms).
+    every: Option<u128>,
+}
+
+/// Nothing said to follow.
+const NOTHING_AHEAD: schedr_api::views::Ahead = schedr_api::views::Ahead {
+    more: false,
+    pages_ahead: 0,
+    more_past: false,
+};
+
+/// Asks each deployment the list shows (every one, or the one chosen) for `api_query`, at
+/// once.
+async fn ask<T: Transport + Send + Sync + 'static>(
+    ui: &Arc<Ui<T>>,
+    deployment: Option<&str>,
+    api_query: &AllRunsQuery,
+) -> Answers {
+    let started = std::time::Instant::now();
+    let mut asked = tokio::task::JoinSet::new();
+    for index in 0..ui.deployments.len() {
+        if deployment.is_some_and(|d| d != ui.deployments[index].name) {
+            continue;
+        }
+        let (ui, api_query) = (Arc::clone(ui), api_query.clone());
+        asked.spawn(schedr_client::for_same_user(async move {
+            let (answer, whole) = runs_of(&ui.deployments[index].client, &api_query).await;
+            (index, answer, whole)
+        }));
+    }
+    let mut answers = asked.join_all().await;
+    answers.sort_by_key(|(index, _, _)| *index);
+    let mut out = Answers {
+        listed: Vec::new(),
+        unavailable: Vec::new(),
+        first_only: Vec::new(),
+        whole_ids: Vec::new(),
+        ahead: NOTHING_AHEAD,
+        every: (started.elapsed() > ui.timings.slow_read)
+            .then(|| ui.timings.slow_read_wait.as_millis()),
+    };
+    for (index, answer, whole) in answers {
+        let name = &ui.deployments[index].name;
+        if whole {
+            out.whole_ids.push(name.clone());
+        }
+        match answer {
+            Ok(list) => {
+                // An older webserver says nothing of what follows, and answers no later page.
+                let theirs = list.ahead.unwrap_or(NOTHING_AHEAD);
+                out.ahead.more |= theirs.more;
+                out.ahead.pages_ahead = out.ahead.pages_ahead.max(theirs.pages_ahead);
+                out.ahead.more_past |= theirs.more_past;
+                out.listed
+                    .extend(list.runs.into_iter().map(|view| ListedRun {
+                        deployment: index,
+                        run_id: view.run_id.clone(),
+                        triggered_at: view.triggered_at,
+                        view,
+                    }));
+            }
+            Err(ClientError::Server { message, .. }) if message == NOT_THIS_PAGE => {
+                out.first_only.push(name.clone());
+            }
+            Err(error) => out.unavailable.push(format!("{name}: {error}")),
+        }
+    }
+    out
+}
+
+/// Newest triggered first, then the greater run ID.
+fn newest_first(a: &ListedRun, b: &ListedRun) -> std::cmp::Ordering {
+    (b.triggered_at, &b.run_id).cmp(&(a.triggered_at, &a.run_id))
+}
+
 /// `GET /runs`: the newest runs of every deployment (or one), merged by when they were
-/// triggered; the same cursor pages every deployment, as they share that order (32A).
+/// triggered. One deployment's are paged by number; every deployment's (the All view) from a
+/// cursor, Newest, Previous, Next and Oldest, exact at any depth (the user, 2026-11-24, DN39).
 pub async fn list<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     query: Result<Query<ListQuery>, QueryRejection>,
@@ -254,57 +443,23 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
         Ok(q) => q,
         Err(message) => return bad_request_page(&page, &message),
     };
-    let started = std::time::Instant::now();
-    let mut asked = tokio::task::JoinSet::new();
-    for index in 0..ui.deployments.len() {
-        if query
-            .deployment
-            .as_ref()
-            .is_some_and(|d| *d != ui.deployments[index].name)
-        {
-            continue;
+    let all_view = query.deployment.is_none() && ui.deployments.len() > 1;
+    let (answers, pager, cursor) = if all_view {
+        match all_view_page(&ui, &query, &api_query, &page.base).await {
+            Ok((answers, cursor)) => (answers, None, Some(cursor)),
+            // The newest page's own address, so the live update reads it (agy's review).
+            Err(newest) => return axum::response::Redirect::to(&newest).into_response(),
         }
-        let (ui, api_query) = (Arc::clone(&ui), api_query.clone());
-        asked.spawn(schedr_client::for_same_user(async move {
-            let (answer, whole) = runs_of(&ui.deployments[index].client, &api_query).await;
-            (index, answer, whole)
-        }));
-    }
-    let mut answers = asked.join_all().await;
-    let whole_ids: Vec<String> = answers
-        .iter()
-        .filter(|(_, _, whole)| *whole)
-        .map(|(index, _, _)| ui.deployments[*index].name.clone())
-        .collect();
-    let every =
-        (started.elapsed() > ui.timings.slow_read).then(|| ui.timings.slow_read_wait.as_millis());
-    answers.sort_by_key(|(index, _, _)| *index);
-    let mut listed = Vec::new();
-    let mut unavailable = Vec::new();
-    let mut more = false;
-    for (index, answer, _) in answers {
-        match answer {
-            Ok(list) => {
-                more |= list.runs.len() >= usize::try_from(PAGE_SIZE).unwrap_or(usize::MAX);
-                listed.extend(list.runs.into_iter().map(|view| ListedRun {
-                    deployment: index,
-                    run_id: view.run_id.clone(),
-                    triggered_at: view.triggered_at,
-                    view,
-                }));
-            }
-            Err(error) => unavailable.push(format!("{}: {error}", ui.deployments[index].name)),
-        }
-    }
-    listed.sort_by(|a, b| (b.triggered_at, &b.run_id).cmp(&(a.triggered_at, &a.run_id)));
-    let page_size = usize::try_from(PAGE_SIZE).unwrap_or(usize::MAX);
-    more |= listed.len() > page_size;
-    listed.truncate(page_size);
-    let next = listed
-        .last()
-        .filter(|_| more)
-        .map(|last| query.next_page(&page.base, last));
-    let rows = listed
+    } else {
+        let mut answers = ask(&ui, query.deployment.as_deref(), &api_query).await;
+        answers.listed.sort_by(newest_first);
+        let pager = crate::pager::Pager::of(query.page(), answers.ahead, |n| {
+            query.page_href(&page.base, n)
+        });
+        (answers, pager, None)
+    };
+    let rows = answers
+        .listed
         .iter()
         .map(|r| run_row(&page, &ui.deployments[r.deployment], &r.view))
         .collect();
@@ -315,16 +470,88 @@ pub async fn list<T: Transport + Send + Sync + 'static>(
             several: ui.deployments.len() > 1,
             page,
             rows,
-            unavailable,
+            unavailable: answers.unavailable,
             deployments,
             states: RUN_STATES,
+            paged: query.page() > 1 || cursor.as_ref().is_some_and(|c| c.newest.is_some()),
             query,
-            next,
-            every,
-            whole_ids,
+            pager,
+            cursor,
+            every: answers.every,
+            whole_ids: answers.whole_ids,
+            first_only: answers.first_only,
         },
         StatusCode::OK,
     )
+}
+
+/// The query asking each deployment for a page and one more next to `cursor` at `place`.
+fn asked_at(
+    api_query: &AllRunsQuery,
+    place: Place,
+    cursor: Option<&(Timestamp, Option<String>)>,
+) -> AllRunsQuery {
+    let mut asked = AllRunsQuery {
+        limit: Some(PAGE_SIZE + 1),
+        page: None,
+        ..api_query.clone()
+    };
+    let (at, run) = cursor.map_or((None, None), |(at, run)| (Some(*at), run.clone()));
+    if place == Place::Older {
+        (asked.before, asked.before_run) = (at, run);
+    } else {
+        asked.order = Some(schedr_api::views::ListOrder::Asc);
+        (asked.after, asked.after_run) = (at, run);
+    }
+    asked
+}
+
+/// The All view's runs at the query's place, newest first, and its buttons (DN39): each
+/// deployment asked for a page and one more next to the cursor, the 50 nearest of them kept;
+/// the one more says whether runs lie past them. Previous with no more than a page newer, every
+/// deployment answering, is the newest page: its address, `Err`, to go to.
+async fn all_view_page<T: Transport + Send + Sync + 'static>(
+    ui: &Arc<Ui<T>>,
+    query: &ListQuery,
+    api_query: &AllRunsQuery,
+    base: &str,
+) -> Result<(Answers, Cursor), String> {
+    let size = usize::try_from(PAGE_SIZE).unwrap_or(usize::MAX);
+    let (place, cursor) = query.place();
+    let mut answers = ask(ui, None, &asked_at(api_query, place, cursor.as_ref())).await;
+    let all_answered = answers.unavailable.is_empty() && answers.first_only.is_empty();
+    if place == Place::Newer && cursor.is_some() && all_answered && answers.listed.len() <= size {
+        return Err(query.href(base, ""));
+    }
+    if place == Place::Older {
+        answers.listed.sort_by(newest_first);
+    } else {
+        answers.listed.sort_by(|a, b| newest_first(b, a));
+    }
+    let more = answers.listed.len() > size;
+    answers.listed.truncate(size);
+    if place == Place::Newer {
+        answers.listed.reverse();
+    }
+    let (newer, older) = match place {
+        Place::Older => (cursor.is_some(), more),
+        Place::Newer => (more, cursor.is_some()),
+    };
+    // Newest from anywhere but the newest page, whatever answered there.
+    let away = place == Place::Newer || cursor.is_some();
+    let buttons = Cursor {
+        newest: (newer || away).then(|| query.href(base, "")),
+        previous: answers.listed.first().filter(|_| newer).map(|first| {
+            let (at, run) = at(first);
+            query.href(base, &format!("after={at}&after_run={run}"))
+        }),
+        next: answers.listed.last().filter(|_| older).map(|last| {
+            let (at, run) = at(last);
+            query.href(base, &format!("before={at}&before_run={run}"))
+        }),
+        oldest: older.then(|| query.href(base, "oldest=1")),
+    };
+    Ok((answers, buttons))
 }
 
 /// The API's query for a page of the list: its filters checked here, so a wrong one is the
@@ -336,16 +563,18 @@ fn api_query(query: &ListQuery) -> Result<AllRunsQuery, String> {
         .map(|s| serde_json::from_value(serde_json::Value::String(s.to_owned())))
         .transpose()
         .map_err(|_| "That isn't a run state.".to_owned())?;
-    if query.before_run.is_some() && query.before.is_none() {
-        return Err("A page's cursor needs its moment (`before`).".to_owned());
+    if (query.before_run.is_some() && query.before.is_none())
+        || (query.after_run.is_some() && query.after.is_none())
+    {
+        return Err("A page's cursor needs its moment (`before` or `after`).".to_owned());
     }
     Ok(AllRunsQuery {
         dag: None,
         dag_contains: query.dag.clone(),
         state,
-        before: query.before,
-        before_run: query.before_run.clone(),
         limit: Some(PAGE_SIZE),
+        page: Some(query.page()),
+        ..AllRunsQuery::default()
     })
 }
 

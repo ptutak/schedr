@@ -3531,3 +3531,90 @@ elsewhere, then, seeing the grace was one for tasks and triggers, a grace of tri
 short, for every stop: `[triggers] cancel_grace`, 5 s (the user's pick of 2, 5, 10). The master
 gives it with each trigger and waits it after a lost worker; an unknown instance holds `wait_for`
 DAGs for the larger of the two graces and a lease, as whoever gave it may have sent either.
+
+### <a id="DN39"></a>2026-11-24: M5.2j: runs and DAGs in numbered pages; several deployments page each one (decision note 39; adds to D517)
+
+Built: `page` on `GET /api/v1/runs`, `GET /api/v1/dags/{dag}/runs` and `GET /api/v1/dags`, each
+answer saying what follows (`more`, `pages_ahead` 0-2, `more_past`), counted from at most two
+pages and a row past the page (a `COUNT` over a `LIMIT`ed subquery, never the whole); the Runs
+and DAGs pages numbered `< Previous 1 2 [3] 4 5 ... Next >` (a shared `pager`); `--page` and
+`--limit` on `schedr runs list` and `schedr dags list`, a "More follow: --page n" line under a
+page with more; the Runs page's Older runs gone.
+
+The user's choice (DN39): with several deployments page n is each one's page n, merged.
+
+Small calls (mine): `GET /api/v1/dags` without `page` or `limit` still answers every DAG (the
+UI's filters and counts and the local CLI need them all), and `schedr dags list` without either
+lists them all; the UI's DAGs page pages its filtered list itself. The API keeps `before` and
+`before_run` (decision 517); the UI's address ignores them, so an old link opens the first page.
+The client sends `page` only past the first, so the first page still works against a webserver
+older than 1.2 (later pages name it unavailable); an answer without `more` from one counts a
+full page as having a next.
+
+Measured on Postgres (250,000 runs of one DAG, release build): every list's page 1, 100 and
+1,000 and its look-ahead in 5-33 ms. A DAG's own list at page 1,000 took 2.1 s: its backfill
+counts ran for every row the `OFFSET` passed; its page's runs are now chosen first, as the list
+over every DAG's were (32 ms).
+
+### 2026-11-24: M5.2j's review: agy over the trigger grace and the pages
+
+agy (high) reviewed `c753a694..e359a6de`; each finding checked against the code, all six held:
+
+- **A page in the address drew as many numbers** (security: one `?page=4294967295` from any
+  viewer ran the UI out of memory): past page 5 the numbers between the first and two before the
+  one shown give way to `...`, six at most; Next is a checked add.
+- **A Next made up for a webserver older than 1.2**, whose later pages it refuses: none is made
+  up; a later page asked of it anyway says "only its first page", apart from a deployment down.
+- **The CLI's hint dropped `--limit`**: it repeats it.
+- **The client turned `page=0` into the first page**: sent on, refused by the server.
+- Tests: the browser test's filter checked by its rows and links, a DAG's own pages on Postgres,
+  the unknown instance's hold with the trigger's grace the larger, the UI at the last `u32`.
+
+Its note on the shutdown drain (`[worker] drain_terminate_period`, not the trigger's grace) is
+right and as meant; `[triggers] cancel_grace`'s doc now says so.
+
+### 2026-11-24: the All view by cursor (DN39 rewritten)
+
+The user, seeing a merged page n mix each deployment's n-th fifty (up to 50 of each, from
+different times): the All view moves by Newest, Previous, Next and Oldest, each deployment asked
+for 51 runs next to the cursor and the 50 nearest kept; the DAGs page keeps its numbers (my
+recommendation, accepted: it reads every DAG anyway). Built: `order=asc`, `after` and
+`after_run` on `GET /api/v1/runs`, the database reading oldest first from a cursor.
+
+Measured on the way (250,000 runs on Postgres): Next from a cursor near the oldest run took
+512 ms, as 1.1's Older runs did: `$3 IS NULL OR triggered_at < $3 OR (...)` was filtered from
+the newest end. The cursor is now one row comparison, `(triggered_at, id) < ($3, $5)`, a range
+of `runs_by_trigger`, no cursor bound as the far end of time (years 1 and 9999: Postgres doesn't
+read jiff's -9999): 9 ms; every list, either order, from either end, 5-28 ms.
+
+### 2026-11-24: the All view's review (agy)
+
+agy (high, a fresh conversation) reviewed 6705140b; each finding checked, all seven held:
+
+- **Previous fell back to the newest page while a deployment didn't answer**, hiding it: the
+  fallback only when every deployment answered.
+- **After the fallback the address and the live update kept the `after` cursor**: each refresh
+  asked twice, and a new run froze the page; the fallback is now a redirect to the newest page.
+- **The buttons vanished when every way was off** (Oldest with a deployment refusing): drawn
+  always in the All view, Newest on anywhere but the newest page.
+- **A year before 1 was a 500 on Postgres** (SQLite's 200): refused as a bad request.
+- An empty cursor page says "on this page"; empty `before_run`/`after_run` and an `oldest` other
+  than 1 are dropped; a same-moment test of the oldest-first cursor (one ignoring `after_run`
+  passed every test).
+
+Rated low and left (the user, the same day: compatibility with older versions mostly ignorable,
+no one uses schedr yet): a malformed `before_run` goes to every deployment, each refusing it as a
+banner rather than the page's 400; the older-webserver cases beyond the fallback.
+
+The browser test fixed on the way: its first run, of a no-op DAG, is waited for to succeed, so
+the success filter's second page has 11 runs, not 10 or 11.
+
+### 2026-11-24: schedr_extension ships in the schedr wheel
+
+The user: `schedr_extension` goes in the same wheel as schedr, no release of its own, but stays a
+package of its own (it imports nothing of schedr, DN34), as it is now. R1.2's scope said it was
+published alone; corrected.
+
+The user, the same day: no local stress comparison against 1.1.0 for this release; CI's stress
+runs after the push stand for it (R1.2's done-when corrected). After 1.2.0rc1 the user tests
+standalone and the kind demo, and if all is well goes straight to 1.2.0.

@@ -267,12 +267,30 @@ fn trigger(planned_for: Option<&str>) -> RunsCommand {
 async fn dags_are_listed_as_a_table() {
     let client = world(false).await;
     assert_eq!(
-        dags(&client, DagsCommand::List, &text()).await,
+        dags(
+            &client,
+            DagsCommand::List {
+                page: None,
+                limit: None
+            },
+            &text()
+        )
+        .await,
         "DAG   STATE   HELD  TRIGGER                    DEFINED IN\n\
          sync  paused  no    0 3 * * * (Europe/Warsaw)  etl:team/sync.py\n"
     );
-    let listed: serde_json::Value =
-        serde_json::from_str(&dags(&client, DagsCommand::List, &json_output()).await).unwrap();
+    let listed: serde_json::Value = serde_json::from_str(
+        &dags(
+            &client,
+            DagsCommand::List {
+                page: None,
+                limit: None,
+            },
+            &json_output(),
+        )
+        .await,
+    )
+    .unwrap();
     assert_eq!(listed["dags"][0]["dag_id"], "sync");
 }
 
@@ -354,6 +372,8 @@ async fn runs_are_listed_and_cancelled() {
     runs(&client, trigger(Some("2026-10-15T01:00:00Z")), &text()).await;
     let list = RunsCommand::List {
         dag: "sync".to_owned(),
+        page: 1,
+        limit: None,
         planned_for: None,
     };
     let (out, _) = runs(&client, list, &text()).await;
@@ -372,13 +392,33 @@ async fn runs_are_listed_and_cancelled() {
 
     let on_day = RunsCommand::List {
         dag: "sync".to_owned(),
+        page: 1,
+        limit: None,
         planned_for: Some("2026-10-16T01:00:00Z".to_owned()),
     };
     let (json, _) = runs(&client, on_day, &json_output()).await;
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&json).unwrap(),
-        json!({"runs": []})
+        json!({"runs": [], "more": false, "pages_ahead": 0, "more_past": false})
     );
+
+    // A page at a time (M5.2j): the next page named while one follows.
+    runs(&client, trigger(Some("2026-10-15T02:00:00Z")), &text()).await;
+    let page = |page| RunsCommand::List {
+        dag: "sync".to_owned(),
+        page,
+        limit: Some(1),
+        planned_for: None,
+    };
+    let (first, _) = runs(&client, page(1), &text()).await;
+    assert!(first.contains("02:00 UTC"), "{first}");
+    assert!(
+        first.ends_with("\nMore follow: --page 2 --limit 1\n"),
+        "{first}"
+    );
+    let (second, _) = runs(&client, page(2), &text()).await;
+    assert!(second.contains(&run_id), "{second}");
+    assert!(!second.contains("More follow"), "the last page: {second}");
 
     let cancel = RunsCommand::Cancel {
         run_id: Some(run_id.clone()),
@@ -436,6 +476,8 @@ async fn a_backfill_counts_creates_and_is_cancelled() {
         &client,
         RunsCommand::List {
             dag: "sync".to_owned(),
+            page: 1,
+            limit: None,
             planned_for: None,
         },
         &text(),
@@ -528,6 +570,8 @@ async fn bad_arguments_are_errors() {
         (
             RunsCommand::List {
                 dag: "sync".to_owned(),
+                page: 1,
+                limit: None,
                 planned_for: Some("soon".to_owned()),
             },
             "`--for soon` isn't a date or a date-time \

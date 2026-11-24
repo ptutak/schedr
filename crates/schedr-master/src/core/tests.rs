@@ -5166,7 +5166,17 @@ async fn a_call_a_restarted_master_doesnt_know_holds_back_waiting_triggers_until
 /// holds back waiting triggers only for the cancel grace and a lease, alive all along.
 #[tokio::test]
 async fn an_unknown_call_never_stopped_holds_waiting_triggers_back_for_a_bounded_time() {
+    // Either grace the larger (agy's review of M5.2j: whoever gave it may have sent either).
+    for trigger_grace in [None, Some(Duration::from_secs(90))] {
+        Box::pin(held_for_the_larger_grace(trigger_grace)).await;
+    }
+}
+
+async fn held_for_the_larger_grace(trigger_grace: Option<Duration>) {
     let mut core = Box::pin(with_waiting_trigger(None)).await;
+    if let Some(grace) = trigger_grace {
+        core.settings.trigger_cancel_grace = grace;
+    }
     let first = orders_succeeded(&core, ts("2026-10-21T00:00:00Z"), later(2)).await;
     let mut back = register("w2", "i2", vec![]);
     back.running_triggers = vec!["from-before".to_owned()];
@@ -5174,6 +5184,7 @@ async fn an_unknown_call_never_stopped_holds_waiting_triggers_back_for_a_bounded
     let held = core
         .settings
         .cancel_grace
+        .max(core.settings.trigger_cancel_grace)
         .saturating_add(core.settings.lease_timeout)
         .as_secs();
     let held = i64::try_from(held).unwrap();

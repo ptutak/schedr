@@ -233,6 +233,61 @@ async fn the_list_names_each_dags_kind_of_trigger() {
     assert!(texts(&html, "table.dags th .th-filters > span").contains(&"Trigger".to_owned()));
 }
 
+/// M5.2j (decision 517): the DAGs the filters show, 50 a page, numbered; the filters and the
+/// page kept in the numbers and the live update, any filter's link back to the first page.
+#[tokio::test]
+async fn the_dag_list_is_numbered_in_pages_of_what_the_filters_show() {
+    let mut scripted = etl();
+    let dags: Vec<Value> = (0..120).map(|i| dag(&format!("d{i:03}"), false)).collect();
+    scripted
+        .answers
+        .insert("/api/v1/dags".to_owned(), (200, json!({"dags": dags})));
+    let app = ui(vec![deployment("etl", scripted)]);
+    let (_, html) = get(&app, "/", &[]).await;
+    assert_eq!(texts(&html, "table.dags tbody tr").len(), 50);
+    assert_eq!(texts(&html, ".pager .page.current"), ["1"]);
+    assert_eq!(texts(&html, ".pager a.page:not(.next)"), ["2", "3"]);
+    assert!(
+        texts(&html, ".pager .more").is_empty(),
+        "the third is the last"
+    );
+    let (_, html) = get(&app, "/?page=3", &[]).await;
+    assert_eq!(texts(&html, "table.dags tbody tr").len(), 20);
+    assert!(
+        texts(&html, ".pager a[rel=next]").is_empty(),
+        "the last page"
+    );
+    let previous = attrs(&html, ".pager a[rel=prev]", "href");
+    assert!(previous[0].ends_with("&page=2"), "{previous:?}");
+    // The live update reads this page again.
+    assert!(attrs(&html, "#live", "hx-get")[0].contains("page=3"));
+    // With a filter: its DAGs paged, the filter in every number.
+    let (_, html) = get(&app, "/?name=d0&page=2", &[]).await;
+    assert_eq!(
+        texts(&html, "table.dags tbody tr").len(),
+        50,
+        "d050 to d099"
+    );
+    assert!(
+        attrs(&html, ".pager a.page", "href")
+            .iter()
+            .all(|h| h.contains("name=d0")),
+        "the filter kept"
+    );
+    // Past the last: an empty page, said so, the numbers back.
+    let (_, html) = get(&app, "/?page=9", &[]).await;
+    assert!(texts(&html, "table.dags td.empty")[0].contains("on this page"));
+    let previous = attrs(&html, ".pager a[rel=prev]", "href");
+    assert!(previous[0].ends_with("&page=8"), "{previous:?}");
+    // Any page in the address draws a few numbers (agy's review of M5.2j: as many as it said).
+    let (status, html) = get(&app, "/?page=4294967295", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        texts(&html, ".pager .page").len() <= 8,
+        "first, gap, three, Previous and Next"
+    );
+}
+
 /// A DAG's description shows under its ID in the list, a long one cut to a line with the
 /// whole of it in the tooltip; one without shows nothing there.
 #[tokio::test]

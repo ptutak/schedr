@@ -156,6 +156,90 @@ async fn add_other_dag(db: &Database) -> String {
         .version_id
 }
 
+/// Numbered pages (M5.2j): an offset, and what follows looked at up to a bound, with and
+/// without the DAG part (a statement of its own).
+#[tokio::test]
+async fn all_runs_are_paged_saying_what_follows() {
+    let (db, version) = with_dag().await;
+    let mut made = Vec::new();
+    for at in [
+        "2026-10-16T03:00:00Z",
+        "2026-10-15T03:00:00Z",
+        "2026-10-14T03:00:00Z",
+    ] {
+        made.push(add_run(&db, &version, at, RunState::Success).await);
+    }
+    let ids = |runs: Vec<RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let paged = |offset, dag_contains: Option<&str>| RunFilter {
+        dag_contains: dag_contains.map(str::to_owned),
+        limit: 1,
+        offset,
+        ..RunFilter::default()
+    };
+    assert_eq!(
+        ids(db.runs(&paged(1, None)).await.unwrap()),
+        [made[1].as_str()]
+    );
+    assert_eq!(
+        ids(db.runs(&paged(3, None)).await.unwrap()),
+        Vec::<String>::new()
+    );
+    assert_eq!(db.runs_ahead(&paged(0, None), 10).await.unwrap(), 2);
+    assert_eq!(
+        db.runs_ahead(&paged(0, None), 1).await.unwrap(),
+        1,
+        "at most what's asked"
+    );
+    assert_eq!(
+        db.runs_ahead(&paged(2, None), 10).await.unwrap(),
+        0,
+        "the last page"
+    );
+    assert_eq!(
+        ids(db.runs(&paged(2, Some("YN"))).await.unwrap()),
+        [made[2].as_str()]
+    );
+    assert_eq!(db.runs_ahead(&paged(1, Some("YN")), 10).await.unwrap(), 1);
+    assert_eq!(
+        db.runs_ahead(&paged(0, Some("nothing")), 10).await.unwrap(),
+        0
+    );
+    // Oldest first, from a cursor or not (the All view's Previous and Oldest, DN39).
+    let oldest =
+        |after: Option<&str>, after_run: Option<&str>, dag_contains: Option<&str>| RunFilter {
+            dag_contains: dag_contains.map(str::to_owned),
+            limit: 2,
+            ascending: true,
+            after: after.map(ts),
+            after_run: after_run.map(str::to_owned),
+            ..RunFilter::default()
+        };
+    for part in [None, Some("YN")] {
+        let first = ids(db.runs(&oldest(None, None, part)).await.unwrap());
+        assert_eq!(first, [made[2].as_str(), made[1].as_str()], "{part:?}");
+        let after = oldest(Some("2026-10-14T03:00:00Z"), None, part);
+        assert_eq!(
+            ids(db.runs(&after).await.unwrap()),
+            [made[1].as_str(), made[0].as_str()]
+        );
+        assert_eq!(db.runs_ahead(&after, 10).await.unwrap(), 0);
+        assert_eq!(
+            db.runs_ahead(&oldest(None, None, part), 10).await.unwrap(),
+            1
+        );
+    }
+    // At the cursor's moment, past its run by ID (a round triggers its runs together).
+    let same = oldest(Some("2026-10-14T03:00:00Z"), Some(&made[2]), None);
+    assert_eq!(ids(db.runs(&same).await.unwrap())[0], made[1]);
+
+    // A DAG's own list, newest planned first.
+    let dag = DagId::new("sync").unwrap();
+    let page = db.dag_runs_page(&dag, None, 1, 1).await.unwrap();
+    assert_eq!(ids(page), [made[1].as_str()]);
+    assert_eq!(db.dag_runs_ahead(&dag, None, (1, 1), 10).await.unwrap(), 1);
+    assert_eq!(db.dag_runs_ahead(&dag, None, (2, 1), 10).await.unwrap(), 0);
+}
+
 #[tokio::test]
 async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
     let (db, version) = with_dag().await;
@@ -188,6 +272,8 @@ async fn all_runs_are_listed_newest_triggered_first_filtered_and_paged() {
         before: before.map(ts),
         before_run: None,
         limit,
+        offset: 0,
+        ..RunFilter::default()
     };
 
     let all = db.runs(&filter(None, None, None, 10)).await.unwrap();
@@ -286,6 +372,24 @@ async fn runs_triggered_together_are_paged_by_id_none_skipped() {
     assert_eq!(next[0].id, created[0]);
     // The time alone skips what is left at that moment.
     assert_eq!(db.runs(&page(Some(together), None)).await.unwrap(), []);
+    // Oldest first the same way, by the cursor's run (agy's review: a cursor without it
+    // passed every test).
+    let back = |after: Option<&str>, after_run: Option<&String>| RunFilter {
+        ascending: true,
+        after: after.map(ts),
+        after_run: after_run.cloned(),
+        limit: 2,
+        ..RunFilter::default()
+    };
+    let ids = |runs: Vec<RunRecord>| runs.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    let oldest = ids(db.runs(&back(None, None)).await.unwrap());
+    assert_eq!(oldest, [created[0].clone(), created[1].clone()]);
+    let newer = ids(db
+        .runs(&back(Some(together), Some(&oldest[1])))
+        .await
+        .unwrap());
+    assert_eq!(newer, [created[2].clone()]);
+    assert_eq!(db.runs(&back(Some(together), None)).await.unwrap(), []);
 }
 
 #[tokio::test]

@@ -1064,6 +1064,21 @@ impl<T: Transport> Client<T> {
             .await
     }
 
+    /// `GET /api/v1/dags?page=...&limit=...`: a page of the DAGs (M5.2j), saying what follows.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails (a webserver older than 1.2 refuses the
+    /// parameters) or the answer doesn't read.
+    pub async fn dags_page(&self, page: u32, limit: Option<u32>) -> Result<DagList, ClientError> {
+        let mut query = format!("?page={page}");
+        if let Some(limit) = limit {
+            let _ = write!(query, "&limit={limit}");
+        }
+        self.call(Method::Get, format!("/api/v1/dags{query}"), None)
+            .await
+    }
+
     /// `GET /api/v1/dags/{dag}`.
     ///
     /// # Errors
@@ -1085,7 +1100,38 @@ impl<T: Transport> Client<T> {
         dag: &str,
         planned_for: Option<Timestamp>,
     ) -> Result<RunList, ClientError> {
-        let query = planned_for.map_or_else(String::new, |t| format!("?for={t}"));
+        self.runs_page(dag, planned_for, 1, None).await
+    }
+
+    /// `GET /api/v1/dags/{dag}/runs?page=...&limit=...`: a page of a DAG's runs (M5.2j). The
+    /// first page and no limit send neither, as a webserver older than 1.2 refuses `page`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn runs_page(
+        &self,
+        dag: &str,
+        planned_for: Option<Timestamp>,
+        page: u32,
+        limit: Option<u32>,
+    ) -> Result<RunList, ClientError> {
+        let mut params = Vec::new();
+        if let Some(at) = planned_for {
+            params.push(format!("for={at}"));
+        }
+        if let Some(limit) = limit {
+            params.push(format!("limit={limit}"));
+        }
+        // Not the first (an older webserver refuses it); 0 is sent, for the server to refuse.
+        if page != 1 {
+            params.push(format!("page={page}"));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
         self.call(
             Method::Get,
             format!("/api/v1/dags/{}/runs{query}", path(dag)),
@@ -1094,7 +1140,7 @@ impl<T: Transport> Client<T> {
         .await
     }
 
-    /// `GET /api/v1/runs?dag=...&state=...&before=...&before_run=...&limit=...`: runs of every DAG (or one),
+    /// `GET /api/v1/runs?dag=...&state=...&before=...&before_run=...&limit=...&page=...`: runs of every DAG (or one),
     /// newest triggered first.
     ///
     /// # Errors
@@ -1119,6 +1165,22 @@ impl<T: Transport> Client<T> {
         }
         if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
+        }
+        // Oldest first and its cursor, sent only when asked: a webserver older than 1.2
+        // refuses them.
+        if query.order == Some(schedr_api::views::ListOrder::Asc) {
+            params.push("order=asc".to_owned());
+        }
+        if let Some(after) = query.after {
+            params.push(format!("after={}", path(&after.to_string())));
+        }
+        if let Some(run_id) = &query.after_run {
+            params.push(format!("after_run={}", path(run_id)));
+        }
+        // Past the first only: a webserver older than paging (1.2) refuses it, and its first
+        // page is the same without (M5.2j).
+        if let Some(page) = query.page.filter(|page| *page != 1) {
+            params.push(format!("page={page}"));
         }
         let query = if params.is_empty() {
             String::new()

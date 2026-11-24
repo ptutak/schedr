@@ -438,7 +438,8 @@ pub struct TriggersSection {
     /// How many errors in a row make a trigger `failing`.
     pub failing_after: u32,
     /// The time between SIGTERM and SIGKILL when a trigger is stopped (a restart, a cancel, a
-    /// drain, its worker losing the master): short, as a trigger's work is its source's, read
+    /// maintenance drain, its worker losing the master; a worker shutting down gives it
+    /// `[worker] drain_terminate_period`): short, as a trigger's work is its source's, read
     /// again from its bookmark. A lost worker's trigger is started elsewhere only after it, so
     /// one never runs in two places. Tasks and wait steps keep `[master] cancel_grace`.
     #[serde(

@@ -93,6 +93,8 @@ struct DagsPage {
     kinds: Vec<crate::dag_filters::Choice>,
     /// A box per tag.
     tags: Vec<crate::dag_filters::Choice>,
+    /// The numbers under the list (decision 517); none for a single page.
+    pager: Option<crate::pager::Pager>,
 }
 
 /// A tab of the DAGs page: all deployments' DAGs, or one's.
@@ -586,6 +588,7 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         switched_off.retain(|sensor| &sensor.deployment == name);
         unavailable.retain(|why| why.starts_with(&format!("{name}: ")));
     }
+    let (rows, pager) = paged_rows(rows, &filters, &page.base);
     let mut response = render(
         &DagsPage {
             page,
@@ -598,6 +601,7 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
             kinds,
             tags,
             filters: filters.clone(),
+            pager,
         },
         StatusCode::OK,
     );
@@ -617,6 +621,28 @@ pub async fn dags<T: Transport + Send + Sync + 'static>(
         );
     }
     response
+}
+
+/// The DAGs the filters show at their page, 50 a page, and the numbers under them (decision
+/// 517): the filters and their counts need every DAG, so the list is read whole and paged here.
+fn paged_rows(
+    rows: Vec<DagRow>,
+    filters: &crate::dag_filters::Filters,
+    base: &str,
+) -> (Vec<DagRow>, Option<crate::pager::Pager>) {
+    let size = usize::try_from(crate::runs::PAGE_SIZE).unwrap_or(usize::MAX);
+    let from = usize::try_from(filters.page - 1)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(size);
+    let following = rows.len().saturating_sub(from.saturating_add(size));
+    let ahead = schedr_api::views::Ahead::of(
+        u64::try_from(following).unwrap_or(u64::MAX),
+        crate::runs::PAGE_SIZE,
+    );
+    let pager = crate::pager::Pager::of(filters.page, ahead, |n| {
+        format!("{base}/?{}", filters.at_page(n))
+    });
+    (rows.into_iter().skip(from).take(size).collect(), pager)
 }
 
 /// Sets cookie `name` to `value` on `response` for a year, as the zone's.

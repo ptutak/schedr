@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "Ahead": {
+        "description": "What follows a page of a list (decision 517 as DN23 corrects it): nothing counted whole, only\nlooked at up to two pages and a row past it.",
+        "properties": {
+          "more": {
+            "description": "Whether a next page exists.",
+            "type": "boolean"
+          },
+          "more_past": {
+            "description": "Whether rows follow past those two (the numbers' `...`).",
+            "type": "boolean"
+          },
+          "pages_ahead": {
+            "description": "How many pages are known to follow: 0, 1 or 2.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "more",
+          "pages_ahead",
+          "more_past"
+        ],
+        "type": "object"
+      },
       "AttemptLinkView": {
         "description": "A link an attempt reported.",
         "properties": {
@@ -733,20 +758,35 @@
         "type": "object"
       },
       "DagList": {
-        "description": "The DAGs.",
-        "properties": {
-          "dags": {
-            "description": "Every DAG not removed, in ID order.",
-            "items": {
-              "$ref": "#/components/schemas/DagView"
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ahead",
+                "description": "What follows a page asked for (none for the whole list)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          {
+            "properties": {
+              "dags": {
+                "description": "Every DAG not removed, in ID order (a page of them when asked for one).",
+                "items": {
+                  "$ref": "#/components/schemas/DagView"
+                },
+                "type": "array"
+              }
             },
-            "type": "array"
+            "required": [
+              "dags"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "dags"
         ],
-        "type": "object"
+        "description": "The DAGs."
       },
       "DagMemoryList": {
         "description": "Each task's p95 peak memory over its recent attempts against its limit (decision 467):\nthe DAG page's table.",
@@ -2218,20 +2258,35 @@
         "type": "object"
       },
       "RunList": {
-        "description": "Runs.",
-        "properties": {
-          "runs": {
-            "description": "Newest first: a DAG's by `planned_for`; the list over every DAG by `triggered_at`, then\nrun ID.",
-            "items": {
-              "$ref": "#/components/schemas/RunView"
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ahead",
+                "description": "What follows this page (M5.2j; none from a webserver older than 1.2)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          {
+            "properties": {
+              "runs": {
+                "description": "Newest first: a DAG's by `planned_for`; the list over every DAG by `triggered_at`, then\nrun ID.",
+                "items": {
+                  "$ref": "#/components/schemas/RunView"
+                },
+                "type": "array"
+              }
             },
-            "type": "array"
+            "required": [
+              "runs"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "runs"
         ],
-        "type": "object"
+        "description": "Runs."
       },
       "RunView": {
         "description": "A run.",
@@ -3936,6 +3991,30 @@
     "/api/v1/dags": {
       "get": {
         "operationId": "list_dags",
+        "parameters": [
+          {
+            "description": "The page, from 1 (decision 517). With neither it nor `limit`, every DAG.",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many a page (default 50, at most 500).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3945,9 +4024,18 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
-        "summary": "Every DAG not removed.",
+        "summary": "Every DAG not removed, in ID order, or a page of them (`page`, `limit`; decision 517): the\nanswer then says what follows (`more`, `pages_ahead`, `more_past`).",
         "tags": [
           "dags"
         ]
@@ -4223,6 +4311,17 @@
             "description": "At most this many (default 50, at most 500).",
             "in": "query",
             "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The page, from 1 (decision 517); 1 by default. The answer says what follows.",
+            "in": "query",
+            "name": "page",
             "required": false,
             "schema": {
               "format": "int32",
@@ -5379,6 +5478,45 @@
               "format": "int32",
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "The page, from 1: past `(page - 1) * limit` runs (decision 517); 1 by default. The\nanswer says what follows (`more`, `pages_ahead`, `more_past`).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`asc`: oldest triggered first, listed in that order (the UI's Previous and Oldest);\n`desc` (the default) newest first.",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "With `order=asc`: only runs triggered after this moment, the first listed run's\n`triggered_at` (with `after_run`), for the page before it.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "With `after`: the first listed run's ID, so runs triggered at that same moment are\nlisted before it, by ID, not skipped.",
+            "in": "query",
+            "name": "after_run",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

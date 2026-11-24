@@ -7,8 +7,11 @@
 {% if !whole_ids.is_empty() %}
 <div class="banner">Older webserver ({{ whole_ids.join(", ") }}): there the DAG field matches only a whole DAG ID, in its case.</div>
 {% endif %}
+{% if !first_only.is_empty() %}
+<div class="banner">Older webserver ({{ first_only.join(", ") }}): it lists only its newest runs and those older, by Next; its runs are missing from this page.</div>
+{% endif %}
 {% for failure in unavailable %}
-<div class="banner warning">Unavailable: {{ failure }}. Its runs are missing from this page and from the older ones reached from it; load this page again once it answers.</div>
+<div class="banner warning">Unavailable: {{ failure }}. Its runs are missing from this page; load it again once it answers.</div>
 {% endfor %}
 <table class="list runs">
   <colgroup><col class="w-run"><col class="w-run-dag">{% if several %}<col>{% endif %}<col class="w-run-state"><col class="w-time"><col><col class="w-time"><col><col class="w-time"></colgroup>
@@ -36,10 +39,18 @@
       <td class="time">{{ run.ended_at }}</td>
     </tr>
   {% else %}
-    <tr><td class="empty" colspan="{% if several %}9{% else %}8{% endif %}">No runs{% if query.dag.is_some() || query.state.is_some() || query.deployment.is_some() %} match these filters{% endif %}{% if query.before.is_some() %} before these{% endif %}.</td></tr>
+    <tr><td class="empty" colspan="{% if several %}9{% else %}8{% endif %}">No runs{% if query.dag.is_some() || query.state.is_some() || query.deployment.is_some() %} match these filters{% endif %}{% if paged %} on this page{% endif %}.</td></tr>
   {% endfor %}
   </tbody>
 </table>
-{% if let Some(next) = next %}<p class="pager"><a class="button" href="{{ next }}">Older runs</a></p>{% endif %}
+{% include "pager.html" %}
+{% if let Some(cursor) = cursor %}
+<nav class="pager pages" aria-label="Runs">
+  {% if let Some(href) = cursor.newest %}<a class="page newest" href="{{ href }}" aria-label="Newest runs">&laquo; Newest</a>{% else %}<span class="page newest disabled" aria-hidden="true">&laquo; Newest</span>{% endif %}
+  {% if let Some(href) = cursor.previous %}<a class="page previous" href="{{ href }}" rel="prev" aria-label="Newer runs">&lsaquo; Previous</a>{% else %}<span class="page previous disabled" aria-hidden="true">&lsaquo; Previous</span>{% endif %}
+  {% if let Some(href) = cursor.next %}<a class="page next" href="{{ href }}" rel="next" aria-label="Older runs">Next &rsaquo;</a>{% else %}<span class="page next disabled" aria-hidden="true">Next &rsaquo;</span>{% endif %}
+  {% if let Some(href) = cursor.oldest %}<a class="page oldest" href="{{ href }}" aria-label="Oldest runs">Oldest &raquo;</a>{% else %}<span class="page oldest disabled" aria-hidden="true">Oldest &raquo;</span>{% endif %}
+</nav>
+{% endif %}
 </div>
 {% endblock %}

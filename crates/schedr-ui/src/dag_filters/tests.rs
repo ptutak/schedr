@@ -16,9 +16,11 @@ fn the_address_reads_repeated_boxes_spaces_and_escapes() {
             tags: BTreeSet::from(["etl".to_owned(), "ml".to_owned()]),
             kinds: BTreeSet::from(["Run of".to_owned()]),
             descending: true,
+            page: 0,
         }
     );
     assert!(!Asked::parse(Some("order=asc")).descending);
+    assert_eq!(Asked::parse(Some("page=3")).page, 3);
     // A malformed escape is left out; nothing asked is all.
     assert_eq!(
         Asked::parse(Some("tag=%zz&tag=ok")).tags,
@@ -37,6 +39,7 @@ fn the_filters_write_back_the_address_they_read() {
         tags: BTreeSet::from(["x y".to_owned()]),
         kinds: BTreeSet::from(["Run of".to_owned()]),
         descending: true,
+        page: 3,
     };
     let query = filters.current();
     let asked = Asked::parse(Some(&query));
@@ -46,9 +49,13 @@ fn the_filters_write_back_the_address_they_read() {
     assert_eq!(asked.tags, filters.tags);
     assert_eq!(asked.kinds, filters.kinds);
     assert!(asked.descending);
-    // The title's link: the same filters, the other way.
+    assert_eq!(asked.page, 3, "the live update keeps the page");
+    // The title's link: the same filters, the other way, from the first page.
     let other = Asked::parse(Some(&filters.reversed()));
     assert!(!other.descending);
+    assert_eq!(other.page, 0);
+    // Any other link (a tab, a switch) lists anew: no page.
+    assert!(!filters.query(None, TriggerFilter::All).contains("page="));
     assert_eq!((other.name, other.tags), (asked.name, asked.tags));
     assert!(filters.is_filtered());
     let none = Filters {
@@ -58,6 +65,7 @@ fn the_filters_write_back_the_address_they_read() {
         tags: BTreeSet::new(),
         kinds: BTreeSet::new(),
         descending: true,
+        page: 1,
     };
     assert!(!none.is_filtered(), "a deployment alone isn't a filter");
 }

@@ -28,8 +28,8 @@ use crate::error::ApiError;
 use crate::logs::{LogFetchError, masked_lines};
 use crate::state::ApiState;
 use crate::views::{
-    AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
-    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView,
+    Ahead, AllRunsQuery, AttemptList, BackfillList, BackfillRequest, BackfillView,
+    CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagView, DagsQuery,
     DeploymentView, ErrorBody, EventList, EventView, ImportErrorList, ImportErrorView,
     InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView,
     PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery,
@@ -47,18 +47,40 @@ pub const DEFAULT_RUNS: u32 = 50;
 pub(crate) type ApiResult<T> = Result<Json<T>, ApiError>;
 type Accepted = Result<(StatusCode, Json<CommandView>), ApiError>;
 
-/// Every DAG not removed.
-#[utoipa::path(get, path = "/api/v1/dags", tag = "dags",
-    responses((status = 200, body = DagList)))]
-pub async fn list_dags(State(state): State<ApiState>) -> ApiResult<DagList> {
+/// Every DAG not removed, in ID order, or a page of them (`page`, `limit`; decision 517): the
+/// answer then says what follows (`more`, `pages_ahead`, `more_past`).
+#[utoipa::path(get, path = "/api/v1/dags", tag = "dags", params(DagsQuery),
+    responses((status = 200, body = DagList), (status = 400, body = ErrorBody)))]
+pub async fn list_dags(
+    State(state): State<ApiState>,
+    query: Result<Query<DagsQuery>, QueryRejection>,
+) -> ApiResult<DagList> {
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let paged = (query.page.is_some() || query.limit.is_some())
+        .then(|| page_of(query.page, query.limit))
+        .transpose()?;
     let dags = state.db.stored_dags().await?;
     let held = Held::by_file(&state.db.current_import_errors().await?);
+    let mut listed = dags.iter().filter(|d| !d.removed);
+    let Some((limit, offset)) = paged else {
+        return Ok(Json(DagList {
+            dags: listed.map(|d| DagView::of(d, &held)).collect(),
+            ahead: None,
+        }));
+    };
+    let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+    let take = usize::try_from(limit).unwrap_or(usize::MAX);
+    let page = listed
+        .by_ref()
+        .skip(skip)
+        .take(take)
+        .map(|d| DagView::of(d, &held))
+        .collect();
+    let looked_at = usize::try_from(Ahead::looked_at(limit)).unwrap_or(usize::MAX);
+    let following = u64::try_from(listed.take(looked_at).count()).unwrap_or(u64::MAX);
     Ok(Json(DagList {
-        dags: dags
-            .iter()
-            .filter(|d| !d.removed)
-            .map(|d| DagView::of(d, &held))
-            .collect(),
+        dags: page,
+        ahead: Some(Ahead::of(following, limit)),
     }))
 }
 
@@ -416,17 +438,37 @@ pub async fn list_runs(
     let dag_id = parse_dag_id(&dag_id)?;
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     known_dag(&state, &dag_id).await?;
+    let (limit, offset) = page_of(query.page, query.limit)?;
     let runs = state
         .db
-        .dag_runs(
+        .dag_runs_page(&dag_id, query.planned_for, limit, offset)
+        .await?;
+    let following = state
+        .db
+        .dag_runs_ahead(
             &dag_id,
             query.planned_for,
-            query.limit.unwrap_or(DEFAULT_RUNS),
+            (limit, offset),
+            Ahead::looked_at(limit),
         )
         .await?;
     Ok(Json(RunList {
         runs: runs.iter().map(RunView::from).collect(),
+        ahead: Some(Ahead::of(following, limit)),
     }))
+}
+
+/// A numbered page's limit and how many rows come before it (decision 517): `page` from 1,
+/// 1 by default; the limit 50 by default, 1 to 500.
+fn page_of(page: Option<u32>, limit: Option<u32>) -> Result<(u32, u64), ApiError> {
+    let page = page.unwrap_or(1);
+    if page == 0 {
+        return Err(ApiError::BadRequest("`page` counts from 1".to_owned()));
+    }
+    let limit = limit
+        .unwrap_or(DEFAULT_RUNS)
+        .clamp(1, schedr_db::reads::MAX_RUNS);
+    Ok((limit, u64::from(page - 1) * u64::from(limit)))
 }
 
 /// Start a manual run (`schedr runs trigger`). Applied by the master; poll the command for the
@@ -902,19 +944,51 @@ pub async fn list_all_runs(
         .as_deref()
         .map(|id| parse_uuid(id, "run"))
         .transpose()?;
-    let runs = state
+    let ascending = query.order == Some(crate::views::ListOrder::Asc);
+    if query.after_run.is_some() && query.after.is_none() {
+        return Err(ApiError::BadRequest(
+            "`after_run` needs `after` (the run's `triggered_at`)".to_owned(),
+        ));
+    }
+    if (query.after.is_some() && !ascending) || (query.before.is_some() && ascending) {
+        return Err(ApiError::BadRequest(
+            "`after` goes with `order=asc`, `before` with newest first".to_owned(),
+        ));
+    }
+    let after_run = query
+        .after_run
+        .as_deref()
+        .map(|id| parse_uuid(id, "run"))
+        .transpose()?;
+    // Postgres reads no year before 1 (agy's review of M5.2j: a 500 there, SQLite's 200).
+    for (name, at) in [("before", query.before), ("after", query.after)] {
+        // 0001-01-01T00:00:00Z.
+        let first = jiff::Timestamp::from_second(-62_135_596_800).unwrap_or(jiff::Timestamp::MIN);
+        if at.is_some_and(|at| at < first) {
+            return Err(ApiError::BadRequest(format!("`{name}` before the year 1")));
+        }
+    }
+    let (limit, offset) = page_of(query.page, query.limit)?;
+    let filter = RunFilter {
+        dag_id: query.dag,
+        dag_contains: query.dag_contains.filter(|part| !part.is_empty()),
+        state: query.state,
+        before: query.before,
+        before_run,
+        limit,
+        offset,
+        ascending,
+        after: query.after,
+        after_run,
+    };
+    let runs = state.db.runs(&filter).await?;
+    let following = state
         .db
-        .runs(&RunFilter {
-            dag_id: query.dag,
-            dag_contains: query.dag_contains.filter(|part| !part.is_empty()),
-            state: query.state,
-            before: query.before,
-            before_run,
-            limit: query.limit.unwrap_or(DEFAULT_RUNS),
-        })
+        .runs_ahead(&filter, Ahead::looked_at(limit))
         .await?;
     Ok(Json(RunList {
         runs: runs.iter().map(RunView::from).collect(),
+        ahead: Some(Ahead::of(following, limit)),
     }))
 }
 

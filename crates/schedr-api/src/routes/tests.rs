@@ -185,6 +185,38 @@ async fn dags_are_listed_and_read() {
     let (status, body) = get(&app, "/api/v1/dags/bad%20id").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("bad id"), "{body}");
+
+    // Every DAG unless a page is asked for (M5.2j): then what follows is said.
+    assert_eq!(get(&app, "/api/v1/dags").await.1.get("more"), None);
+    let (status, page) = get(&app, "/api/v1/dags?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["dags"][0]["dag_id"], "sync");
+    assert_eq!(
+        (&page["more"], &page["pages_ahead"]),
+        (&json!(false), &json!(0))
+    );
+    assert_eq!(get(&app, "/api/v1/dags?page=2").await.1["dags"], json!([]));
+    for bad in ["page=0", "limit=x", "ghost=1"] {
+        let (status, _) = get(&app, &format!("/api/v1/dags?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// What follows a page, from the rows looked at past it: two pages and one more at most.
+#[test]
+fn what_follows_a_page_is_counted_to_two_pages_and_a_row() {
+    use crate::views::Ahead;
+    let said = |following, limit| {
+        let a = Ahead::of(following, limit);
+        (a.more, a.pages_ahead, a.more_past)
+    };
+    assert_eq!(Ahead::looked_at(50), 101);
+    assert_eq!(said(0, 50), (false, 0, false));
+    assert_eq!(said(1, 50), (true, 1, false));
+    assert_eq!(said(50, 50), (true, 1, false));
+    assert_eq!(said(51, 50), (true, 2, false));
+    assert_eq!(said(100, 50), (true, 2, false));
+    assert_eq!(said(101, 50), (true, 2, true), "past two pages: `...`");
 }
 
 #[tokio::test]
@@ -623,11 +655,38 @@ async fn all_runs_are_listed_filtered_and_paged() {
         "before=soon",
         "dag=bad%20id",
         "limit=-1",
-        "page=2",
+        "page=0",
+        "page=x",
+        "order=sideways",
+        "after=2026-10-21T08:00:00Z",
+        "order=asc&after_run=0190a3e5-0000-7000-8000-000000000000",
+        "order=asc&before=2026-10-21T08:00:00Z",
+        "order=asc&after=0000-06-01T00:00:00Z",
+        "before=-0001-01-01T00:00:00Z",
     ] {
         let (status, _) = get(&app, &format!("/api/v1/runs?{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
+    // Numbered pages (M5.2j): what follows said, never counted whole.
+    let (_, first) = get(&app, "/api/v1/runs?limit=1").await;
+    assert_eq!(
+        (&first["more"], &first["pages_ahead"], &first["more_past"]),
+        (&json!(false), &json!(0), &json!(false))
+    );
+    assert_eq!(
+        runs("page=2&limit=1").await,
+        json!([]),
+        "past the last: empty"
+    );
+    // Oldest first, after a cursor (DN39).
+    assert_eq!(runs("order=asc").await[0]["run_id"], json!(run_id));
+    assert_eq!(runs(&format!("order=asc&after={NOW}")).await, json!([]));
+    assert_eq!(
+        runs("order=asc&after=0001-01-01T00:00:00Z").await[0]["run_id"],
+        json!(run_id)
+    );
+    let before_it = runs("order=asc&after=2026-10-21T07:59:59Z").await;
+    assert_eq!(before_it[0]["run_id"], json!(run_id));
 }
 
 #[tokio::test]

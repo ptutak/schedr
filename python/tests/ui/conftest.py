@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -53,23 +54,17 @@ def _wait(what: str, check: object, log: Path, seconds: float = 120) -> object:
     )
 
 
-@pytest.fixture(scope="session")
-def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
-    """The UI's address and the run's ID."""
-    work = tmp_path_factory.mktemp("standalone")
-    dags = work / "dags"
-    dags.mkdir()
-    shutil.copy(REPO / "examples" / "sync.py", dags / "sync.py")
-    shutil.copy(Path(__file__).parent / "form_params.py", dags / "form_params.py")
-    shutil.copy(Path(__file__).parent / "with_connections.py", dags / "with_connections.py")
-    shutil.copy(Path(__file__).parent / "log_levels.py", dags / "log_levels.py")
+@contextmanager
+def serve(work: Path) -> Iterator[tuple[str, Path]]:
+    """A `schedr standalone` over the DAG files in `work / "dags"`, its database in `work`:
+    its API's address and its log, stopped after."""
     binary = os.environ.get("SCHEDR_BIN", str(REPO / "target" / "debug" / "schedr"))
     log = work / "standalone.log"
     env = {
         "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
         "HOME": str(work),
         "TZ": "UTC",
-        "SCHEDR_DAG_PATH": str(dags),
+        "SCHEDR_DAG_PATH": str(work / "dags"),
         "SCHEDR_CONFIG__DATABASE__URL": f"sqlite://{work}/schedr.db",
         "SCHEDR_CONFIG__WEBSERVER__PORT": "0",
         "SCHEDR_CONFIG__MASTER__GRPC_PORT": "0",
@@ -89,7 +84,23 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
                 raise AssertionError(f"standalone exited:\n{log.read_text()[-4000:]}")
             return found.group(1) if found else None
 
-        server = str(_wait("the banner", banner, log))
+        yield str(_wait("the banner", banner, log)), log
+    finally:
+        process.terminate()
+        process.wait(timeout=30)
+
+
+@pytest.fixture(scope="session")
+def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
+    """The UI's address and the run's ID."""
+    work = tmp_path_factory.mktemp("standalone")
+    dags = work / "dags"
+    dags.mkdir()
+    shutil.copy(REPO / "examples" / "sync.py", dags / "sync.py")
+    shutil.copy(Path(__file__).parent / "form_params.py", dags / "form_params.py")
+    shutil.copy(Path(__file__).parent / "with_connections.py", dags / "with_connections.py")
+    shutil.copy(Path(__file__).parent / "log_levels.py", dags / "log_levels.py")
+    with serve(work) as (server, log):
 
         def listed() -> bool:
             dags_list = _api(server, "GET", "/api/v1/dags")
@@ -121,9 +132,6 @@ def standalone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, s
             "db": str(work / "schedr.db"),
             "log": str(log),
         }
-    finally:
-        process.terminate()
-        process.wait(timeout=30)
 
 
 @pytest.fixture

@@ -74,6 +74,8 @@ pub struct Asked {
     pub kinds: BTreeSet<String>,
     /// `order=desc`: Z to A.
     pub descending: bool,
+    /// `page`: the page, from 1 (decision 517); 0 (not asked, not a number): the first.
+    pub page: u32,
 }
 
 impl Asked {
@@ -103,6 +105,7 @@ impl Asked {
                     asked.kinds.insert(value);
                 }
                 "order" => asked.descending = value == "desc",
+                "page" => asked.page = value.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -126,6 +129,9 @@ pub struct Filters {
     pub kinds: BTreeSet<String>,
     /// Sorted Z to A by the DAG's ID (else A to Z).
     pub descending: bool,
+    /// The page shown, from 1: kept by the live update and the numbers only, as any other
+    /// link changes what is listed.
+    pub page: u32,
 }
 
 impl Filters {
@@ -140,6 +146,7 @@ impl Filters {
             tags: asked.tags,
             kinds: asked.kinds,
             descending: asked.descending,
+            page: asked.page.max(1),
         }
     }
 
@@ -174,15 +181,27 @@ impl Filters {
     pub fn reversed(&self) -> String {
         Self {
             descending: !self.descending,
+            page: 1,
             ..self.clone()
         }
         .current()
     }
 
-    /// The query string of these filters as they are.
+    /// The query string of these filters as they are, at their page.
     #[must_use]
     pub fn current(&self) -> String {
-        self.query(self.view.as_deref(), self.trigger)
+        self.at_page(self.page)
+    }
+
+    /// The query string of these filters at page `number` (the first: no `page`).
+    #[must_use]
+    pub fn at_page(&self, number: u32) -> String {
+        let query = self.query(self.view.as_deref(), self.trigger);
+        if number > 1 {
+            format!("{query}&page={number}")
+        } else {
+            query
+        }
     }
 
     /// Whether any filter but the deployment's narrows the list.

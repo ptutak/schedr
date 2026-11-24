@@ -124,6 +124,7 @@ async fn the_run_pages_reads_go_to_their_paths() {
     let api = client(vec![
         (200, json!({"runs": []})),
         (200, json!({"runs": []})),
+        (200, json!({"runs": []})),
         (200, json!({"id": "sync"})),
         (200, json!({"commands": []})),
         (200, json!({"outcome": "SUCCESS", "value": 3})),
@@ -141,6 +142,16 @@ async fn the_run_pages_reads_go_to_their_paths() {
         before: Some("2026-10-15T03:00:00.5+00:00".parse().unwrap()),
         before_run: Some("r 9".to_owned()),
         limit: Some(20),
+        page: Some(3),
+        ..AllRunsQuery::default()
+    })
+    .await
+    .unwrap();
+    api.all_runs(&AllRunsQuery {
+        order: Some(schedr_api::views::ListOrder::Asc),
+        after: Some("2026-10-15T03:00:00Z".parse().unwrap()),
+        after_run: Some("r 9".to_owned()),
+        ..AllRunsQuery::default()
     })
     .await
     .unwrap();
@@ -163,8 +174,13 @@ async fn the_run_pages_reads_go_to_their_paths() {
             (
                 Method::Get,
                 "/api/v1/runs?dag=etl%3Aa%2Fb.py%23c&state=failed\
-                 &before=2026-10-15T03%3A00%3A00.5Z&before_run=r%209&limit=20"
+                 &before=2026-10-15T03%3A00%3A00.5Z&before_run=r%209&limit=20&page=3"
                     .to_owned(),
+                None
+            ),
+            (
+                Method::Get,
+                "/api/v1/runs?order=asc&after=2026-10-15T03%3A00%3A00Z&after_run=r%209".to_owned(),
                 None
             ),
             (Method::Get, "/api/v1/runs/r1/dag".to_owned(), None),

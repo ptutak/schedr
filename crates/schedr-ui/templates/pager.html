@@ -1,0 +1,11 @@
+{#- Numbered pages (decision 517, DN23): `< 1 2 [3] 4 5 ... >`, no total, no last page. -#}
+{% if let Some(pager) = pager %}
+<nav class="pager pages" aria-label="Pages">
+  {% if let Some(previous) = pager.previous %}<a class="page previous" href="{{ previous }}" rel="prev" aria-label="Previous page">&lt; Previous</a>{% else %}<span class="page previous disabled" aria-hidden="true">&lt; Previous</span>{% endif %}
+  {% if let Some(first) = pager.first %}<a class="page" href="{{ first.href }}">{{ first.number }}</a>{% endif %}
+  {% if pager.gap %}<span class="page more" title="Pages left out">...</span>{% endif %}
+  {% for link in pager.links %}{% if link.current %}<span class="page current" aria-current="page">{{ link.number }}</span>{% else %}<a class="page" href="{{ link.href }}">{{ link.number }}</a>{% endif %}{% endfor %}
+  {% if pager.more_past %}<span class="page more" title="More pages follow">...</span>{% endif %}
+  {% if let Some(next) = pager.next %}<a class="page next" href="{{ next }}" rel="next" aria-label="Next page">Next &gt;</a>{% else %}<span class="page next disabled" aria-hidden="true">Next &gt;</span>{% endif %}
+</nav>
+{% endif %}

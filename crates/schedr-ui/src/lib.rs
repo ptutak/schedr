@@ -30,6 +30,7 @@ pub mod live;
 mod log_lines;
 mod metrics;
 pub mod page;
+mod pager;
 mod pages;
 mod params_form;
 mod runs;

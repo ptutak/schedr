@@ -35,6 +35,25 @@ pub struct Output {
     pub local: TimeZone,
 }
 
+/// The line under a page of a list saying the next one's `--page`, with the `--limit` given
+/// (agy's review of M5.2j: without it the next page was another size's), when one follows.
+fn more_pages(
+    out: &mut impl Write,
+    ahead: Option<schedr_api::views::Ahead>,
+    (page, limit): (u32, Option<u32>),
+) -> std::io::Result<()> {
+    let Some(next) = page
+        .checked_add(1)
+        .filter(|_| ahead.is_some_and(|a| a.more))
+    else {
+        return Ok(());
+    };
+    let limit = limit
+        .map(|limit| format!(" --limit {limit}"))
+        .unwrap_or_default();
+    writeln!(out, "\nMore follow: --page {next}{limit}")
+}
+
 /// Runs a `schedr dags` command.
 ///
 /// # Errors
@@ -49,8 +68,12 @@ pub async fn run_dags<T: Transport>(
     out: &mut impl Write,
 ) -> Result<(), AppError> {
     match command {
-        DagsCommand::List => {
-            let dags = client.dags().await?;
+        DagsCommand::List { page, limit } => {
+            let dags = if page.is_some() || limit.is_some() {
+                client.dags_page(page.unwrap_or(1), *limit).await?
+            } else {
+                client.dags().await?
+            };
             if output.json {
                 return print_json(out, &dags);
             }
@@ -63,6 +86,7 @@ pub async fn run_dags<T: Transport>(
             for held in dags.dags.iter().filter_map(|d| d.held.as_ref()) {
                 writeln!(out, "\n{}", held.reason)?;
             }
+            more_pages(out, dags.ahead, (page.unwrap_or(1), *limit))?;
         }
         DagsCommand::Pause { dag } => {
             let command = client
@@ -741,9 +765,14 @@ pub async fn run_runs<T: Transport>(
                 run.run.state
             )?;
         }
-        RunsCommand::List { dag, planned_for } => {
+        RunsCommand::List {
+            dag,
+            planned_for,
+            page,
+            limit,
+        } => {
             let at = for_time(planned_for.as_deref(), err)?;
-            let runs = client.runs(dag, at).await?;
+            let runs = client.runs_page(dag, at, *page, *limit).await?;
             if output.json {
                 return print_json(out, &runs);
             }
@@ -753,6 +782,7 @@ pub async fn run_runs<T: Transport>(
                 .map(|run| run_row(run, &output.local))
                 .collect();
             write_table(out, &["RUN", "KIND", "STATE", "FOR", "BY"], &rows)?;
+            more_pages(out, runs.ahead, (*page, *limit))?;
         }
         RunsCommand::Show { run_id } => {
             let detail = client.run(run_id).await?;

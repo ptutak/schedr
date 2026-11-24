@@ -28,12 +28,12 @@ fn scripted(answers: &[(&str, u16, Value)]) -> Scripted {
 #[tokio::test]
 async fn the_runs_of_every_deployment_are_merged_newest_first() {
     let etl = scripted(&[(
-        "/api/v1/runs?limit=50",
+        "/api/v1/runs?limit=51",
         200,
         json!({"runs": [run_at("e2", "sync", "running", 30), run_at("e1", "sync", "success", 10)]}),
     )]);
     let ml = scripted(&[(
-        "/api/v1/runs?limit=50",
+        "/api/v1/runs?limit=51",
         200,
         json!({"runs": [run_at("m1", "train", "failed", 20)]}),
     )]);
@@ -53,42 +53,232 @@ async fn the_runs_of_every_deployment_are_merged_newest_first() {
         texts(&html, "table.runs .state"),
         ["running", "failed", "success"]
     );
-    // Fewer than a page from each: no next page.
-    assert_eq!(texts(&html, ".pager"), Vec::<String>::new());
+    // Fewer than a page from each: the buttons there, none of them a link.
+    assert_eq!(attrs(&html, ".pager a", "href"), Vec::<String>::new());
 }
 
+/// M5.2j (decision 517, DN23): `< 1 2 [3] 4 5 ... >` from what each deployment says follows its
+/// page, a page asked of each by its number, the filters kept in every link.
 #[tokio::test]
-async fn a_full_page_links_the_next_with_the_last_runs_moment_and_id() {
+async fn pages_are_numbered_from_what_the_deployments_say_follows() {
     let runs: Vec<Value> = (0..50)
         .map(|i| run_at(&format!("r{:02}", 99 - i), "sync", "success", 3000 - i))
         .collect();
-    let next =
-        "/api/v1/runs?dag_contains=sync&before=2026-10-15T01%3A49%3A11Z&before_run=r50&limit=50";
+    let ahead = |pages: u32, past: bool| json!({"more": pages > 0, "pages_ahead": pages, "more_past": past});
+    let mut first = json!({ "runs": runs });
+    first
+        .as_object_mut()
+        .unwrap()
+        .extend(ahead(2, true).as_object().unwrap().clone());
+    let mut third = json!({"runs": [run_at("r01", "sync", "success", 1)]});
+    third
+        .as_object_mut()
+        .unwrap()
+        .extend(ahead(0, false).as_object().unwrap().clone());
     let etl = scripted(&[
-        (
-            "/api/v1/runs?dag_contains=sync&limit=50",
-            200,
-            json!({ "runs": runs }),
-        ),
-        (
-            next,
-            200,
-            json!({"runs": [run_at("r49", "sync", "success", 1)]}),
-        ),
+        ("/api/v1/runs?dag_contains=sync&limit=50", 200, first),
+        ("/api/v1/runs?dag_contains=sync&limit=50&page=3", 200, third),
     ]);
     let app = ui(vec![deployment("etl", etl)]);
     let (_, html) = get(&app, "/runs?dag=sync&state=", &[]).await;
     assert_eq!(texts(&html, "table.runs tbody tr").len(), 50);
-    let older = attrs(&html, ".pager a", "href");
+    assert_eq!(texts(&html, ".pager .page.current"), ["1"]);
     assert_eq!(
-        older,
-        ["/runs?dag=sync&before=2026-10-15T01%3A49%3A11Z&before_run=r50"]
+        attrs(&html, ".pager a", "href"),
+        [
+            "/runs?dag=sync&page=2",
+            "/runs?dag=sync&page=3",
+            "/runs?dag=sync&page=2"
+        ],
+        "2, 3, then Next"
     );
-    let (status, html) = get(&app, &older[0], &[]).await;
+    assert_eq!(texts(&html, ".pager .more"), ["..."], "more past 3");
+    let (status, html) = get(&app, "/runs?dag=sync&page=3", &[]).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(texts(&html, "table.runs tbody td:first-child a"), ["r49"]);
+    assert_eq!(texts(&html, "table.runs tbody td:first-child a"), ["r01"]);
+    assert_eq!(texts(&html, ".pager .page.current"), ["3"]);
+    assert_eq!(
+        attrs(&html, ".pager a[rel=prev]", "href"),
+        ["/runs?dag=sync&page=2"]
+    );
+    assert!(
+        attrs(&html, ".pager a[rel=next]", "href").is_empty(),
+        "the last page"
+    );
+    assert_eq!(texts(&html, ".pager .more"), Vec::<String>::new());
     // The filter is kept and shown.
     assert_eq!(attrs(&html, "input[name=dag]", "value"), ["sync"]);
+}
+
+/// A cursor's moment in an address: `seconds` after 01:00 on 2026-10-15, escaped.
+fn moment(seconds: u32) -> String {
+    format!("2026-10-15T01%3A{:02}%3A{:02}Z", seconds / 60, seconds % 60)
+}
+
+/// 30 runs named `prefix` and their number, triggered every 2 s from `first` back: etl's from
+/// 1000 and ml's from 999 alternate.
+fn alternating(prefix: &str, first: u32) -> Vec<(String, u32)> {
+    (0..30)
+        .map(|i| (format!("{prefix}{i:02}"), first - 2 * i))
+        .collect()
+}
+
+/// A deployment of `runs` answering the All view's reads the cursor test makes.
+fn cursor_answers(runs: &[(String, u32)]) -> Scripted {
+    let body = |keep: &dyn Fn(u32) -> bool| {
+        let runs: Vec<Value> = runs
+            .iter()
+            .filter(|(_, at)| keep(*at))
+            .map(|(id, at)| run_at(id, "sync", "success", *at))
+            .collect();
+        json!({ "runs": runs })
+    };
+    let next = format!(
+        "/api/v1/runs?before={}&before_run=m24&limit=51",
+        moment(951)
+    );
+    let previous = format!(
+        "/api/v1/runs?limit=51&order=asc&after={}&after_run=e25",
+        moment(950)
+    );
+    scripted(&[
+        ("/api/v1/runs?limit=51", 200, body(&|_| true)),
+        (&next, 200, body(&|at| at < 951)),
+        (&previous, 200, body(&|at| at > 950)),
+        ("/api/v1/runs?limit=51&order=asc", 200, body(&|_| true)),
+    ])
+}
+
+fn run_ids(html: &str) -> Vec<String> {
+    texts(html, "table.runs tbody td:first-child a")
+}
+
+fn cursor_link(html: &str, which: &str) -> Vec<String> {
+    attrs(html, &format!(".pager a.{which}"), "href")
+}
+
+/// The user, 2026-11-24 (DN39): every deployment's runs from a cursor, Newest, Previous, Next
+/// and Oldest, the 50 nearest of each deployment's page and one more merged: exact at any depth.
+#[tokio::test]
+async fn the_all_view_moves_by_cursor_through_every_deployments_runs() {
+    let (etl, ml) = (alternating("e", 1000), alternating("m", 999));
+    let app = ui(vec![
+        deployment("etl", cursor_answers(&etl)),
+        deployment("ml", cursor_answers(&ml)),
+    ]);
+    let (ids, nav) = (run_ids, cursor_link);
+    // Newest: the 50 newest of both, e00 m00 e01 ... m24; no number anywhere.
+    let (_, newest) = get(&app, "/runs", &[]).await;
+    assert_eq!(ids(&newest).len(), 50);
+    assert_eq!(
+        (ids(&newest)[0].as_str(), ids(&newest)[49].as_str()),
+        ("e00", "m24")
+    );
+    assert_eq!(texts(&newest, ".pager .page.current"), Vec::<String>::new());
+    assert_eq!(nav(&newest, "newest"), Vec::<String>::new());
+    assert_eq!(nav(&newest, "previous"), Vec::<String>::new());
+    let next = nav(&newest, "next");
+    assert_eq!(
+        next,
+        [format!("/runs?before={}&before_run=m24", moment(951))]
+    );
+    assert_eq!(nav(&newest, "oldest"), ["/runs?oldest=1"]);
+    // Next: the ten left, the end; Previous from its first.
+    let (_, older) = get(&app, &next[0], &[]).await;
+    assert_eq!(
+        ids(&older),
+        [
+            "e25", "m25", "e26", "m26", "e27", "m27", "e28", "m28", "e29", "m29"
+        ]
+    );
+    assert_eq!(nav(&older, "next"), Vec::<String>::new());
+    assert_eq!(nav(&older, "oldest"), Vec::<String>::new());
+    assert_eq!(nav(&older, "newest"), ["/runs"]);
+    let previous = nav(&older, "previous");
+    assert_eq!(
+        previous,
+        [format!("/runs?after={}&after_run=e25", moment(950))]
+    );
+    // Previous: fifty newer, no more than a page: the newest page itself, by its own address
+    // (so the live update reads the newest runs; agy's review).
+    let (status, _) = get(&app, &previous[0], &[]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    // Oldest: the 50 oldest, shown newest first: e05 m05 ... m29.
+    let (_, oldest) = get(&app, "/runs?oldest=1", &[]).await;
+    assert_eq!(ids(&oldest).len(), 50);
+    assert_eq!(
+        (ids(&oldest)[0].as_str(), ids(&oldest)[49].as_str()),
+        ("e05", "m29")
+    );
+    assert_eq!(nav(&oldest, "next"), Vec::<String>::new());
+    assert_eq!(
+        nav(&oldest, "previous"),
+        [format!("/runs?after={}&after_run=e05", moment(990))]
+    );
+    assert_eq!(nav(&oldest, "newest"), ["/runs"]);
+    // One deployment chosen: numbered, as before.
+    let (_, one) = get(&app, "/runs?deployment=etl", &[]).await;
+    assert_eq!(nav(&one, "newest"), Vec::<String>::new());
+}
+
+/// agy's review of the All view: a deployment down on Previous shows what the others have, no
+/// jump to the newest, Newest still offered; an empty page away from the newest says so.
+#[tokio::test]
+async fn the_all_view_with_a_deployment_down_stays_where_it_is() {
+    let down = Scripted {
+        down: true,
+        ..Scripted::default()
+    };
+    let half = ui(vec![
+        deployment("etl", cursor_answers(&alternating("e", 1000))),
+        deployment("ml", down),
+    ]);
+    let (ids, nav) = (run_ids, cursor_link);
+    let previous = format!("/runs?after={}&after_run=e25", moment(950));
+    let (status, html) = get(&half, &previous, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ids(&html).len(), 25, "etl's 25 newer");
+    assert_eq!(nav(&html, "newest"), ["/runs"]);
+    assert_eq!(texts(&html, ".banner.warning").len(), 1);
+    // An empty page away from the newest says so.
+    let (_, html) = get(
+        &half,
+        &format!("/runs?before={}&before_run=zz", moment(1)),
+        &[],
+    )
+    .await;
+    assert!(texts(&html, "table.runs td.empty")[0].contains("on this page"));
+}
+
+/// A webserver older than paging says nothing of what follows and refuses `page`: no Next is
+/// made up for it, and a later page asked of it (an old link, another deployment's pages) says
+/// so apart from a deployment that is down (agy's review of M5.2j).
+#[tokio::test]
+async fn an_older_webserver_lists_only_its_first_page_and_is_said_so() {
+    let runs: Vec<Value> = (0..50)
+        .map(|i| run_at(&format!("r{:02}", 99 - i), "sync", "success", 3000 - i))
+        .collect();
+    let refused = json!({"error": "Failed to deserialize query string: unknown field `page`"});
+    let etl = scripted(&[
+        ("/api/v1/runs?limit=50", 200, json!({ "runs": runs })),
+        ("/api/v1/runs?limit=50&page=2", 400, refused),
+    ]);
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/runs", &[]).await;
+    assert_eq!(texts(&html, "table.runs tbody tr").len(), 50);
+    assert_eq!(
+        attrs(&html, ".pager a[rel=next]", "href"),
+        Vec::<String>::new()
+    );
+    let (status, html) = get(&app, "/runs?page=2", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        texts(&html, ".banner.warning"),
+        Vec::<String>::new(),
+        "not down"
+    );
+    let banners = texts(&html, ".banner");
+    assert!(banners[0].contains("missing from this page"), "{banners:?}");
 }
 
 #[tokio::test]
@@ -100,7 +290,7 @@ async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
             json!({"runs": [run_at("e1", "etl:a/b.py#sync", "failed", 1)]}),
         ),
         (
-            "/api/v1/runs?state=failed&limit=50",
+            "/api/v1/runs?state=failed&limit=51",
             200,
             json!({"runs": []}),
         ),
@@ -117,7 +307,11 @@ async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(texts(&html, ".banner").is_empty(), "ml wasn't asked");
+    assert_eq!(
+        texts(&html, ".banner"),
+        Vec::<String>::new(),
+        "ml wasn't asked"
+    );
     assert_eq!(texts(&html, "table.runs tbody td:first-child a"), ["e1"]);
     // The filters in the table's header (the user, 2026-11-16): the radio chosen in each
     // dropdown, its name on the dropdown's button, the DAG in its field.
@@ -147,13 +341,10 @@ async fn filters_go_to_the_api_and_a_deployment_filter_asks_only_that_one() {
     assert_eq!(status, StatusCode::OK);
     let banners = texts(&html, ".banner.warning");
     assert_eq!(banners.len(), 1);
-    // Its runs can't be placed by one cursor: the page says they're missing, not just late.
+    // The page says its runs are missing, not just late.
     assert!(banners[0].contains("Its runs are missing"), "{banners:?}");
-    for bad in [
-        "/runs?state=done",
-        "/runs?before_run=r1",
-        "/runs?before=soon",
-    ] {
+    // An old link's cursor (before 1.2's pages) is ignored: its first page.
+    for bad in ["/runs?state=done", "/runs?page=x"] {
         let (status, _) = get(&app, bad, &[]).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
@@ -1821,19 +2012,19 @@ async fn an_older_webserver_is_asked_for_the_whole_dag_id_and_the_page_says_so()
     let refused = json!({"error": "Failed to deserialize query string: unknown field `dag_contains`, expected one of `dag`, `state`, `before`, `before_run`, `limit`"});
     let old = scripted(&[
         (
-            "/api/v1/runs?dag_contains=sync&limit=50",
+            "/api/v1/runs?dag_contains=sync&limit=51",
             400,
             refused.clone(),
         ),
         (
-            "/api/v1/runs?dag=sync&limit=50",
+            "/api/v1/runs?dag=sync&limit=51",
             200,
             json!({"runs": [run_at("o1", "sync", "success", 10)]}),
         ),
         ("/api/v1/runs?dag_contains=no%20id&limit=50", 400, refused),
     ]);
     let new = scripted(&[(
-        "/api/v1/runs?dag_contains=sync&limit=50",
+        "/api/v1/runs?dag_contains=sync&limit=51",
         200,
         json!({"runs": [run_at("n1", "daily_sync", "success", 20)]}),
     )]);

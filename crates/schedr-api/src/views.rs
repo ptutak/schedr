@@ -217,8 +217,24 @@ impl DagView {
 /// The DAGs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct DagList {
-    /// Every DAG not removed, in ID order.
+    /// Every DAG not removed, in ID order (a page of them when asked for one).
     pub dags: Vec<DagView>,
+    /// What follows a page asked for (none for the whole list).
+    #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<Ahead>,
+}
+
+/// Which DAGs to list: every one, or a page of them (M5.2j).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct DagsQuery {
+    /// The page, from 1 (decision 517). With neither it nor `limit`, every DAG.
+    #[serde(default)]
+    pub page: Option<u32>,
+    /// At most this many a page (default 50, at most 500).
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
 /// A run.
@@ -309,6 +325,42 @@ pub struct RunList {
     /// Newest first: a DAG's by `planned_for`; the list over every DAG by `triggered_at`, then
     /// run ID.
     pub runs: Vec<RunView>,
+    /// What follows this page (M5.2j; none from a webserver older than 1.2).
+    #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<Ahead>,
+}
+
+/// What follows a page of a list (decision 517 as DN23 corrects it): nothing counted whole, only
+/// looked at up to two pages and a row past it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Ahead {
+    /// Whether a next page exists.
+    pub more: bool,
+    /// How many pages are known to follow: 0, 1 or 2.
+    pub pages_ahead: u32,
+    /// Whether rows follow past those two (the numbers' `...`).
+    pub more_past: bool,
+}
+
+impl Ahead {
+    /// What `following` rows past a page of `limit` say (at most two pages and one row looked
+    /// at).
+    #[must_use]
+    pub fn of(following: u64, limit: u32) -> Self {
+        let limit = u64::from(limit.max(1));
+        let pages = following.min(limit * 2).div_ceil(limit);
+        Self {
+            more: following > 0,
+            pages_ahead: u32::try_from(pages).unwrap_or(2),
+            more_past: following > limit * 2,
+        }
+    }
+
+    /// The rows to look at past a page of `limit`: two pages and one.
+    #[must_use]
+    pub fn looked_at(limit: u32) -> u32 {
+        limit.max(1).saturating_mul(2).saturating_add(1)
+    }
 }
 
 /// A task of a run.
@@ -988,6 +1040,9 @@ pub struct RunsQuery {
     /// At most this many (default 50, at most 500).
     #[serde(default)]
     pub limit: Option<u32>,
+    /// The page, from 1 (decision 517); 1 by default. The answer says what follows.
+    #[serde(default)]
+    pub page: Option<u32>,
 }
 
 /// Which runs to list, over every DAG.
@@ -1019,6 +1074,35 @@ pub struct AllRunsQuery {
     /// At most this many (default 50, at most 500).
     #[serde(default)]
     pub limit: Option<u32>,
+    /// The page, from 1: past `(page - 1) * limit` runs (decision 517); 1 by default. The
+    /// answer says what follows (`more`, `pages_ahead`, `more_past`).
+    #[serde(default)]
+    pub page: Option<u32>,
+    /// `asc`: oldest triggered first, listed in that order (the UI's Previous and Oldest);
+    /// `desc` (the default) newest first.
+    #[serde(default)]
+    #[param(value_type = Option<String>)]
+    pub order: Option<ListOrder>,
+    /// With `order=asc`: only runs triggered after this moment, the first listed run's
+    /// `triggered_at` (with `after_run`), for the page before it.
+    #[serde(default)]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub after: Option<Timestamp>,
+    /// With `after`: the first listed run's ID, so runs triggered at that same moment are
+    /// listed before it, by ID, not skipped.
+    #[serde(default)]
+    pub after_run: Option<String>,
+}
+
+/// A list's order by trigger time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ListOrder {
+    /// Newest first.
+    #[default]
+    Desc,
+    /// Oldest first.
+    Asc,
 }
 
 /// A task's stored output in a run.

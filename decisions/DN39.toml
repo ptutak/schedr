@@ -1,0 +1,18 @@
+title = "Every deployment's runs move by cursor: Newest, Previous, Next, Oldest"
+date = 2026-11-24
+by = "user"
+on = "D517"
+kind = "adds"
+summary = '''
+The Runs page with several deployments and none chosen (the All view) has no page numbers: it
+moves by cursor, Newest, Previous, Next and Oldest. Each deployment is asked for 51 runs next to
+the cursor (before the page's last run, after its first, or from either end), the 50 nearest of
+them kept: the page is the merged timeline's exact slice at any depth, at the cost of one page
+a deployment; the 51st says whether runs lie past it. A page reached by a cursor stays put while
+runs are triggered; Previous with fewer than a page newer shows the newest. One deployment
+(chosen, or the only one) keeps its numbered pages, and so does the DAGs page, which reads
+every DAG for its filters anyway and merges them exactly. Not chosen: each deployment's page n
+merged (up to 50 of each on a page, its runs from different times; built first, the user
+replaced it the same day); exact merged numbered pages (page n reads (n+2)·50+1 runs of each).
+'''
+history = "JOURNAL.md#DN39"

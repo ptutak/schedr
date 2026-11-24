@@ -14,11 +14,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- DN39 (2026-11-24): M5.2j: runs and DAGs in numbered pages; several deployments page each one (adds to D517)
 - D522 (2026-11-24): a trigger's own cancel grace
 - DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
 - DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
 - DN36 (2026-11-23): An attempt's statuses written off the round are coalesced by phase (adds to D521)
-- DN35 (2026-11-23): A service's built-in metrics: its memory, its accept time and its calls' times, collected by schedr (adds to D518)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
 - M5.2i4 (2026-11-23): The plugin protocol's specification, and a schema of just its messages
 - M5.2i13 (2026-11-23): Stress 21b: seeded random chaos aimed at extensions

@@ -301,8 +301,15 @@ pub struct ClientArgs {
     reason = "parsed once, at the start of a command"
 )]
 pub enum DagsCommand {
-    /// List DAGs.
-    List,
+    /// List DAGs: every one, or a page of them with `--page` or `--limit`.
+    List {
+        /// The page, from 1 (`--limit` a page, 50 by default).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        page: Option<u32>,
+        /// At most this many a page (1 to 500).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: Option<u32>,
+    },
     /// Stop the scheduler creating runs of a DAG.
     Pause {
         /// The DAG's ID.
@@ -390,13 +397,19 @@ pub enum RunsCommand {
         #[arg(long, value_name = "TIME", requires = "event_key")]
         event_at: Option<String>,
     },
-    /// List the runs of a DAG.
+    /// List the runs of a DAG, newest first, a page at a time.
     List {
         /// The DAG's ID.
         dag: String,
         /// Only the runs for this moment.
         #[arg(long = "for", value_name = "TIME")]
         planned_for: Option<String>,
+        /// The page, from 1.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+        page: u32,
+        /// At most this many a page (50 by default, 1 to 500).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=500))]
+        limit: Option<u32>,
     },
     /// Show a run and its tasks (a mapped task's instances as `fetch[0]`, `fetch[1]`, ...).
     Show {
