@@ -4,7 +4,7 @@
 updated = 2026-11-24
 
 in_progress = [
-    "R1.2: 1.2.0rc1 being cut. M5.2k (every open bug but B38/B39) and M5.2j (numbered pages; the All view of runs by cursor, DN39) done, reviewed by agy (Grok on M5.2k's trust boundaries), D522 (a trigger's own cancel grace) added. Next: the version commit (Cargo 1.2.0-rc1, the chart, the OpenAPI file, CHANGELOG.md's 1.2.0 section), pushed with the commits before it; the rc checks (upgrade from 1.1.0 on SQLite and Postgres, a 1.1.0 worker under the new master, the wheel's smoke test and twine check); the tag v1.2.0rc1; then CI's Stress workflow, full profile, on it. Then stop: the user tests standalone and the kind demo, and if all is well goes straight to 1.2.0.",
+    "R1.2: 1.2.0rc2 being cut (after rc1: the Extensions page, DN40; B292, which changed migration 0003, so another rc). Next: tag v1.2.0rc2 once CI and make check pass, the release workflow to TestPyPI; then the version commit 1.2.0 and its tag, to PyPI (the user, 2026-11-24: \"fix B292 then rc release and go for normal release\").",
 ]
 
 waiting = [
@@ -12,7 +12,7 @@ waiting = [
 ]
 
 rules = [
-    "Release 1.2.0rc1 pre-accepted (the user, 2026-11-24, memory release-1-2-rc-plan): push and tag the rc, start CI's stress run, then stop; the final 1.2.0 is the user's.",
+    "1.2.0rc2 and 1.2.0 pre-accepted (the user, 2026-11-24: \"you're free to push 1.2.0 with the fixes\", then rc2 for the changed migration).",
     "One review per step: agy (gemini-4-neon-high, the agy skill), Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.",
     "Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
     "Stress tests on CI, not locally (the user, 2026-11-24): the Stress workflow after a push, filtered to what a change touches (cut scenarios 17-21 for recovery changes), full for a release; locally only a quick single scenario aimed at a feature.",
