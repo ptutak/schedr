@@ -208,6 +208,13 @@ pub async fn run_triggers<T: Transport>(
             if let Some(run) = &trigger.called_for {
                 writeln!(out, "called for run: {run}")?;
             }
+            if let Some(instance) = &trigger.instance_id {
+                writeln!(out, "run: {instance} (its log: schedr triggers logs {dag})")?;
+            }
+        }
+        TriggersCommand::Runs { dag } => print_trigger_runs(client, dag, output, out).await?,
+        TriggersCommand::Logs { dag, run, follow } => {
+            print_trigger_log(client, (dag, run.as_deref()), *follow, output, out).await?;
         }
         TriggersCommand::Events { dag, limit } => {
             let list = client.trigger_events(dag, *limit).await?;
@@ -282,7 +289,11 @@ async fn trigger_command<T: Transport>(
             }
             writeln!(out, "switched on the trigger of {dag}")?;
         }
-        TriggersCommand::List | TriggersCommand::Show { .. } | TriggersCommand::Events { .. } => {}
+        TriggersCommand::List
+        | TriggersCommand::Show { .. }
+        | TriggersCommand::Events { .. }
+        | TriggersCommand::Runs { .. }
+        | TriggersCommand::Logs { .. } => {}
     }
     Ok(())
 }
@@ -1034,6 +1045,82 @@ async fn print_log<T: Transport>(
             continue;
         }
         if !(args.follow && chunk.running) {
+            return Ok(());
+        }
+        tokio::time::sleep(client.poll()).await;
+    }
+}
+
+/// `schedr triggers runs`: a DAG's trigger runs, newest first (B272).
+async fn print_trigger_runs<T: Transport>(
+    client: &Client<T>,
+    dag: &str,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let list = client.trigger_runs(dag).await?;
+    if output.json {
+        return print_json(out, &list);
+    }
+    let rows: Vec<Vec<String>> = list
+        .runs
+        .iter()
+        .map(|run| {
+            vec![
+                run.instance_id.clone(),
+                run.worker_id.clone(),
+                run.started_at.to_string(),
+                run.ended_at
+                    .map_or_else(|| "running".to_owned(), |at| at.to_string()),
+                run.error.as_deref().map(one_line).unwrap_or_default(),
+            ]
+        })
+        .collect();
+    write_table(out, &["RUN", "WORKER", "STARTED", "ENDED", "ERROR"], &rows)?;
+    Ok(())
+}
+
+/// `schedr triggers logs`: a trigger run's log (the newest run's by default), followed while it
+/// runs with `follow` (B272).
+async fn print_trigger_log<T: Transport>(
+    client: &Client<T>,
+    (dag, run): (&str, Option<&str>),
+    follow: bool,
+    output: &Output,
+    out: &mut impl Write,
+) -> Result<(), AppError> {
+    let instance = match run {
+        Some(run) => run.to_owned(),
+        None => client
+            .trigger_runs(dag)
+            .await?
+            .runs
+            .into_iter()
+            .next()
+            .map(|run| run.instance_id)
+            .ok_or_else(|| {
+                AppError::BadArgument(format!("DAG `{dag}`'s trigger hasn't run yet: no log"))
+            })?,
+    };
+    let mut from = 0;
+    loop {
+        let chunk = client
+            .trigger_log_part(dag, &instance, from, schedr_model::logs::MAX_CHUNK)
+            .await?;
+        if output.json {
+            let line =
+                serde_json::to_string(&chunk).map_err(|e| AppError::BadArgument(e.to_string()))?;
+            writeln!(out, "{line}")?;
+        } else {
+            out.write_all(chunk.content.as_bytes())?;
+        }
+        out.flush()?;
+        let progressed = chunk.next > from;
+        from = chunk.next;
+        if from < chunk.size && progressed {
+            continue;
+        }
+        if !(follow && chunk.running) {
             return Ok(());
         }
         tokio::time::sleep(client.poll()).await;

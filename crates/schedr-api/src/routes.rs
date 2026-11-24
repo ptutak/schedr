@@ -33,8 +33,9 @@ use crate::views::{
     DeploymentView, ErrorBody, EventList, EventView, ImportErrorList, ImportErrorView,
     InstanceQuery, LimitView, LogChunk, LogQuery, MasterView, NodeView, OutputView, ParamFieldView,
     PauseRequest, ProblemView, ResourceList, ResourceView, RunDetail, RunList, RunView, RunsQuery,
-    SensorList, SensorView, TaskView, TestConnectionRequest, TriggerList, TriggerRequest,
-    TriggerView, WorkerList, WorkerNodeView, WorkerUsageView, WorkerView,
+    SensorList, SensorView, TaskView, TestConnectionRequest, TriggerList, TriggerLogChunk,
+    TriggerLogQuery, TriggerRequest, TriggerRunList, TriggerRunView, TriggerView, WorkerList,
+    WorkerNodeView, WorkerUsageView, WorkerView,
 };
 
 #[cfg(test)]
@@ -640,6 +641,7 @@ fn trigger_view(
         last_restart_at: record.last_restart_at,
         stuck,
         called_for: None,
+        instance_id: record.instance_id.clone(),
     })
 }
 
@@ -1479,28 +1481,32 @@ pub(crate) async fn log_source(
             )));
         }
     };
-    let endpoint = match state.db.worker_log_endpoint(&worker_id).await? {
-        Some((worker_state, _)) if worker_state.is_gone() => {
-            state.metrics.log_error("worker_gone");
-            return Err(ApiError::Unavailable(format!(
-                "worker `{worker_id}` is {worker_state}: the log of try {try_number} is \
-                 unavailable"
-            )));
-        }
-        Some((_, endpoint)) if !endpoint.is_empty() => endpoint,
-        _ => {
-            state.metrics.log_error("no_endpoint");
-            return Err(ApiError::Unavailable(format!(
-                "worker `{worker_id}` has no log endpoint: the log of try {try_number} is \
-                 unavailable"
-            )));
-        }
-    };
+    let endpoint = worker_logs(state, &worker_id, &format!("the log of try {try_number}")).await?;
     Ok(LogPlace {
         attempt_id,
         worker_id,
         endpoint,
     })
+}
+
+/// Where `worker_id`'s logs are read: its log endpoint; 503 when it is gone or has none
+/// (`what` names the log in the message).
+async fn worker_logs(state: &ApiState, worker_id: &str, what: &str) -> Result<String, ApiError> {
+    match state.db.worker_log_endpoint(worker_id).await? {
+        Some((worker_state, _)) if worker_state.is_gone() => {
+            state.metrics.log_error("worker_gone");
+            Err(ApiError::Unavailable(format!(
+                "worker `{worker_id}` is {worker_state}: {what} is unavailable"
+            )))
+        }
+        Some((_, endpoint)) if !endpoint.is_empty() => Ok(endpoint),
+        _ => {
+            state.metrics.log_error("no_endpoint");
+            Err(ApiError::Unavailable(format!(
+                "worker `{worker_id}` has no log endpoint: {what} is unavailable"
+            )))
+        }
+    }
 }
 
 /// A part of an attempt's log, read from the worker that ran it; read on from `next` to follow
@@ -1525,15 +1531,47 @@ pub async fn get_log(
     query: Result<Query<LogQuery>, QueryRejection>,
 ) -> ApiResult<LogChunk> {
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let place = log_source(&state, (&run_id, task_id), try_number, query.map_index).await?;
+    let part = read_log_part(&state, &place, query.from, query.limit).await?;
+    Ok(Json(LogChunk {
+        attempt_id: place.attempt_id,
+        try_number,
+        worker_id: place.worker_id,
+        from: part.from,
+        content: part.content,
+        next: part.next,
+        size: part.size,
+        running: part.running,
+    }))
+}
+
+/// A part of a log read from its worker, masked ([`shown_part`]).
+struct LogPart {
+    from: u64,
+    content: String,
+    next: u64,
+    size: u64,
+    running: bool,
+}
+
+/// The part of the log at `place` from `from` (0 by default), at most `limit` bytes ([`MAX_CHUNK`]
+/// by default): 404 when the worker no longer has it, 503 when it can't be reached or another
+/// worker answers at its address.
+async fn read_log_part(
+    state: &ApiState,
+    place: &LogPlace,
+    from: Option<u64>,
+    limit: Option<u64>,
+) -> Result<LogPart, ApiError> {
     let LogPlace {
         attempt_id,
         worker_id,
         endpoint,
-    } = log_source(&state, (&run_id, task_id), try_number, query.map_index).await?;
-    let from = query.from.unwrap_or(0);
-    let limit = query.limit.unwrap_or(MAX_CHUNK).clamp(MIN_CHUNK, MAX_CHUNK);
+    } = place;
+    let from = from.unwrap_or(0);
+    let limit = limit.unwrap_or(MAX_CHUNK).clamp(MIN_CHUNK, MAX_CHUNK);
     let answered = |answered: Option<&String>| match answered {
-        Some(other) if *other != worker_id => Err({
+        Some(other) if other != worker_id => Err({
             state.metrics.log_error("stale_address");
             ApiError::Unavailable(format!(
                 "reached worker `{other}` instead of `{worker_id}` at {endpoint}: its address \
@@ -1546,11 +1584,7 @@ pub async fn get_log(
     // Some bytes before `from` too, masked with the part (see `shown_part`).
     let asked = from.saturating_sub(MASK_CONTEXT);
     let fetched = limit + (from - asked);
-    let log = match state
-        .logs
-        .fetch(&endpoint, &attempt_id, asked, fetched)
-        .await
-    {
+    let log = match state.logs.fetch(endpoint, attempt_id, asked, fetched).await {
         Ok(log) => log,
         Err(LogFetchError::Missing { worker_id: other }) => {
             answered(other.as_ref())?;
@@ -1568,15 +1602,93 @@ pub async fn get_log(
     };
     answered(log.worker_id.as_ref())?;
     let (from, content, next) = shown_part(&log, asked, from, fetched);
-    Ok(Json(LogChunk {
-        attempt_id,
-        try_number,
-        worker_id,
+    Ok(LogPart {
         from,
         content,
         next,
         size: log.size,
         running: log.running,
+    })
+}
+
+/// A DAG's trigger runs, the newest first, with where each one's log is (B272): `404` for a
+/// DAG without an event trigger.
+#[utoipa::path(get, path = "/api/v1/dags/{dag_id}/trigger/runs", tag = "triggers",
+    params(("dag_id" = String, Path, description = "The DAG's ID")),
+    responses((status = 200, body = TriggerRunList), (status = 404, body = ErrorBody)))]
+pub async fn list_trigger_runs(
+    State(state): State<ApiState>,
+    Path(dag_id): Path<String>,
+) -> ApiResult<TriggerRunList> {
+    parse_dag_id(&dag_id)?;
+    let runs = state.db.trigger_runs(&dag_id, TRIGGER_RUNS_LISTED).await?;
+    Ok(Json(TriggerRunList {
+        runs: runs.into_iter().map(trigger_run_view).collect(),
+    }))
+}
+
+/// The most trigger runs listed: more than the master keeps by default.
+const TRIGGER_RUNS_LISTED: usize = 100;
+
+fn trigger_run_view(run: schedr_db::triggers::TriggerRun) -> TriggerRunView {
+    TriggerRunView {
+        instance_id: run.instance_id,
+        worker_id: run.worker_id,
+        started_at: run.started_at,
+        ended_at: run.ended_at,
+        // Masked when read, as the trigger's last error is.
+        error: run.error.as_deref().map(schedr_config::masked::mask_text),
+    }
+}
+
+/// A part of a trigger run's log, read from the worker that ran it, masked as a task's (B272);
+/// read on from `next` while it runs. 404 for a run its DAG doesn't have (any more) or a log
+/// the worker no longer has; 503 when the worker is gone or can't be reached.
+#[utoipa::path(get, path = "/api/v1/dags/{dag_id}/trigger/runs/{instance_id}/log",
+    tag = "triggers",
+    params(
+        ("dag_id" = String, Path, description = "The DAG's ID"),
+        ("instance_id" = String, Path, description = "The trigger run"),
+        TriggerLogQuery
+    ),
+    responses(
+        (status = 200, body = TriggerLogChunk),
+        (status = 404, body = ErrorBody),
+        (status = 503, body = ErrorBody)
+    ))]
+pub async fn trigger_run_log(
+    State(state): State<ApiState>,
+    Path((dag_id, instance_id)): Path<(String, String)>,
+    query: Result<Query<TriggerLogQuery>, QueryRejection>,
+) -> ApiResult<TriggerLogChunk> {
+    let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    parse_dag_id(&dag_id)?;
+    let run = state
+        .db
+        .trigger_run(&dag_id, &instance_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "DAG `{dag_id}`'s trigger has no run `{instance_id}` (kept are its newest)"
+            ))
+        })?;
+    let what = format!("the log of trigger run `{instance_id}`");
+    let endpoint = worker_logs(&state, &run.worker_id, &what).await?;
+    let place = LogPlace {
+        attempt_id: run.instance_id,
+        worker_id: run.worker_id,
+        endpoint,
+    };
+    let part = read_log_part(&state, &place, query.from, query.limit).await?;
+    Ok(Json(TriggerLogChunk {
+        dag_id,
+        instance_id: place.attempt_id,
+        worker_id: place.worker_id,
+        from: part.from,
+        next: part.next,
+        size: part.size,
+        running: part.running,
+        content: part.content,
     }))
 }
 

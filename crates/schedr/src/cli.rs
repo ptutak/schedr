@@ -539,6 +539,22 @@ pub enum TriggersCommand {
         #[arg(long, default_value_t = 50)]
         limit: u32,
     },
+    /// List a DAG's trigger runs, newest first: the worker each ran on, its end and error.
+    Runs {
+        /// Its DAG.
+        dag: String,
+    },
+    /// Print a run of a DAG's trigger's log, read from its worker (the newest run by default).
+    Logs {
+        /// Its DAG.
+        dag: String,
+        /// The run (its instance, as `schedr triggers runs` lists it).
+        #[arg(long)]
+        run: Option<String>,
+        /// Keep printing while the trigger runs.
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Start a DAG's trigger again from its bookmark, whatever stopped it.
     Restart {
         /// Its DAG.

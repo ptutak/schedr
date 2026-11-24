@@ -49,6 +49,8 @@ pub use state::ApiState;
         routes::list_triggers,
         routes::dag_trigger,
         routes::trigger_events,
+        routes::list_trigger_runs,
+        routes::trigger_run_log,
         routes::restart_trigger,
         routes::skip_trigger_run,
         routes::switch_on_trigger,
@@ -200,6 +202,14 @@ fn trigger_routes() -> Router<ApiState> {
         .route(
             "/api/v1/dags/{dag_id}/trigger/events",
             get(routes::trigger_events),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/runs",
+            get(routes::list_trigger_runs),
+        )
+        .route(
+            "/api/v1/dags/{dag_id}/trigger/runs/{instance_id}/log",
+            get(routes::trigger_run_log),
         )
         .route(
             "/api/v1/dags/{dag_id}/trigger/restart",

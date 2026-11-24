@@ -2442,3 +2442,67 @@ async fn the_deployment_lists_masters_heard_within_three_of_their_heartbeats() {
         "within three heartbeats of a minute"
     );
 }
+
+#[tokio::test]
+async fn a_triggers_runs_are_listed_and_their_logs_read_from_their_workers_masked() {
+    // B272: a trigger belongs to no run; its runs and their logs are reached by its DAG.
+    let (app, db, _, _, fake) = with_log("http://w1:8081").await;
+    let instance = "0190a0a0-0000-7000-8000-0000000000a1";
+    let runs = "/api/v1/dags/sync/trigger/runs";
+    assert_eq!(get(&app, runs).await, (StatusCode::OK, json!({"runs": []})));
+    db.trigger_assigned("sync", instance, "w1", "v1", "h1", ts(NOW))
+        .await
+        .unwrap();
+    let (status, body) = get(&app, runs).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["runs"],
+        json!([{"instance_id": instance, "worker_id": "w1", "started_at": NOW,
+            "ended_at": null, "error": null}])
+    );
+    let uri = format!("{runs}/{instance}/log");
+    fake.answer(Ok(log("w1", 40, true, b"watching\npassword=hunter22\n")));
+    let (status, body) = get(&app, &uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (
+            &body["dag_id"],
+            &body["instance_id"],
+            &body["worker_id"],
+            &body["running"]
+        ),
+        (&json!("sync"), &json!(instance), &json!("w1"), &json!(true))
+    );
+    let content = body["content"].as_str().unwrap();
+    assert!(
+        content.starts_with("watching\n") && !content.contains("hunter22"),
+        "{content}"
+    );
+    assert_eq!(
+        fake.asked.lock().unwrap()[0].1,
+        instance,
+        "its log is named by its run"
+    );
+    let ended = "connecting to postgres://etl:hunter22@db/x failed";
+    db.trigger_ended("sync", instance, Some(ended), None, (ts(NOW), 20))
+        .await
+        .unwrap();
+    let (_, body) = get(&app, runs).await;
+    let error = body["runs"][0]["error"].as_str().unwrap();
+    assert!(!error.contains("hunter22"), "masked: {error}");
+    let other = format!("{runs}/0190a0a0-0000-7000-8000-0000000000ff/log");
+    let (status, body) = get(&app, &other).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _) = get(
+        &app,
+        &format!("/api/v1/dags/other/trigger/runs/{instance}/log"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another DAG's run");
+    let (status, _) = get(&app, &format!("{uri}?map_index=1")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a trigger has no instances"
+    );
+}

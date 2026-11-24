@@ -863,6 +863,9 @@ pub struct TriggerView {
     /// hasn't ended well with yet; `schedr triggers skip` passes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub called_for: Option<String>,
+    /// The run of it a worker has now (B272): its log is `GET .../trigger/runs/{instance}/log`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
 }
 
 /// The triggers.
@@ -1075,6 +1078,62 @@ pub struct LogChunk {
     /// (invalid UTF-8 replaced by `U+FFFD`). A line longer than the part asked for is shown
     /// to its last whitespace in it, then `… (the rest of this line is not shown: it is over
     /// N bytes)`, its rest passed over.
+    pub content: String,
+}
+
+/// The query of a trigger run's log: as [`LogQuery`], with no mapped instance.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct TriggerLogQuery {
+    /// The first byte wanted (0 by default): the `next` of the previous part, to follow a log.
+    #[serde(default)]
+    pub from: Option<u64>,
+    /// At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// One run of a DAG's trigger on a worker (B272): where its log is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TriggerRunView {
+    /// The instance it ran as: its log's name on the worker.
+    pub instance_id: String,
+    /// The worker that ran it.
+    pub worker_id: String,
+    /// When it was given to the worker.
+    pub started_at: Timestamp,
+    /// When it ended; `None` while it runs.
+    pub ended_at: Option<Timestamp>,
+    /// Why it ended, if it failed.
+    pub error: Option<String>,
+}
+
+/// A DAG's trigger runs, the newest first (the master keeps the newest 20 by default).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TriggerRunList {
+    /// The runs.
+    pub runs: Vec<TriggerRunView>,
+}
+
+/// A part of a trigger run's log, read from the worker that ran it, masked as a task's log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TriggerLogChunk {
+    /// Its DAG.
+    pub dag_id: String,
+    /// The trigger run.
+    pub instance_id: String,
+    /// The worker it ran on (and that answered).
+    pub worker_id: String,
+    /// The first byte of `content` (see [`LogChunk::from`]).
+    pub from: u64,
+    /// Where the next part starts (see [`LogChunk::next`]).
+    pub next: u64,
+    /// The log's size when it was read.
+    pub size: u64,
+    /// Whether the trigger still runs there (its log may grow).
+    pub running: bool,
+    /// The log's text, as [`LogChunk::content`].
     pub content: String,
 }
 

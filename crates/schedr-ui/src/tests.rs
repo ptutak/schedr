@@ -1122,3 +1122,83 @@ async fn a_trigger_waiting_for_runs_shows_the_run_it_is_called_for_and_can_skip_
         );
     }
 }
+
+/// B272: a trigger's log on its DAG's page, read once into an element its live updates keep, a
+/// run at a time, followed while it runs.
+#[tokio::test]
+async fn a_dag_page_reads_its_triggers_log_a_run_at_a_time() {
+    let instance = "0190a0a0-0000-7000-8000-0000000000a1";
+    let older = "0190a0a0-0000-7000-8000-0000000000a0";
+    let mut etl = etl_with_trigger();
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger".to_owned(),
+        (
+            200,
+            json!({
+                "dag_id": "sync", "trigger": "found", "state": "running", "worker": "w1",
+                "bookmark": null, "stopped_why": null, "failures": 0, "last_error": null,
+                "not_before": null, "started_at": "2026-10-15T01:00:00Z", "last_event_at": null,
+                "last_poked_at": null, "last_restart_at": null, "instance_id": instance
+            }),
+        ),
+    );
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger/events?limit=20".to_owned(),
+        (200, json!({"events": []})),
+    );
+    etl.answers.insert(
+        "/api/v1/dags/sync/trigger/runs".to_owned(),
+        (
+            200,
+            json!({"runs": [
+                {"instance_id": instance, "worker_id": "w1", "started_at": "2026-10-15T01:00:00Z",
+                 "ended_at": null, "error": null},
+                {"instance_id": older, "worker_id": "w2", "started_at": "2026-10-14T01:00:00Z",
+                 "ended_at": "2026-10-14T02:00:00Z", "error": "ValueError: no"}
+            ]}),
+        ),
+    );
+    let chunk = |from: u64, content: &str, running: bool| {
+        json!({"dag_id": "sync", "instance_id": instance, "worker_id": "w1", "from": from,
+            "next": 9, "size": 9, "running": running, "content": content})
+    };
+    for (query, answer) in [
+        ("from=0&limit=4", chunk(0, "", true)),
+        ("from=0&limit=1048576", chunk(0, "watching\n", true)),
+        ("from=9&limit=1048576", chunk(9, "", false)),
+    ] {
+        etl.answers.insert(
+            format!("/api/v1/dags/sync/trigger/runs/{instance}/log?{query}"),
+            (200, answer),
+        );
+    }
+    let app = ui(vec![deployment("etl", etl)]);
+    let (_, html) = get(&app, "/d/etl/dags/sync", &[]).await;
+    assert_eq!(
+        attrs(&html, "#trigger-log", "hx-get"),
+        ["/d/etl/dags/sync/trigger/log"]
+    );
+    assert_eq!(attrs(&html, "#trigger-log", "hx-preserve"), ["true"]);
+    let (status, fragment) = get(&app, "/d/etl/dags/sync/trigger/log", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(fragment.contains("watching"), "{fragment}");
+    assert!(fragment.contains("still running"), "{fragment}");
+    assert_eq!(texts(&fragment, "a.try.open").len(), 1, "{fragment}");
+    assert_eq!(
+        attrs(&fragment, "a.try.failed", "href"),
+        [format!("/d/etl/dags/sync/trigger/log?run={older}")]
+    );
+    let tail = attrs(&fragment, ".log-tail", "hx-get");
+    assert_eq!(
+        tail,
+        [format!(
+            "/d/etl/dags/sync/trigger/tail?run={instance}&from=9"
+        )]
+    );
+    let (status, more) = get(&app, &tail[0], &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !more.contains("log-tail"),
+        "it ended: no more reads ({more})"
+    );
+}

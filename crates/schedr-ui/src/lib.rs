@@ -34,6 +34,7 @@ mod pages;
 mod params_form;
 mod runs;
 mod task_memory;
+mod trigger_log;
 mod workers;
 
 #[cfg(test)]
@@ -185,6 +186,14 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route(
             "/d/{deployment}/runs/{run}/tasks/{task}/tail",
             get(live::tail::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger/log",
+            get(trigger_log::log::<T>),
+        )
+        .route(
+            "/d/{deployment}/dags/{dag}/trigger/tail",
+            get(trigger_log::tail::<T>),
         )
         .route("/assets/style.css", get(assets::style))
         .route("/assets/live.js", get(assets::live))

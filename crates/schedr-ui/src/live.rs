@@ -443,47 +443,79 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
             query.from,
             TAIL_PART,
         )
-        .await;
-    let mut colours = ansi::Converter::resume(&query.style);
+        .await
+        .map(|part| TailPart {
+            content: part.content,
+            next: part.next,
+            size: part.size,
+            running: part.running,
+        });
+    let url = format!(
+        "{}{}?try={}",
+        prefix(&headers),
+        uri.path(),
+        query.try_number
+    );
+    let after = query
+        .map_index
+        .map_or_else(String::new, |index| format!("&map_index={index}"));
+    tail_answer(
+        &ui.timings,
+        part,
+        (query.from, &query.style, query.out),
+        (&url, &after),
+    )
+}
+
+/// A part of a log as a tail shows it: a task attempt's or a trigger run's.
+pub(crate) struct TailPart {
+    pub(crate) content: String,
+    pub(crate) next: u64,
+    pub(crate) size: u64,
+    pub(crate) running: bool,
+}
+
+/// The largest part a tail reads at once.
+pub(crate) const TAIL_READ: u64 = TAIL_PART;
+
+/// A tail's answer for `part` (read from `from`, the colours `style` in force there, out of
+/// reach since `out`): its HTML, then the element reading on at `url` (the prefix, the path
+/// and the query naming the log), `from`, then `after` (more of that query), `style` and
+/// `out` added, as [`tail`] describes.
+pub(crate) fn tail_answer(
+    timings: &UiTimings,
+    part: Result<TailPart, ClientError>,
+    (from, style, out): (u64, &str, Option<i64>),
+    (url, after): (&str, &str),
+) -> Response {
+    let mut colours = ansi::Converter::resume(style);
     let (html, next) = match part {
         Ok(part) => {
             let html = crate::log_lines::to_html(&mut colours, &part.content);
             // Bytes of an escape sequence cut at the part's end: read again with the rest.
-            let from = part
-                .next
-                .saturating_sub(colours.held() as u64)
-                .max(query.from);
+            let next_from = part.next.saturating_sub(colours.held() as u64).max(from);
             let done = !part.running && part.next >= part.size;
             // Most of a part read (whole lines only: rarely all of it), and more past it:
             // read on at once.
-            let now =
-                part.next.saturating_sub(query.from) >= TAIL_PART / 2 && part.next < part.size;
-            (html, (!done).then_some((from, None, now)))
+            let now = part.next.saturating_sub(from) >= TAIL_PART / 2 && part.next < part.size;
+            (html, (!done).then_some((next_from, None, now)))
         }
-        // Gone for good: the attempt has no such log (any more), or the request is wrong.
+        // Gone for good: the log isn't there (any more), or the request is wrong.
         Err(ClientError::Server { status, message }) if status != 503 => (gave_up(&message), None),
         // Out of reach (the worker, or the webserver): tried again for a while.
         Err(error) => {
-            let out = query.out.unwrap_or_else(now_millis);
-            let given = i64::try_from(ui.timings.tail_give_up.as_millis()).unwrap_or(i64::MAX);
+            let out = out.unwrap_or_else(now_millis);
+            let given = i64::try_from(timings.tail_give_up.as_millis()).unwrap_or(i64::MAX);
             if now_millis().saturating_sub(out) >= given {
                 (gave_up(&error.to_string()), None)
             } else {
-                (String::new(), Some((query.from, Some(out), false)))
+                (String::new(), Some((from, Some(out), false)))
             }
         }
     };
     let mut body = html;
     if let Some((from, out, now)) = next {
-        let mut url = format!(
-            "{}{}?try={}&from={from}",
-            prefix(&headers),
-            uri.path(),
-            query.try_number
-        );
-        if let Some(index) = query.map_index {
-            let _ = write!(url, "&map_index={index}");
-        }
+        let mut url = format!("{url}&from={from}{after}");
         let style = colours.sgr();
         if !style.is_empty() {
             let _ = write!(url, "&style={}", style.replace(';', "%3B"));
@@ -491,7 +523,7 @@ pub async fn tail<T: Transport + Send + Sync + 'static>(
         if let Some(out) = out {
             let _ = write!(url, "&out={out}");
         }
-        body.push_str(&tail_reader(&url, now, ui.timings.tail_interval));
+        body.push_str(&tail_reader(&url, now, timings.tail_interval));
     }
     (
         [

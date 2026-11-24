@@ -190,7 +190,11 @@ moment. Either form creates a `manual` run and writes no event, so an actual eve
 new key can still start its own run.
 
 `schedr triggers list` lists triggers, `schedr triggers show <dag>` shows one, and
-`schedr triggers events <dag>` lists its events. `schedr triggers restart <dag>` starts it
+`schedr triggers events <dag>` lists its events. A trigger's own log (what its function prints
+or logs: a folder missing, a key masked) is read from the worker that ran it, masked as a
+task's: `schedr triggers logs <dag>` prints the newest run's (`-f` follows it while it runs,
+`--run <run>` another one), and `schedr triggers runs <dag>` lists its runs, the newest 20 kept,
+with the worker each ran on and why it ended. `schedr triggers restart <dag>` starts it
 again from its bookmark; `schedr triggers switch-on <dag>` clears its strikes and switches
 it back on. `schedr triggers skip <dag>` passes the run an
 [`@trigger(wait_for=...)`](21-wait-for.md#deciding-per-run-triggerwait_for) keeps failing on. The [DAG page](../03-guide/12-ui.md#a-dag) also shows trigger status and events.

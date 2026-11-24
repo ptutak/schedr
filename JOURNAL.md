@@ -3465,3 +3465,21 @@ any case, each once (`RunningTrigger.cut_off`); the stream is kept for the maste
 user chose for B265. The deadlines are read before the time they are judged at:
 `master_cutoff` gives "now plus what is left", so read after `now` a passed cutoff was never late
 (the first version of this fix broke the gated cutoff that way).
+
+### 2026-11-24: M5.2k, B272: a trigger's log in the DAG page and the CLI
+
+The user's fix in the record, with the user's choice of history (a table, the newest N per DAG):
+each run of a DAG's trigger is a `trigger_runs` row (its instance, worker, start, end, error),
+the newest `SCHEDR_HIDDEN__MASTER__TRIGGER_RUNS_KEPT` (20) kept, pruned as one ends, a running
+one never. Its log is the worker's file named by its instance; on the worker the triggers
+running are `LiveLogs`, so the log endpoint says theirs run and the sweep spares them, as a
+journaled attempt's (two gaps found on the way). `GET /api/v1/dags/{dag}/trigger/runs` lists
+them; `.../trigger/runs/{instance}/log` reads a part, through the same worker lookup, fetch and
+masking as a task's (`read_log_part`), its error masked when read. `schedr triggers runs <dag>`,
+`schedr triggers logs <dag> [--run] [-f]` (the newest run by default), `triggers show` naming
+the current one. The DAG page's Trigger section reads the log once into an element its live
+updates keep (`hx-preserve`): the newest run's end, each kept run linked by its start (a failed
+one marked), followed while it runs by a tail that shares the task tail's answer
+(`live::tail_answer`). Not chosen: the log inside the page's live render (read from the worker
+on every update, its tail started again each time); a download of a trigger run's whole log
+(`schedr triggers logs` prints it whole).

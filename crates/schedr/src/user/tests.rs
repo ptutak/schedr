@@ -1286,3 +1286,84 @@ fn event_data_is_json_or_a_file_of_it() {
     let error = given_event_data(Some("{not json")).unwrap_err();
     assert!(error.starts_with("--event-data must be JSON"), "{error}");
 }
+
+#[tokio::test]
+async fn a_triggers_runs_are_listed_and_its_newest_log_followed() {
+    // B272: its log was only on the worker's disk.
+    let logs = std::sync::Arc::new(GrowingLog {
+        answers: std::sync::Mutex::new(
+            // The second from 0: the API reads the bytes before a part too, to mask it.
+            vec![
+                part(9, true, "watching\n"),
+                part(15, false, "watching\nfound\n"),
+            ]
+            .into(),
+        ),
+        ..GrowingLog::default()
+    });
+    let trigger = json!({
+        "kind": "event",
+        "task": {
+            "id": "found", "kind": "sensor", "mode": "loop", "arguments": {},
+            "settings": {
+                "retries": 0, "retry_delay_ms": 0, "timeout_ms": null,
+                "queue": "default", "max_output_size": 1_048_576
+            },
+            "output_type": {"type": "none"}
+        }
+    });
+    let client = world_of(false, Some(logs.clone()), trigger, &[]).await;
+    let dag = || "sync".to_owned();
+    let logs_of = |follow| TriggersCommand::Logs {
+        dag: dag(),
+        run: None,
+        follow,
+    };
+    let error = triggers(&client, logs_of(false), &text())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "DAG `sync`'s trigger hasn't run yet: no log"
+    );
+    let db = &client.transport().db;
+    let queues = vec![];
+    db.register_worker(
+        &schedr_db::workers::WorkerRegistration {
+            id: "w1",
+            incarnation: "i1",
+            protocol_version: "1.0",
+            schedr_version: "1.0.0",
+            queues: &queues,
+            slots: 2,
+            watcher_slots: 1,
+            log_endpoint: "http://w1:8081",
+        },
+        ts(NOW),
+    )
+    .await
+    .unwrap();
+    let instance = "0190a0a0-0000-7000-8000-0000000000a1";
+    db.trigger_assigned("sync", instance, "w1", "v1", "h1", ts(NOW))
+        .await
+        .unwrap();
+    let table = triggers(&client, TriggersCommand::Runs { dag: dag() }, &text())
+        .await
+        .unwrap();
+    assert!(
+        table.contains(instance) && table.contains("running"),
+        "{table}"
+    );
+    let shown = triggers(&client, TriggersCommand::Show { dag: dag() }, &text())
+        .await
+        .unwrap();
+    assert!(
+        shown.contains(&format!(
+            "run: {instance} (its log: schedr triggers logs sync)"
+        )),
+        "{shown}"
+    );
+    let printed = triggers(&client, logs_of(true), &text()).await.unwrap();
+    assert_eq!(printed, "watching\nfound\n", "followed while it ran");
+    assert_eq!(logs.asked_from.lock().unwrap().len(), 2);
+}

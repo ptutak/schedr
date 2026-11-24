@@ -14,8 +14,8 @@ use schedr_api::views::{
     CheckConnectionsRequest, CommandList, CommandView, ConnectionList, DagList, DagMemoryList,
     DagView, DeploymentView, EventList, ImportErrorList, LogChunk, MemoryTotals, NamedEventList,
     NamedEventView, OutputView, PauseRequest, PostEventRequest, ResourceList, RunDetail, RunList,
-    SampleSeriesList, SensorList, TaskFlowList, TestConnectionRequest, TriggerList, TriggerRequest,
-    TriggerView, WorkerList,
+    SampleSeriesList, SensorList, TaskFlowList, TestConnectionRequest, TriggerList,
+    TriggerLogChunk, TriggerRequest, TriggerRunList, TriggerView, WorkerList,
 };
 use schedr_model::commands::ConnectionsResult;
 use serde::de::DeserializeOwned;
@@ -773,6 +773,46 @@ impl<T: Transport> Client<T> {
         self.call(
             Method::Get,
             format!("/api/v1/dags/{}/trigger/events?limit={limit}", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/trigger/runs`: its trigger's runs, newest first, each with
+    /// where its log is (B272).
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn trigger_runs(&self, dag: &str) -> Result<TriggerRunList, ClientError> {
+        self.call(
+            Method::Get,
+            format!("/api/v1/dags/{}/trigger/runs", path(dag)),
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/dags/{dag}/trigger/runs/{instance}/log`: a part of a trigger run's log,
+    /// from `from`, at most `limit` bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError`] if the request fails or the answer doesn't read.
+    pub async fn trigger_log_part(
+        &self,
+        dag: &str,
+        instance_id: &str,
+        from: u64,
+        limit: u64,
+    ) -> Result<TriggerLogChunk, ClientError> {
+        self.call(
+            Method::Get,
+            format!(
+                "/api/v1/dags/{}/trigger/runs/{}/log?from={from}&limit={limit}",
+                path(dag),
+                path(instance_id)
+            ),
             None,
         )
         .await

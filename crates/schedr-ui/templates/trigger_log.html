@@ -1,0 +1,11 @@
+{#- A trigger run's log (B272), read into the DAG page's `#trigger-log`, kept across its live
+    updates; a run's link reads the fragment again in its place. -#}
+{% if !runs.is_empty() %}
+<p class="tries">Run {% for run in runs %}<a class="try{% if run.open %} open{% endif %}{% if !run.error.is_empty() %} failed{% endif %}" href="{{ run.href }}" hx-get="{{ run.href }}" hx-target="#trigger-log" hx-sync="#trigger-log:replace" title="Started {{ run.started }}{% if run.running %}, still running{% endif %}{% if !run.error.is_empty() %}: {{ run.error }}{% endif %}">{{ run.started }}</a>{% endfor %}{% if !size.is_empty() %} · {{ size }} on <span class="mono">{{ worker }}</span>{% if running %} · still running{% endif %}{% endif %}</p>
+{% endif %}
+{% if !none.is_empty() %}
+<p class="empty">No log to show: {{ none }}</p>
+{% else %}
+{% if cut %}<p class="dim">Only its end is shown (its last lines, about 256 KiB).</p>{% endif %}
+<pre class="log">{{ html|safe }}{% if let Some(tail) = tail %}{{ tail|safe }}{% endif %}</pre>
+{% endif %}

@@ -2834,6 +2834,60 @@
         ],
         "type": "object"
       },
+      "TriggerLogChunk": {
+        "description": "A part of a trigger run's log, read from the worker that ran it, masked as a task's log.",
+        "properties": {
+          "content": {
+            "description": "The log's text, as [`LogChunk::content`].",
+            "type": "string"
+          },
+          "dag_id": {
+            "description": "Its DAG.",
+            "type": "string"
+          },
+          "from": {
+            "description": "The first byte of `content` (see [`LogChunk::from`]).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instance_id": {
+            "description": "The trigger run.",
+            "type": "string"
+          },
+          "next": {
+            "description": "Where the next part starts (see [`LogChunk::next`]).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "running": {
+            "description": "Whether the trigger still runs there (its log may grow).",
+            "type": "boolean"
+          },
+          "size": {
+            "description": "The log's size when it was read.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worker_id": {
+            "description": "The worker it ran on (and that answered).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dag_id",
+          "instance_id",
+          "worker_id",
+          "from",
+          "next",
+          "size",
+          "running",
+          "content"
+        ],
+        "type": "object"
+      },
       "TriggerRequest": {
         "additionalProperties": false,
         "description": "A manual run to start.",
@@ -2881,6 +2935,61 @@
         },
         "type": "object"
       },
+      "TriggerRunList": {
+        "description": "A DAG's trigger runs, the newest first (the master keeps the newest 20 by default).",
+        "properties": {
+          "runs": {
+            "description": "The runs.",
+            "items": {
+              "$ref": "#/components/schemas/TriggerRunView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "type": "object"
+      },
+      "TriggerRunView": {
+        "description": "One run of a DAG's trigger on a worker (B272): where its log is.",
+        "properties": {
+          "ended_at": {
+            "description": "When it ended; `None` while it runs.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "description": "Why it ended, if it failed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance_id": {
+            "description": "The instance it ran as: its log's name on the worker.",
+            "type": "string"
+          },
+          "started_at": {
+            "description": "When it was given to the worker.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "worker_id": {
+            "description": "The worker that ran it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "worker_id",
+          "started_at"
+        ],
+        "type": "object"
+      },
       "TriggerState": {
         "description": "A DAG's trigger's switch (decision 459).",
         "enum": [
@@ -2915,6 +3024,13 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "instance_id": {
+            "description": "The run of it a worker has now (B272): its log is `GET .../trigger/runs/{instance}/log`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_error": {
             "description": "Its last error.",
@@ -4469,6 +4585,126 @@
           }
         },
         "summary": "Start a DAG's trigger again from its bookmark, whatever stopped it. Applied by the master;\npoll the command for the decision.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/runs": {
+      "get": {
+        "operationId": "list_trigger_runs",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerRunList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A DAG's trigger runs, the newest first, with where each one's log is (B272): `404` for a\nDAG without an event trigger.",
+        "tags": [
+          "triggers"
+        ]
+      }
+    },
+    "/api/v1/dags/{dag_id}/trigger/runs/{instance_id}/log": {
+      "get": {
+        "operationId": "trigger_run_log",
+        "parameters": [
+          {
+            "description": "The DAG's ID",
+            "in": "path",
+            "name": "dag_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The trigger run",
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The first byte wanted (0 by default): the `next` of the previous part, to follow a log.",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many bytes (1 MiB by default; between 4 bytes, one character, and that).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerLogChunk"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A part of a trigger run's log, read from the worker that ran it, masked as a task's (B272);\nread on from `next` while it runs. 404 for a run its DAG doesn't have (any more) or a log\nthe worker no longer has; 503 when the worker is gone or can't be reached.",
         "tags": [
           "triggers"
         ]

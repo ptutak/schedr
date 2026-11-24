@@ -85,6 +85,9 @@
   {% for moment in trigger.moments %}<dt>{{ moment.0 }}</dt><dd class="time">{{ moment.1 }}</dd>{% endfor %}
   {% if !trigger.last_error.is_empty() %}<dt>Last error</dt><dd class="mono">{{ trigger.last_error }} ({{ trigger.failures }} in a row)</dd>{% endif %}
 </dl>
+<h3>Log</h3>
+{#- Read once, then kept across the page's live updates (`hx-preserve`); followed while it runs. -#}
+<div id="trigger-log" class="trigger-log" hx-preserve="true" hx-get="{{ trigger.log }}" hx-trigger="load" hx-disinherit="*"><p class="dim">Reading its log…</p></div>
 {% if !trigger.events.is_empty() %}
 <h3>Events</h3>
 <table class="list">

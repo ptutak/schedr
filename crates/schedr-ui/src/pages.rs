@@ -136,6 +136,8 @@ struct TriggerPanel {
     called_for: String,
     skip: String,
     events: Vec<EventRow>,
+    /// Where its log is read from (B272): a fragment, read once, kept across live updates.
+    log: String,
 }
 
 impl TriggerPanel {
@@ -251,6 +253,7 @@ async fn trigger_panel<T: Transport>(
         called_for: trigger.called_for.unwrap_or_default(),
         skip: format!("{actions}/skip"),
         events,
+        log: format!("{actions}/log"),
     }
 }
 

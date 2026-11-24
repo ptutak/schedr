@@ -37,7 +37,7 @@ pub const OUTPUT_TAIL: usize = 64 * 1024;
 pub const LOG_TAIL: usize = 256 * 1024;
 
 /// What the panel shows of a log whose last line is longer than the most it reads.
-const LONG_LAST_LINE: &str =
+pub(crate) const LONG_LAST_LINE: &str =
     "<span class=\"dim\">… (its last line is longer than 1 MiB: not shown here)</span>";
 
 /// The most of a log read at once (the API's longest part).
@@ -2909,7 +2909,7 @@ fn duration(ms: u64) -> String {
 }
 
 /// `n` bytes as people read it: `512 B`, `1.5 KiB`, `20.0 MiB`.
-fn bytes(n: u64) -> String {
+pub(crate) fn bytes(n: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if n < 1024 {
         return format!("{n} B");

@@ -53,20 +53,8 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk
-
-- **Rating:** severity **medium**, probability **likely**, usability (score 6): an `@trigger` generator's logging (warnings, a folder missing, a key masked) goes to its attempt's log file on the worker (`/var/lib/schedr/logs/<worker>/<attempt>.log`), but a trigger belongs to no run: `schedr triggers show` gives its state, failures and last error, and nothing in the UI or the CLI leads to its log.
-- **Found:** 2026-11-20, by the user in the demo: `examples/docs/event_triggers.py` now logs
-  "`/tmp/schedr-incoming` is missing" once, and it could be read only with `podman exec ... grep`
-  over the worker's log folder. A sensor's log is a task's attempt log, shown in its task view.
-- **A fix (the user, 2026-11-20):** the trigger's log in the DAG view, for both forms (`@trigger`
-  and `@trigger.poke`): the log of its current attempt, read from the worker's log endpoint as a
-  task's is, with the earlier attempts' logs reachable from there; the CLI to match (`schedr
-  triggers show` naming the attempt, its log by `schedr logs`).
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 
