@@ -362,7 +362,8 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 		SCHEDR_CONFIG__MASTER__GRPC_PORT=$$(($$3 + 70)) \
 		SCHEDR_CONFIG__WORKER__LOG_PORT=$$(($$3 + 81)) \
 		SCHEDR_CONFIG__OPS__PORT=$$(($$3 + 90)) \
-		$(EXT_ENV) uv run --no-sync target/debug/schedr standalone --migrate --no-ui --listen $(LISTEN) & \
+		$(EXT_ENV) SCHEDR_CONFIG__EXTENSIONS__DUMMY__VERSIONS='["1.0", "1.1"]' \
+		uv run --no-sync target/debug/schedr standalone --migrate --no-ui --listen $(LISTEN) & \
 		printf '[[ui.deployments]]\nname = "%s"\nurl = "http://127.0.0.1:%s"\n\n' "$$1" $$(($$3 + 80)) >> "$$dir/ui.toml"; \
 	}; \
 	mkdir -p "$$dir"; \
@@ -409,7 +410,14 @@ standalone-separate-ui: ## Run main (separate roles on SQLite: a master, a stand
 	printf '%s\n' '"""Fails to import on purpose, its password masked where it is shown."""' '' \
 		'raise RuntimeError("cannot reach postgres://etl:hunter2@warehouse:5432/dw")' \
 		> "$$broken/bad_connection.py"; \
-	run second "$(abspath $(DAGS2)):$$broken" $$((8100 + $(PORT_OFFSET))); \
+	: "the dummy extension at a newer version on second only, so the Extensions page offers two (DN40)"; \
+	newer="$$dir/newer"; mkdir -p "$$newer"; \
+	printf '%s\n' '"""The dummy extension at 1.1, run only on this deployment (DN40)."""' '' \
+		'from schedr import Cron, Dag, ExtensionTask' '' \
+		'with Dag("extension_newer", trigger=Cron("*/2 * * * *"), description="Runs the dummy at 1.1 every 2 minutes: unpause it, then the Extensions page offers 1.0 and 1.1."):' \
+		'    ExtensionTask("simulated", name="dummy", version="1.1", payload=[{"metric": ["steps", 1, {"step": "simulate"}]}, {"simulate": 8}])' \
+		> "$$newer/dummy_newer.py"; \
+	run second "$(abspath $(DAGS2)):$$broken:$$newer" $$((8100 + $(PORT_OFFSET))); \
 	target/debug/schedr --config "$$dir/ui.toml" ui & \
 	: "every process, not the first to end: a master killed to see the standby take over"; \
 	wait

@@ -770,6 +770,177 @@ async fn the_documentation_is_served_from_its_directory_and_linked() {
     );
 }
 
+/// A deployment answering the Extensions page's reads (DN40): its extensions' summaries, and
+/// `dummy`'s view and metrics at `version` with `workers` (worker, version, seen).
+fn extensions_of(summaries: &Value, version: &str, workers: &[(&str, &str)]) -> Scripted {
+    let seen = jiff::Timestamp::now().to_string();
+    let view = json!({
+        "name": "dummy", "version": version, "max_series": 100,
+        "workers": workers.iter().map(|(w, v)| json!({"worker_id": w, "version": v, "seen_at": seen})).collect::<Vec<_>>(),
+        "metrics": [], "panels": [], "events": [], "attempts": []
+    });
+    let metrics = json!({"range": "24h", "bucket_s": 900, "from": seen, "to": seen, "metrics": [], "panels": []});
+    Scripted {
+        answers: BTreeMap::from([
+            (
+                "/api/v1/extensions".to_owned(),
+                (200, json!({ "extensions": summaries.clone() })),
+            ),
+            (
+                format!("/api/v1/extensions/dummy?version={version}"),
+                (200, view.clone()),
+            ),
+            (
+                format!("/api/v1/extensions/dummy?worker=w1&version={version}"),
+                (200, view),
+            ),
+            (
+                format!("/api/v1/extensions/dummy/metrics?range=24h&version={version}"),
+                (200, metrics.clone()),
+            ),
+            (
+                format!("/api/v1/extensions/dummy/metrics?range=24h&worker=w1&version={version}"),
+                (200, metrics),
+            ),
+        ]),
+        ..Scripted::default()
+    }
+}
+
+fn summary(name: &str, versions: &[&str], workers: &[&str]) -> Value {
+    json!({"name": name, "versions": versions, "workers": workers, "seen_at": "2026-11-24T10:00:00Z"})
+}
+
+/// The user, 2026-11-24 (DN40): extension tabs over every deployment, a version always chosen
+/// (the highest by default), the deployments running it as sub-tabs, their workers under them.
+#[tokio::test]
+async fn the_extensions_page_is_tabs_of_extensions_a_version_and_its_deployments() {
+    let main = extensions_of(
+        &json!([
+            summary("dummy", &["1.10"], &["w1", "w2"]),
+            summary("kube", &["0.3"], &["w1"])
+        ]),
+        "1.10",
+        &[("w1", "1.10"), ("w2", "1.10")],
+    );
+    let second = extensions_of(
+        &json!([summary("dummy", &["1.10", "1.9"], &["w3"])]),
+        "1.10",
+        &[("w3", "1.10")],
+    );
+    let app = ui(vec![deployment("main", main), deployment("second", second)]);
+    // `/extensions` is the first extension's page.
+    let (status, _) = get(&app, "/extensions", &[]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, html) = get(&app, "/extensions/dummy", &[]).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    assert_eq!(
+        texts(&html, ".ext-tabs a"),
+        ["dummy", "kube"],
+        "every deployment's"
+    );
+    assert_eq!(texts(&html, ".ext-tabs a.open"), ["dummy"]);
+    // The highest version, by number; both offered, the highest first.
+    assert_eq!(texts(&html, "#ext-version-menu summary"), ["Version 1.10"]);
+    assert_eq!(texts(&html, "#ext-version-menu a"), ["1.10", "1.9"]);
+    // Both run 1.10: a tab each, the first shown; its workers under it.
+    assert_eq!(
+        texts(&html, "nav[aria-label=Deployments] a"),
+        ["main", "second"]
+    );
+    assert_eq!(
+        texts(&html, "nav[aria-label=Deployments] a.current"),
+        ["main"]
+    );
+    assert_eq!(
+        texts(&html, "nav[aria-label=Workers] a"),
+        ["All workers", "w1", "w2"]
+    );
+    let runs = texts(&html, ".runs-here");
+    assert!(
+        runs[0].contains("main: 1.10") && runs[0].contains("second: 1.10, 1.9"),
+        "{runs:?}"
+    );
+    // 1.9 runs only on second: no deployment tabs, second shown.
+    let older = attrs(&html, "#ext-version-menu a", "href")[1].clone();
+    assert!(older.contains("version=1.9"), "{older}");
+    let second_19 = extensions_of(
+        &json!([summary("dummy", &["1.10", "1.9"], &["w3"])]),
+        "1.9",
+        &[("w3", "1.9")],
+    );
+    let main_again = extensions_of(&json!([summary("dummy", &["1.10"], &["w1"])]), "1.10", &[]);
+    let app = ui(vec![
+        deployment("main", main_again),
+        deployment("second", second_19),
+    ]);
+    let (status, html) = get(&app, &older, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    assert_eq!(texts(&html, "#ext-version-menu summary"), ["Version 1.9"]);
+    assert_eq!(
+        texts(&html, "nav[aria-label=Deployments] a"),
+        Vec::<String>::new()
+    );
+    assert!(texts(&html, ".runs-here")[0].contains("Shown: second"));
+    // An extension no deployment ran.
+    let (status, _) = get(&app, "/extensions/ghost", &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// agy's review of DN40: a deployment that knows an extension only by its events is reached
+/// from "where it runs", its events shown with no version; an extension no answering deployment
+/// ran keeps the page, its tabs and the one that didn't answer.
+#[tokio::test]
+async fn an_events_only_deployment_is_reached_and_a_down_one_is_said() {
+    let seen = jiff::Timestamp::now().to_string();
+    let only_events = json!({
+        "name": "dummy", "version": "", "max_series": 100, "workers": [],
+        "metrics": [], "panels": [], "attempts": [],
+        "events": [{"at": seen, "worker_id": "w9", "version": "", "kind": "skipped", "message": "its --describe failed"}]
+    });
+    let metrics = json!({"range": "24h", "bucket_s": 900, "from": seen, "to": seen, "metrics": [], "panels": []});
+    let mut main = extensions_of(&json!([summary("dummy", &[], &["w9"])]), "x", &[]);
+    main.answers
+        .insert("/api/v1/extensions/dummy".to_owned(), (200, only_events));
+    main.answers.insert(
+        "/api/v1/extensions/dummy/metrics?range=24h".to_owned(),
+        (200, metrics),
+    );
+    let second = extensions_of(
+        &json!([summary("dummy", &["1.1"], &["w3"])]),
+        "1.1",
+        &[("w3", "1.1")],
+    );
+    let app = ui(vec![deployment("main", main), deployment("second", second)]);
+    let (_, html) = get(&app, "/extensions/dummy", &[]).await;
+    assert_eq!(texts(&html, "#ext-version-menu summary"), ["Version 1.1"]);
+    let links = attrs(&html, ".runs-here a", "href");
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(
+        links[0].contains("deployment=main") && !links[0].contains("version="),
+        "{links:?}"
+    );
+    let (status, html) = get(&app, &links[0], &[]).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    assert_eq!(texts(&html, "#ext-version-menu summary"), ["Version none"]);
+    assert!(html.contains("its --describe failed"), "its events shown");
+    // A deployment down and an extension nobody answering ran: the page, said so.
+    let down = Scripted {
+        down: true,
+        ..Scripted::default()
+    };
+    let kube = extensions_of(&json!([summary("kube", &["0.3"], &["w1"])]), "0.3", &[]);
+    let app = ui(vec![deployment("main", down), deployment("second", kube)]);
+    let (status, html) = get(&app, "/extensions/dummy", &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(texts(&html, ".ext-tabs a"), ["kube"]);
+    assert_eq!(
+        texts(&html, ".banner.warning").len(),
+        2,
+        "main down, and dummy not found: {html}"
+    );
+}
+
 #[tokio::test]
 async fn merged_with_the_api_its_unknown_paths_stay_bare_404s() {
     // As `schedr standalone` serves them: the UI's fallback is the merged router's.

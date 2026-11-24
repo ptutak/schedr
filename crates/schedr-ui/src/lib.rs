@@ -155,10 +155,7 @@ pub fn router<T: Transport + Send + Sync + 'static>(ui: Ui<T>) -> Router {
         .route("/deployments", get(deployments::list::<T>))
         .route("/metrics", get(metrics::page::<T>))
         .route("/extensions", get(extensions::list::<T>))
-        .route(
-            "/d/{deployment}/extensions/{name}",
-            get(extensions::page::<T>),
-        )
+        .route("/extensions/{name}", get(extensions::page::<T>))
         .route("/metrics/chart", get(metrics::node_chart::<T>))
         .route("/workers", get(workers::list::<T>))
         .route("/connections", get(connections::list::<T>))

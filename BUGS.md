@@ -53,8 +53,22 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 1 | B292: an extension's page lists the attempts of every version, whichever version is shown | 2 | low | possible | usability |
+| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+
+## B292: an extension's page lists the attempts of every version, whichever version is shown
+
+- **Rating:** severity **low**, probability **possible**, usability (score 2): an extension's version page lists every version's attempts.
+- **Found:** 2026-11-24, agy's review of DN40. The Extensions page shows one version at a time,
+  its panels, figures and events that version's alone, but its "What happened" list also merges
+  the extension's attempts (their latest status), read by `Database::extension_attempts`, which
+  can't filter by version: `attempt_statuses` doesn't store the extension's version.
+- **Repro:** `dummy` 1.9 on w1 with no attempts, 1.10 on w2 with one; `GET
+  /api/v1/extensions/dummy?version=1.9` lists w2's 1.10 attempt.
+- **Fix:** the extension's version stored with an attempt's statuses (a column in the next open
+  migration, 0004: 0003 shipped in 1.2.0rc1), filtered as events are. Not done in 1.2.0: a
+  schema change after the rc for a list shown beside the panels.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 

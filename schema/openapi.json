@@ -1327,7 +1327,7 @@
             "type": "string"
           },
           "versions": {
-            "description": "The versions workers ran, sorted.",
+            "description": "The versions workers ran, the highest first ([`version_order`]).",
             "items": {
               "type": "string"
             },
@@ -1391,7 +1391,7 @@
             "type": "array"
           },
           "version": {
-            "description": "The version its metrics and page are read from: the one last heard of.",
+            "description": "The version shown, its metrics and page read from its declarations: the one asked for,\nelse the highest ([`version_order`], DN40).",
             "type": "string"
           },
           "workers": {
@@ -5156,6 +5156,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "This version (DN40): its declarations, its events; the highest when absent.",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5223,6 +5232,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "This version's figures only (DN40), read as it declares them; the highest when absent.",
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5254,7 +5272,7 @@
             }
           }
         },
-        "summary": "An extension's metrics over a range, in buckets, summed over its workers and versions (or of\none worker, `worker`, up to a day: DN21); at most its `max_series` series a metric, the\nsmallest past it folded into `other`.",
+        "summary": "An extension's metrics over a range, in buckets, summed over its workers (or of one worker,\n`worker`, up to a day: DN21), of one version (`version`, else summed over those declaring a\nmetric as the highest does: DN40); at most its `max_series` series a metric, the smallest\npast it folded into `other`.",
         "tags": [
           "workers"
         ]

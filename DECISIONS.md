@@ -33,6 +33,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN40 | 2026-11-24 | user | corrects D513 | The Extensions page: a tab per extension, one version chosen, its deployments and workers under it |
 | DN39 | 2026-11-24 | user | adds to D517 | Every deployment's runs move by cursor: Newest, Previous, Next, Oldest |
 | DN38 | 2026-11-23 | user | adds to D280 | A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it |
 | DN37 | 2026-11-23 | user | adds to D518 | A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance |

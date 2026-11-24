@@ -34,7 +34,7 @@ pub use panels::ExtensionPanelView;
 pub struct ExtensionSummaryView {
     /// Its name.
     pub name: String,
-    /// The versions workers ran, sorted.
+    /// The versions workers ran, the highest first ([`version_order`]).
     pub versions: Vec<String>,
     /// The workers that ran it.
     pub workers: Vec<String>,
@@ -110,7 +110,8 @@ pub struct ExtensionView {
     pub name: String,
     /// Each version on each worker.
     pub workers: Vec<ExtensionWorkerView>,
-    /// The version its metrics and page are read from: the one last heard of.
+    /// The version shown, its metrics and page read from its declarations: the one asked for,
+    /// else the highest ([`version_order`], DN40).
     pub version: String,
     /// Its metrics' declarations (name, kind, help, unit, labels, buckets).
     #[schema(value_type = Vec<Object>)]
@@ -196,6 +197,8 @@ pub struct ExtensionQuery {
     /// One worker's events and attempts only (DN21), its newest [`LISTED`]; all workers' when
     /// absent. Its workers are all listed either way.
     pub worker: Option<String>,
+    /// This version (DN40): its declarations, its events; the highest when absent.
+    pub version: Option<String>,
 }
 
 /// Which range, and whose figures.
@@ -207,6 +210,31 @@ pub struct ExtensionMetricsQuery {
     /// One worker's figures only (DN21), for `1h` or `24h`: the master keeps each worker's a
     /// minute each for a day, and sums them over the workers past it. All workers' when absent.
     pub worker: Option<String>,
+    /// This version's figures only (DN40), read as it declares them; the highest when absent.
+    pub version: Option<String>,
+}
+
+/// Versions in order, as people read them (DN40): their dot-separated parts compared one by
+/// one, a part of ASCII digits as a number (`1.10` after `1.9`, `1.010` as `1.10`), before one
+/// that isn't, which compares as text; a version with more parts after its prefix; equal so far,
+/// the text itself, so the order is total (agy's review of DN40: `1.0` and `1.00` were equal and
+/// a mixed part made it intransitive, which a sort may panic on).
+#[must_use]
+pub fn version_order(a: &str, b: &str) -> std::cmp::Ordering {
+    /// A part's place: numbers first, by value (leading zeros dropped, then by length and digits:
+    /// no overflow), then text.
+    fn key(part: &str) -> (u8, usize, &str) {
+        if !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()) {
+            let digits = part.trim_start_matches('0');
+            (0, digits.len(), digits)
+        } else {
+            (1, 0, part)
+        }
+    }
+    fn parts(version: &str) -> Vec<(u8, usize, &str)> {
+        version.split('.').map(key).collect()
+    }
+    parts(a).cmp(&parts(b)).then_with(|| a.cmp(b))
 }
 
 /// The extensions workers ran, with their versions and workers.
@@ -243,12 +271,16 @@ pub async fn list_extensions(State(state): State<ApiState>) -> ApiResult<Extensi
                 let seen_at = versions.iter().map(|v| v.seen_at).max()?;
                 Some(ExtensionSummaryView {
                     name,
-                    versions: versions
-                        .iter()
-                        .map(|v| v.version.clone())
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
+                    versions: {
+                        let mut listed: Vec<String> = versions
+                            .iter()
+                            .map(|v| v.version.clone())
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect();
+                        listed.sort_by(|a, b| version_order(b, a));
+                        listed
+                    },
                     workers: versions
                         .iter()
                         .map(|v| v.worker_id.clone())
@@ -268,23 +300,53 @@ pub async fn list_extensions(State(state): State<ApiState>) -> ApiResult<Extensi
     }))
 }
 
-/// `name`'s versions on workers, the newest heard of first; not found without any.
-async fn versions_of(state: &ApiState, name: &str) -> Result<Vec<ExtensionVersion>, ApiError> {
+/// `name`'s versions on workers (only `version` when given), the highest first and its newest
+/// heard of first ([`version_order`], DN40); not found without any.
+async fn versions_of(
+    state: &ApiState,
+    name: &str,
+    version: Option<&str>,
+) -> Result<Vec<ExtensionVersion>, ApiError> {
     let mut versions: Vec<ExtensionVersion> = state
         .db
         .extension_versions()
         .await?
         .into_iter()
         .filter(|v| v.name == name)
+        .filter(|v| version.is_none_or(|asked| v.version == asked))
         .collect();
-    let known_by_events =
-        || async { Ok::<_, ApiError>(!state.db.extension_events(name, None, 1).await?.is_empty()) };
+    if let Some(asked) = version
+        && versions.is_empty()
+    {
+        return Err(ApiError::NotFound(format!(
+            "no worker has run version `{asked}` of extension `{name}`"
+        )));
+    }
+    // One version shown, never several mixed (agy's review of DN40): without one asked for, the
+    // highest.
+    if version.is_none()
+        && let Some(highest) = versions
+            .iter()
+            .map(|v| v.version.clone())
+            .max_by(|a, b| version_order(a, b))
+    {
+        versions.retain(|v| v.version == highest);
+    }
+    let known_by_events = || async {
+        Ok::<_, ApiError>(
+            !state
+                .db
+                .extension_events(name, (None, None), 1)
+                .await?
+                .is_empty(),
+        )
+    };
     if versions.is_empty() && !known_by_events().await? {
         return Err(ApiError::NotFound(format!(
             "no worker has run extension `{name}`"
         )));
     }
-    versions.sort_by_key(|v| std::cmp::Reverse(v.seen_at));
+    versions.sort_by(|a, b| version_order(&b.version, &a.version).then(b.seen_at.cmp(&a.seen_at)));
     Ok(versions)
 }
 
@@ -308,7 +370,8 @@ pub async fn get_extension(
 ) -> ApiResult<ExtensionView> {
     let Query(query) = query.map_err(|e| ApiError::BadRequest(e.body_text()))?;
     let worker = query.worker.filter(|w| !w.is_empty());
-    let versions = versions_of(&state, &name).await?;
+    let version = query.version.filter(|v| !v.is_empty());
+    let versions = versions_of(&state, &name, version.as_deref()).await?;
     // Known only by its events: its workers are theirs (agy's review of M5.2i5: none listed).
     let event_workers: Vec<ExtensionWorkerView> = if versions.is_empty() {
         state
@@ -330,9 +393,10 @@ pub async fn get_extension(
     } else {
         Vec::new()
     };
+    let shown = versions.first().map(|v| v.version.clone());
     let events = state
         .db
-        .extension_events(&name, worker.as_deref(), LISTED)
+        .extension_events(&name, (worker.as_deref(), shown.as_deref()), LISTED)
         .await?
         .into_iter()
         .map(|e| ExtensionEventView {
@@ -396,9 +460,10 @@ pub async fn get_extension(
     }))
 }
 
-/// An extension's metrics over a range, in buckets, summed over its workers and versions (or of
-/// one worker, `worker`, up to a day: DN21); at most its `max_series` series a metric, the
-/// smallest past it folded into `other`.
+/// An extension's metrics over a range, in buckets, summed over its workers (or of one worker,
+/// `worker`, up to a day: DN21), of one version (`version`, else summed over those declaring a
+/// metric as the highest does: DN40); at most its `max_series` series a metric, the smallest
+/// past it folded into `other`.
 #[utoipa::path(get, path = "/api/v1/extensions/{name}/metrics", tag = "workers",
     params(("name" = String, Path, description = "The extension"), ExtensionMetricsQuery),
     responses((status = 200, body = ExtensionMetrics), (status = 400, body = crate::views::ErrorBody),
@@ -417,7 +482,8 @@ pub async fn extension_metrics(
             range.name()
         )));
     }
-    let versions = versions_of(&state, &name).await?;
+    let version = query.version.filter(|v| !v.is_empty());
+    let versions = versions_of(&state, &name, version.as_deref()).await?;
     let to = (state.clock)();
     let (from, cut, to) = range.bounds(&state.db, to).await?;
     let mut samples = Vec::new();
@@ -437,6 +503,10 @@ pub async fn extension_metrics(
     );
     if let Some(worker) = &worker {
         samples.retain(|s| &s.worker_id == worker);
+    }
+    // The version shown alone: asked for, else the highest (`versions_of` keeps only it).
+    if let Some(shown) = versions.first() {
+        samples.retain(|s| s.version == shown.version);
     }
     let samples = of_compatible_versions(samples, &versions);
     // Known only by its events: no metrics.

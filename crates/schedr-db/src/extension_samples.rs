@@ -681,26 +681,24 @@ impl Database {
     pub async fn extension_events(
         &self,
         extension: &str,
-        worker: Option<&str>,
+        (worker, version): (Option<&str>, Option<&str>),
         limit: u32,
     ) -> Result<Vec<StoredEvent>, DbError> {
+        // Of `version` and those of none (discovered, a service's: every version's), before
+        // the limit (agy's review of DN40: filtered after it, an older version's were cut).
         const READ: &str = "SELECT worker_id, version, kind, {ts<}at{>ts}, message \
-            FROM extension_events WHERE name = $1 ORDER BY at DESC, id DESC LIMIT $2";
-        const OF_WORKER: &str = "SELECT worker_id, version, kind, {ts<}at{>ts}, message \
-            FROM extension_events WHERE name = $1 AND worker_id = $3 \
+            FROM extension_events WHERE name = $1 AND ($3{text} IS NULL OR worker_id = $3) \
+            AND ($4{text} IS NULL OR version = '' OR version = $4) \
             ORDER BY at DESC, id DESC LIMIT $2";
-        let read = if worker.is_some() { OF_WORKER } else { READ };
         let rows: Vec<(String, String, String, String, String)> =
             on_pool!(self, |pool, backend| {
-                let query = crate::query::query_as(sql(backend, read))
+                crate::query::query_as(sql(backend, READ))
                     .bind(extension)
-                    .bind(i64::from(limit));
-                match worker {
-                    Some(worker) => query.bind(worker),
-                    None => query,
-                }
-                .fetch_all(pool)
-                .await?
+                    .bind(i64::from(limit))
+                    .bind(worker)
+                    .bind(version)
+                    .fetch_all(pool)
+                    .await?
             });
         rows.into_iter()
             .map(|(worker_id, version, kind, at, message)| {

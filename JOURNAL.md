@@ -3632,3 +3632,31 @@ it once more, a second stall a warning; every other check (tasks run once, none 
 fails as before. Each report gains `io_full_stall_s`. Scenario 14's p99 ratio, read from buckets
 a square root of 2 apart, allows two steps (limit 2.0, was 1.5). Not chosen: wider limits
 everywhere; timing checked only on quiet runs, never rerun; leaving it.
+
+### <a id="DN40"></a>2026-11-24: the Extensions page, extension then version then deployment (decision note 40; corrects D513)
+
+The user, trying the Kubernetes demo: the page should be tabs, not a list. Talked through: a
+deployment level first reads wrong ("the moment user clicks Extensions and sees something to
+choose suggests it's extensions that he chooses"); a tab per `name@version` (the user's idea)
+solves differing versions but multiplies tabs; so one tab per extension with the version as a
+filter, always set, the latest by default, no "all versions" (the user). Built before 1.2.0,
+reviewed, no rc for it (the user: "just a UI change"). "Latest" is the highest version by number,
+not the one heard of last (after a rollback that would be the older).
+
+### 2026-11-24: the Extensions page's review (agy, DN40)
+
+agy (high) reviewed 76a075c5; of its 11 findings, fixed: versionless events (a discovery, a
+service's start or crash) left out of every version's page, and the version filtered after the
+events' limit (both in SQL now, before it); `version_order` not a total order (`1.0` and `1.00`
+equal, a mixed part intransitive, which a sort may panic on: parts compared by a key, ties by
+the text); the API without `version=` mixing every version (the highest alone now); a deployment
+knowing the extension only by its events out of reach (its "where it runs" link shows its
+events); an extension no answering deployment ran a bare 404 hiding one that didn't answer;
+the version and deployment links dropping the range and deployment; two integration tests on
+the address removed. Logged: B292, a version's page listing every version's attempts (their
+table has no version; a column for the next migration). Left: `/extensions` reading the lists
+twice (its redirect).
+
+The separate-UI demo, for the user to see two versions: the dummy plugin and service serve 1.0
+and 1.1, the second deployment configured with both and `extension_newer` (1.1 every 2 minutes,
+reporting every metric), and the version dropdown shown always ("none" with no version known).

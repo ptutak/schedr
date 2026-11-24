@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} · Extensions · schedr{% endblock %}
 {% block content %}
-<p class="crumbs"><a href="{{ page.base }}/extensions">Extensions</a> · {{ deployment }}</p>
 <h1>Extensions</h1>
 <nav class="tabs ext-tabs" aria-label="Extensions">{% for (label, href, open) in tabs %}<a class="tab{% if *open %} open{% endif %}" href="{{ href }}"{% if *open %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
+{% endfor %}
 <div class="metrics-choices">
+  <details class="dropdown dropdown-switch" id="ext-version-menu"><summary aria-label="Version: choose">Version {% if version.is_empty() %}none{% else %}{{ version }}{% endif %}</summary><div class="dropdown-menu" role="menu" aria-label="Version">{% for (label, href, open) in versions %}<a class="option{% if *open %} current{% endif %}" role="menuitem" href="{{ href }}"{% if *open %} aria-current="true"{% endif %}>{{ label }}</a>{% else %}<span class="dim option">No worker has run a version of it</span>{% endfor %}</div></details>
+  {% if !deployment_tabs.is_empty() %}<nav class="choices" aria-label="Deployments">{% for (label, href, open) in deployment_tabs %}<a href="{{ href }}"{% if *open %} class="current" aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</nav>{% endif %}
   {% if worker_tabs.len() > 1 %}<nav class="choices" aria-label="Workers">{% for (label, href, open) in worker_tabs %}<a href="{{ href }}"{% if *open %} class="current" aria-current="true"{% endif %}>{% if loop.first %}{{ label }}{% else %}<span class="mono">{{ label }}</span>{% endif %}</a>{% endfor %}</nav>{% endif %}
   <nav class="choices" aria-label="Range">{% for (label, href, current) in ranges %}<a href="{{ href }}"{% if *current %} class="current" aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}</nav>
 </div>
+{% if !runs_here.is_empty() %}<p class="dim runs-here">Runs on {% for (said, href) in runs_here %}{% if !loop.first %} · {% endif %}<a href="{{ href }}">{{ said }}</a>{% endfor %}.{% if deployment_tabs.is_empty() && !deployment.is_empty() %} Shown: {{ deployment }}.{% endif %}</p>{% endif %}
 {% if !worker.is_empty() %}<p class="dim">Worker <span class="mono">{{ worker }}</span>'s own figures, kept a day; past it only all workers' together.</p>{% endif %}
 {% if let Some(error) = error %}
 <div class="banner warning">Unavailable: {{ error }}</div>

@@ -2565,3 +2565,98 @@ async fn a_triggers_runs_are_listed_and_their_logs_read_from_their_workers_maske
         "a trigger has no instances"
     );
 }
+
+/// DN40: an extension's versions listed the highest first, by number (`1.10` after `1.9`); its
+/// page shown as the version asked for, else the highest; a version no worker ran is not found.
+#[tokio::test]
+async fn an_extensions_version_is_chosen_highest_first_or_as_asked() {
+    use schedr_model::extension::EventKind as Kind;
+    let (app, db, _run) = api().await;
+    let declared = schedr_model::extension::Declarations::default();
+    for (version, worker) in [("1.9", "w1"), ("1.10", "w2")] {
+        db.extension_seen("dummy", version, worker, Some((&declared, 10)), ts(NOW))
+            .await
+            .unwrap();
+    }
+    let (_, list) = get(&app, "/api/v1/extensions").await;
+    assert_eq!(list["extensions"][0]["versions"], json!(["1.10", "1.9"]));
+    let (status, highest) = get(&app, "/api/v1/extensions/dummy").await;
+    assert_eq!(
+        (status, &highest["version"]),
+        (StatusCode::OK, &json!("1.10"))
+    );
+    let (_, asked) = get(&app, "/api/v1/extensions/dummy?version=1.9").await;
+    assert_eq!(asked["version"], json!("1.9"));
+    for path in [
+        "/api/v1/extensions/dummy?version=3",
+        "/api/v1/extensions/dummy/metrics?version=3",
+    ] {
+        assert_eq!(get(&app, path).await.0, StatusCode::NOT_FOUND, "{path}");
+    }
+    let (status, _) = get(&app, "/api/v1/extensions/dummy/metrics?version=1.9").await;
+    assert_eq!(status, StatusCode::OK);
+    // One version's events, and those of none (a discovery, a service's): every version's (agy's
+    // review of DN40: they were left out).
+    let events = [
+        schedr_model::extension::ExtensionEvent::now("dummy", None, Kind::Discovered, "found it"),
+        schedr_model::extension::ExtensionEvent::now("dummy", Some("1.9"), Kind::Refused, "of 1.9"),
+        schedr_model::extension::ExtensionEvent::now(
+            "dummy",
+            Some("1.10"),
+            Kind::Refused,
+            "of 1.10",
+        ),
+    ];
+    db.insert_extension_events("w1", &events, 200)
+        .await
+        .unwrap();
+    let said = |view: &Json| -> Vec<String> {
+        view["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["message"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_, of_19) = get(&app, "/api/v1/extensions/dummy?version=1.9").await;
+    let mut of_19 = said(&of_19);
+    of_19.sort();
+    assert_eq!(of_19, ["found it", "of 1.9"]);
+    // Without a version: the highest's alone, its workers too.
+    let (_, highest) = get(&app, "/api/v1/extensions/dummy").await;
+    let mut of_highest = said(&highest);
+    of_highest.sort();
+    assert_eq!(of_highest, ["found it", "of 1.10"]);
+    assert_eq!(highest["workers"].as_array().unwrap().len(), 1, "{highest}");
+}
+
+/// DN40: versions in the order people read them, total (a sort never sees two equal ones).
+#[test]
+fn versions_are_ordered_by_their_parts_as_numbers_then_text() {
+    use crate::extensions::version_order;
+    use std::cmp::Ordering::Greater;
+    assert_eq!(version_order("1.10", "1.9"), Greater);
+    assert_eq!(version_order("1.10.1", "1.10"), Greater);
+    assert_eq!(version_order("2", "1.99.99"), Greater);
+    assert_eq!(version_order("1.a", "1.10"), Greater, "text after numbers");
+    assert_ne!(
+        version_order("1.0", "1.00"),
+        std::cmp::Ordering::Equal,
+        "total: never equal unless the same"
+    );
+    assert_eq!(
+        version_order("1.010", "1.9"),
+        Greater,
+        "a number's leading zeros dropped"
+    );
+    let mut versions = vec![
+        "1.10", "1.9", "1.a", "1.00", "1.0", "10", "1.10-rc1", "1.010",
+    ];
+    versions.sort_by(|a, b| version_order(a, b));
+    assert_eq!(
+        versions,
+        [
+            "1.0", "1.00", "1.9", "1.010", "1.10", "1.10-rc1", "1.a", "10"
+        ]
+    );
+}

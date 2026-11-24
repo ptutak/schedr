@@ -15,7 +15,8 @@ use axum::response::{IntoResponse, Response};
 use jiff::tz::TimeZone;
 use schedr_api::extensions::panels::{per_second, point_of};
 use schedr_api::extensions::{
-    ExtensionMetricView, ExtensionMetrics, ExtensionPointView, ExtensionSeriesView, ExtensionView,
+    ExtensionList, ExtensionMetricView, ExtensionMetrics, ExtensionPointView, ExtensionSeriesView,
+    ExtensionSummaryView, ExtensionView, version_order,
 };
 use schedr_api::series::Range;
 use schedr_client::{Transport, path_segment};
@@ -31,95 +32,63 @@ use crate::pages::render;
 #[cfg(test)]
 mod tests;
 
-/// One extension in the list.
-#[derive(Debug, Clone)]
-pub struct ListedExtension {
-    /// Its name.
-    pub name: String,
-    /// Its page.
-    pub href: String,
-    /// Its versions, joined.
-    pub versions: String,
-    /// Its workers, joined.
-    pub workers: String,
-    /// When a worker last sent its figures.
-    pub seen: String,
-}
-
-/// A deployment's extensions.
-#[derive(Debug, Clone)]
-pub struct DeploymentExtensions {
-    /// The deployment.
-    pub name: String,
-    /// Why they can't be shown.
-    pub error: Option<String>,
-    /// Its extensions.
-    pub extensions: Vec<ListedExtension>,
-}
-
+/// The extensions page with none to show: why (each deployment that didn't answer).
 #[derive(Template)]
 #[template(path = "extensions.html")]
-struct ListPage {
+struct NonePage {
     page: Page,
-    deployments: Vec<DeploymentExtensions>,
+    unavailable: Vec<String>,
 }
 
-/// `GET /extensions`: every deployment's extensions.
+/// Every deployment's extensions, asked at once, in deployment order: each one's list, or why
+/// it can't be read.
+async fn every_deployments<T: Transport + Send + Sync + 'static>(
+    ui: &Arc<Ui<T>>,
+) -> Vec<(String, Result<ExtensionList, String>)> {
+    let mut asked = tokio::task::JoinSet::new();
+    for index in 0..ui.deployments.len() {
+        let ui = Arc::clone(ui);
+        asked.spawn(schedr_client::for_same_user(async move {
+            let answer = ui.deployments[index].client.extensions().await;
+            (index, answer.map_err(|e| e.to_string()))
+        }));
+    }
+    let mut answers = asked.join_all().await;
+    answers.sort_by_key(|(index, _)| *index);
+    answers
+        .into_iter()
+        .map(|(index, answer)| (ui.deployments[index].name.clone(), answer))
+        .collect()
+}
+
+/// Every extension's name any deployment ran, sorted, each once.
+fn every_name(lists: &[(String, Result<ExtensionList, String>)]) -> Vec<String> {
+    lists
+        .iter()
+        .filter_map(|(_, list)| list.as_ref().ok())
+        .flat_map(|list| list.extensions.iter().map(|e| e.name.clone()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// `GET /extensions`: the first extension's page (DN40: the page is its tabs), or that none
+/// has run.
 pub async fn list<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
     headers: HeaderMap,
 ) -> Response {
     let page = Page::new(&headers, ui.docs_dir.is_some());
-    // One deployment: its first extension's tab (DN21), where the others are tabs beside it.
-    if let [only] = ui.deployments.as_slice()
-        && let Ok(list) = only.client.extensions().await
-        && let Some(first) = list.extensions.first()
-    {
-        let href = format!(
-            "{}/d/{}/extensions/{}",
-            page.base,
-            path_segment(&only.name),
-            path_segment(&first.name)
-        );
+    let lists = every_deployments(&ui).await;
+    if let Some(first) = every_name(&lists).first() {
+        let href = format!("{}/extensions/{}", page.base, path_segment(first));
         return axum::response::Redirect::to(&href).into_response();
     }
-    let mut deployments = Vec::new();
-    for deployment in &ui.deployments {
-        let zone = page.zone.clone().unwrap_or(TimeZone::UTC);
-        let listed = match deployment.client.extensions().await {
-            Ok(list) => DeploymentExtensions {
-                name: deployment.name.clone(),
-                error: None,
-                extensions: list
-                    .extensions
-                    .into_iter()
-                    .map(|e| ListedExtension {
-                        href: format!(
-                            "{}/d/{}/extensions/{}",
-                            page.base,
-                            path_segment(&deployment.name),
-                            path_segment(&e.name)
-                        ),
-                        name: e.name,
-                        versions: e.versions.join(", "),
-                        workers: e.workers.join(", "),
-                        seen: e
-                            .seen_at
-                            .to_zoned(zone.clone())
-                            .strftime("%Y-%m-%d %H:%M")
-                            .to_string(),
-                    })
-                    .collect(),
-            },
-            Err(error) => DeploymentExtensions {
-                name: deployment.name.clone(),
-                error: Some(error.to_string()),
-                extensions: Vec::new(),
-            },
-        };
-        deployments.push(listed);
-    }
-    render(&ListPage { page, deployments }, StatusCode::OK)
+    let unavailable = lists
+        .into_iter()
+        .filter_map(|(name, list)| list.err().map(|why| format!("{name}: {why}")))
+        .collect();
+    render(&NonePage { page, unavailable }, StatusCode::OK)
 }
 
 /// One cell of a row.
@@ -151,12 +120,17 @@ type Tab = (String, String, bool);
 #[template(path = "extension.html")]
 struct ExtensionPage {
     page: Page,
-    deployment: String,
     name: String,
+    /// The deployment shown.
+    deployment: String,
     error: Option<String>,
-    /// The deployment's extensions, this one open (DN21).
+    /// Every extension any deployment ran, this one open (DN40).
     tabs: Vec<Tab>,
-    /// "All workers", then each worker heard from in the last day.
+    /// Its versions, the highest first, the one shown chosen (DN40: always one).
+    versions: Vec<Tab>,
+    /// The deployments running that version; none shown with only one.
+    deployment_tabs: Vec<Tab>,
+    /// "All workers", then each worker of that version heard from in the last day.
     worker_tabs: Vec<Tab>,
     /// The worker shown; empty for all of them.
     worker: String,
@@ -164,30 +138,71 @@ struct ExtensionPage {
     rows: Vec<RowView>,
     folded: Vec<String>,
     workers: Vec<(String, String, String)>,
-    /// Its version heard of last; empty when known only by its events.
+    /// The version shown; empty when known only by its events.
     version: String,
+    /// Where it runs: each deployment's versions, and its page (DN40).
+    runs_here: Vec<(String, String)>,
+    /// The deployments that didn't answer, with why.
+    unavailable: Vec<String>,
     /// With no panels to list them in: its events and attempts (Codex's second review of
     /// M5.2i5: a plugin never run showed none).
     events: String,
 }
 
-/// Which range, and whose figures.
+/// Which version, deployment, worker and range (DN40).
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct ExtensionQuery {
     /// `1h`, `24h` (the default), `7d` or `30d`.
     pub range: Option<String>,
     /// One worker's figures (DN21): 1h or 24h only, its own kept a day.
     pub worker: Option<String>,
+    /// The version shown; the highest when absent or unknown.
+    pub version: Option<String>,
+    /// The deployment shown, among those running the version; the first of them when absent.
+    pub deployment: Option<String>,
 }
 
 /// How long a worker's own figures are kept, and so who has a tab: those heard from in it.
 const WORKER_KEPT: jiff::SignedDuration = jiff::SignedDuration::from_hours(24);
 
-/// `GET /d/<deployment>/extensions/<name>?range=&worker=`: its panels over a range, of all its
-/// workers or one (DN21), in a tab beside the deployment's other extensions.
+/// Where a page is: what its links keep and change (DN40).
+#[derive(Debug, Clone, Copy)]
+struct Here<'a> {
+    base: &'a str,
+    name: &'a str,
+    version: &'a str,
+    deployment: &'a str,
+    worker: Option<&'a str>,
+    range: Range,
+}
+
+impl Here<'_> {
+    /// This page's address.
+    fn href(&self) -> String {
+        let mut url = format!(
+            "{}/extensions/{}?range={}",
+            self.base,
+            path_segment(self.name),
+            self.range.name()
+        );
+        for (key, value) in [("version", self.version), ("deployment", self.deployment)] {
+            if !value.is_empty() {
+                let _ = write!(url, "&{key}={}", path_segment(value));
+            }
+        }
+        if let Some(worker) = self.worker {
+            let _ = write!(url, "&worker={}", path_segment(worker));
+        }
+        url
+    }
+}
+
+/// `GET /extensions/<name>?version=&deployment=&worker=&range=`: one version of an extension
+/// on one deployment, its panels over a range, of all its workers or one (DN21, DN40); its tabs
+/// every extension any deployment ran.
 pub async fn page<T: Transport + Send + Sync + 'static>(
     State(ui): State<Arc<Ui<T>>>,
-    Path((deployment, name)): Path<(String, String)>,
+    Path(name): Path<String>,
     headers: HeaderMap,
     query: Result<Query<ExtensionQuery>, QueryRejection>,
 ) -> Response {
@@ -202,88 +217,264 @@ pub async fn page<T: Transport + Send + Sync + 'static>(
         )
             .into_response();
     };
+    let lists = every_deployments(&ui).await;
+    let names = every_name(&lists);
+    let known = names.contains(&name);
+    let chosen = Chosen::of(&lists, &name, &query);
     let worker = query.worker.filter(|w| !w.is_empty());
     let range = shown_range(asked, worker.is_some());
-    let Some(found) = ui.deployments.iter().find(|d| d.name == deployment) else {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("no deployment `{deployment}`"),
-        )
-            .into_response();
+    let base = page.base.clone();
+    let here = Here {
+        base: &base,
+        name: &name,
+        version: &chosen.version,
+        deployment: &chosen.deployment,
+        worker: worker.as_deref(),
+        range,
     };
-    let href = format!(
-        "{}/d/{}/extensions/{}",
-        page.base,
-        path_segment(&deployment),
-        path_segment(&name)
-    );
-    let ranges = range_tabs(&href, range, worker.as_deref());
-    let zone = page.zone.clone().unwrap_or(TimeZone::UTC);
+    let (tabs, versions, deployment_tabs) = choices(&names, &chosen, here, asked);
+    let ranges = range_tabs(here);
+    let unavailable = lists
+        .iter()
+        .filter_map(|(d, list)| list.as_ref().err().map(|why| format!("{d}: {why}")))
+        .collect();
+    let mut shown = ExtensionPage {
+        page,
+        name: name.clone(),
+        deployment: chosen.deployment.clone(),
+        error: None,
+        tabs,
+        versions,
+        deployment_tabs,
+        worker_tabs: Vec::new(),
+        worker: worker.clone().unwrap_or_default(),
+        ranges,
+        rows: Vec::new(),
+        folded: Vec::new(),
+        workers: Vec::new(),
+        version: chosen.version.clone(),
+        runs_here: runs_here(&chosen, here, asked),
+        unavailable,
+        events: String::new(),
+    };
+    // Not one any answering deployment ran: the page, its tabs and banners, said so (agy's
+    // review: a bare 404 hid a deployment that didn't answer).
+    if !known {
+        shown.error = Some(format!(
+            "no deployment that answered has run extension `{name}`"
+        ));
+        return render(&shown, StatusCode::NOT_FOUND);
+    }
+    let Some(found) = ui.deployments.iter().find(|d| d.name == chosen.deployment) else {
+        return render(&shown, StatusCode::OK);
+    };
+    let version = (!chosen.version.is_empty()).then_some(chosen.version.as_str());
     let read = tokio::join!(
-        found.client.extensions(),
-        found.client.extension(&name, worker.as_deref()),
+        found.client.extension(&name, worker.as_deref(), version),
         found
             .client
-            .extension_metrics(&name, range.name(), worker.as_deref())
+            .extension_metrics(&name, range.name(), worker.as_deref(), version)
     );
-    let tabs = read.0.as_ref().map_or_else(
-        |_| vec![(name.clone(), href.clone(), true)],
-        |list| {
-            let base = format!("{}/d/{}/extensions", page.base, path_segment(&deployment));
-            extension_tabs(list, &base, &name, asked)
-        },
-    );
-    let (extension, metrics) = match (read.1, read.2) {
+    let (extension, metrics) = match read {
         (Ok(extension), Ok(metrics)) => (extension, metrics),
         (Err(error), _) | (_, Err(error)) => {
-            let shown = ExtensionPage {
-                page,
-                deployment,
-                name,
-                error: Some(error.to_string()),
-                tabs,
-                worker_tabs: Vec::new(),
-                worker: worker.unwrap_or_default(),
-                ranges,
-                rows: Vec::new(),
-                folded: Vec::new(),
-                workers: Vec::new(),
-                version: String::new(),
-                events: String::new(),
-            };
+            shown.error = Some(error.to_string());
             return render(&shown, StatusCode::OK);
         }
     };
-    let worker_tabs = worker_tabs(&extension, &href, asked, worker.as_deref());
-    let runs_href = format!("{}/d/{}/runs", page.base, path_segment(&deployment));
-    let rows = rows(&extension, &metrics, &zone, &runs_href);
-    let events =
-        if rows.is_empty() && !(extension.events.is_empty() && extension.attempts.is_empty()) {
-            events(&extension, &runs_href, &zone)
-        } else {
-            String::new()
-        };
-    let shown = ExtensionPage {
-        page,
-        deployment,
-        name,
-        error: None,
-        tabs,
-        worker_tabs,
-        worker: worker.unwrap_or_default(),
-        ranges,
-        rows,
-        folded: metrics
-            .metrics
-            .iter()
-            .filter(|m| m.folded)
-            .map(|m| m.name.clone())
-            .collect(),
-        workers: workers_table(&extension, &zone),
-        version: extension.version.clone(),
-        events,
-    };
+    let zone = shown.page.zone.clone().unwrap_or(TimeZone::UTC);
+    let runs_href = format!("{base}/d/{}/runs", path_segment(&chosen.deployment));
+    shown.worker_tabs = worker_tabs(&extension, here, asked);
+    shown.rows = rows(&extension, &metrics, &zone, &runs_href);
+    if shown.rows.is_empty() && !(extension.events.is_empty() && extension.attempts.is_empty()) {
+        shown.events = events(&extension, &runs_href, &zone);
+    }
+    shown.folded = metrics
+        .metrics
+        .iter()
+        .filter(|m| m.folded)
+        .map(|m| m.name.clone())
+        .collect();
+    shown.workers = workers_table(&extension, &zone);
     render(&shown, StatusCode::OK)
+}
+
+/// The page's extension tabs (every name, each at the range `asked`), its versions, and its
+/// deployments' tabs (none with one), each keeping what else `here` shows (DN40).
+fn choices(
+    names: &[String],
+    chosen: &Chosen,
+    here: Here<'_>,
+    asked: Range,
+) -> (Vec<Tab>, Vec<Tab>, Vec<Tab>) {
+    let tabs = names
+        .iter()
+        .map(|n| {
+            let href = format!(
+                "{}/extensions/{}?range={}",
+                here.base,
+                path_segment(n),
+                asked.name()
+            );
+            (n.clone(), href, n == here.name)
+        })
+        .collect();
+    // A link keeps the range, and the deployment when it runs that version too (agy's review).
+    let runs = |d: &str, v: &str| {
+        chosen
+            .deployments_versions
+            .iter()
+            .any(|(name, versions)| name == d && versions.iter().any(|x| x == v))
+    };
+    let versions = chosen
+        .versions
+        .iter()
+        .map(|v| {
+            let deployment = if runs(here.deployment, v) {
+                here.deployment
+            } else {
+                ""
+            };
+            let href = Here {
+                version: v,
+                deployment,
+                worker: None,
+                range: asked,
+                ..here
+            }
+            .href();
+            (v.clone(), href, v == &chosen.version)
+        })
+        .collect();
+    let deployments = if chosen.running.len() > 1 {
+        chosen
+            .running
+            .iter()
+            .map(|d| {
+                let href = Here {
+                    deployment: d,
+                    worker: None,
+                    range: asked,
+                    ..here
+                }
+                .href();
+                (d.clone(), href, d == &chosen.deployment)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (tabs, versions, deployments)
+}
+
+/// "Where it runs": each deployment's versions, a link to its page (its own highest version, or
+/// its events for one that knows it only by them).
+fn runs_here(chosen: &Chosen, here: Here<'_>, asked: Range) -> Vec<(String, String)> {
+    chosen
+        .runs_here
+        .iter()
+        .map(|(said, d)| {
+            let href = Here {
+                version: "",
+                deployment: d,
+                worker: None,
+                range: asked,
+                ..here
+            }
+            .href();
+            (said.clone(), href)
+        })
+        .collect()
+}
+
+/// The version and deployment a page shows of an extension (DN40), and what its tabs offer.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Chosen {
+    /// Its versions any deployment ran, the highest first.
+    versions: Vec<String>,
+    /// The version shown: the one asked for if a deployment ran it, else the highest; empty
+    /// when it is known only by its events.
+    version: String,
+    /// The deployments running that version, in deployment order.
+    running: Vec<String>,
+    /// The deployment shown: the one asked for among them, else the first.
+    deployment: String,
+    /// Each deployment that ran it: its versions said, and the deployment (a link to it).
+    runs_here: Vec<(String, String)>,
+    /// Each deployment that ran it and its versions, the highest first.
+    deployments_versions: Vec<(String, Vec<String>)>,
+}
+
+impl Chosen {
+    fn of(
+        lists: &[(String, Result<ExtensionList, String>)],
+        name: &str,
+        query: &ExtensionQuery,
+    ) -> Self {
+        let of_name: Vec<(&String, &ExtensionSummaryView)> = lists
+            .iter()
+            .filter_map(|(d, list)| {
+                let list = list.as_ref().ok()?;
+                Some((d, list.extensions.iter().find(|e| e.name == name)?))
+            })
+            .collect();
+        let mut versions: Vec<String> = of_name
+            .iter()
+            .flat_map(|(_, e)| e.versions.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        versions.sort_by(|a, b| version_order(b, a));
+        let of_deployment = |d: &str| of_name.iter().find(|(name, _)| *name == d).map(|(_, e)| e);
+        // A deployment asked for without a version: its own highest, none for one that knows it
+        // only by its events (agy's review of DN40: such a one was out of reach).
+        let asked = query.deployment.as_deref().and_then(of_deployment);
+        let version = match (&query.version, asked) {
+            (Some(v), _) if versions.contains(v) => v.clone(),
+            (None, Some(e)) => e.versions.first().cloned().unwrap_or_default(),
+            _ => versions.first().cloned().unwrap_or_default(),
+        };
+        let running: Vec<String> = of_name
+            .iter()
+            .filter(|(_, e)| {
+                if version.is_empty() {
+                    e.versions.is_empty()
+                } else {
+                    e.versions.contains(&version)
+                }
+            })
+            .map(|(d, _)| (*d).clone())
+            .collect();
+        let deployment = query
+            .deployment
+            .clone()
+            .filter(|d| running.contains(d))
+            .or_else(|| running.first().cloned())
+            .unwrap_or_default();
+        let runs_here = of_name
+            .iter()
+            .map(|(d, e)| {
+                let said = if e.versions.is_empty() {
+                    format!("{d}: only its events")
+                } else {
+                    format!("{d}: {}", e.versions.join(", "))
+                };
+                (said, (*d).clone())
+            })
+            .collect();
+        let deployments_versions = of_name
+            .iter()
+            .map(|(d, e)| ((*d).clone(), e.versions.clone()))
+            .collect();
+        Self {
+            versions,
+            version,
+            running,
+            deployment,
+            runs_here,
+            deployments_versions,
+        }
+    }
 }
 
 /// Each version on each worker: the worker, the version, when it was last heard of.
@@ -313,69 +504,51 @@ const fn shown_range(asked: Range, of_a_worker: bool) -> Range {
     }
 }
 
-/// The range links at `href`, of `worker` when one is shown (a day at most: DN21); `range` open.
-fn range_tabs(href: &str, range: Range, worker: Option<&str>) -> Vec<Tab> {
-    let of_worker = worker.map_or_else(String::new, |w| format!("&worker={}", path_segment(w)));
+/// The range links of `here`, of its worker when one is shown (a day at most: DN21); its range
+/// open.
+fn range_tabs(here: Here<'_>) -> Vec<Tab> {
     Range::ALL
         .iter()
-        .filter(|r| worker.is_none() || matches!(r, Range::Hour | Range::Day))
+        .filter(|r| here.worker.is_none() || matches!(r, Range::Hour | Range::Day))
         .map(|r| {
-            (
-                r.name().to_owned(),
-                format!("{href}?range={}{of_worker}", r.name()),
-                *r == range,
-            )
+            let href = Here { range: *r, ..here }.href();
+            (r.name().to_owned(), href, *r == here.range)
         })
         .collect()
 }
 
-/// A tab for each extension of `list`, under `base`, with the range `asked`; `name` open.
-fn extension_tabs(
-    list: &schedr_api::extensions::ExtensionList,
-    base: &str,
-    name: &str,
-    asked: Range,
-) -> Vec<Tab> {
-    list.extensions
-        .iter()
-        .map(|e| {
-            (
-                e.name.clone(),
-                format!("{base}/{}?range={}", path_segment(&e.name), asked.name()),
-                e.name == name,
-            )
-        })
-        .collect()
-}
-
-/// The sub-tabs (DN21): "All workers", then each worker heard from in the last day, sorted, at
-/// `href` with the range `asked` (a worker's shows its last day of a longer one); `worker` open.
+/// The sub-tabs (DN21): "All workers", then each worker of the version shown heard from in the
+/// last day, sorted, each at the range `asked` (a worker's shows its last day of a longer one);
+/// the worker of `here` open.
 #[must_use]
-pub fn worker_tabs(
-    extension: &ExtensionView,
-    href: &str,
-    asked: Range,
-    worker: Option<&str>,
-) -> Vec<Tab> {
+fn worker_tabs(extension: &ExtensionView, here: Here<'_>, asked: Range) -> Vec<Tab> {
     let since = jiff::Timestamp::now() - WORKER_KEPT;
     let recent: std::collections::BTreeSet<&str> = extension
         .workers
         .iter()
         .filter(|w| w.seen_at >= since)
+        .filter(|w| here.version.is_empty() || w.version == here.version)
         .map(|w| w.worker_id.as_str())
-        .chain(worker)
+        .chain(here.worker)
         .collect();
     let mut tabs = vec![(
         "All workers".to_owned(),
-        format!("{href}?range={}", asked.name()),
-        worker.is_none(),
+        Here {
+            worker: None,
+            range: asked,
+            ..here
+        }
+        .href(),
+        here.worker.is_none(),
     )];
     tabs.extend(recent.into_iter().map(|w| {
-        (
-            w.to_owned(),
-            format!("{href}?range={}&worker={}", asked.name(), path_segment(w)),
-            worker == Some(w),
-        )
+        let href = Here {
+            worker: Some(w),
+            range: asked,
+            ..here
+        }
+        .href();
+        (w.to_owned(), href, here.worker == Some(w))
     }));
     tabs
 }

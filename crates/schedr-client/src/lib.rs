@@ -695,8 +695,9 @@ impl<T: Transport> Client<T> {
             .await
     }
 
-    /// `GET /api/v1/extensions/{name}?worker=`: one extension, its metrics and page, its events
-    /// and attempts `worker`'s only when given (DN21).
+    /// `GET /api/v1/extensions/{name}?worker=&version=`: its versions on its workers, and the
+    /// declarations and events of `version` (the highest when not given, DN40), of `worker`
+    /// only when given (DN21).
     ///
     /// # Errors
     ///
@@ -705,18 +706,20 @@ impl<T: Transport> Client<T> {
         &self,
         name: &str,
         worker: Option<&str>,
+        version: Option<&str>,
     ) -> Result<schedr_api::extensions::ExtensionView, ClientError> {
-        let worker = worker.map_or_else(String::new, |w| format!("?worker={}", path_segment(w)));
+        let query = extension_query("", &[("worker", worker), ("version", version)]);
         self.call(
             Method::Get,
-            format!("/api/v1/extensions/{}{worker}", path_segment(name)),
+            format!("/api/v1/extensions/{}{query}", path_segment(name)),
             None,
         )
         .await
     }
 
-    /// `GET /api/v1/extensions/{name}/metrics?range=&worker=`: its metrics over `range`, of
-    /// `worker` only when given (DN21).
+    /// `GET /api/v1/extensions/{name}/metrics?range=&worker=&version=`: its metrics over
+    /// `range`, of `worker` only when given (DN21), of `version` (the highest when not given,
+    /// DN40).
     ///
     /// # Errors
     ///
@@ -726,15 +729,13 @@ impl<T: Transport> Client<T> {
         name: &str,
         range: &str,
         worker: Option<&str>,
+        version: Option<&str>,
     ) -> Result<schedr_api::extensions::ExtensionMetrics, ClientError> {
-        let worker = worker.map_or_else(String::new, |w| format!("&worker={}", path_segment(w)));
+        let first = format!("range={}", path_segment(range));
+        let query = extension_query(&first, &[("worker", worker), ("version", version)]);
         self.call(
             Method::Get,
-            format!(
-                "/api/v1/extensions/{}/metrics?range={}{worker}",
-                path_segment(name),
-                path_segment(range)
-            ),
+            format!("/api/v1/extensions/{}/metrics{query}", path_segment(name)),
             None,
         )
         .await
@@ -1863,4 +1864,22 @@ pub enum TaskAction {
 /// other parameters); empty for none.
 fn instance(map_index: Option<u32>, separator: char) -> String {
     map_index.map_or_else(String::new, |i| format!("{separator}map_index={i}"))
+}
+
+/// A query string of `first` (empty for none) and the `optional` parameters given, escaped.
+fn extension_query(first: &str, optional: &[(&str, Option<&str>)]) -> String {
+    let mut parts: Vec<String> = (!first.is_empty())
+        .then(|| first.to_owned())
+        .into_iter()
+        .collect();
+    parts.extend(
+        optional
+            .iter()
+            .filter_map(|(key, value)| value.map(|v| format!("{key}={}", path_segment(v)))),
+    );
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", parts.join("&"))
+    }
 }

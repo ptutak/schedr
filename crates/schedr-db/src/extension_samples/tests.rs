@@ -129,13 +129,16 @@ async fn an_extensions_events_are_kept_newest_first_trimmed_and_deleted_when_old
     )
     .await
     .unwrap();
-    let small = db.extension_events("small", None, 10).await.unwrap();
+    let small = db
+        .extension_events("small", (None, None), 10)
+        .await
+        .unwrap();
     assert_eq!(
         small.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(),
         ["event 3", "event 2"]
     );
     let kept = db
-        .extension_events("k", None, u32::try_from(KEPT_EVENTS * 2).unwrap())
+        .extension_events("k", (None, None), u32::try_from(KEPT_EVENTS * 2).unwrap())
         .await
         .unwrap();
     assert_eq!(kept.len(), KEPT_EVENTS, "the oldest past the cap went");
@@ -145,19 +148,33 @@ async fn an_extensions_events_are_kept_newest_first_trimmed_and_deleted_when_old
         (kept[0].worker_id.as_str(), kept[0].kind),
         ("w1", EventKind::Dropped)
     );
-    assert_eq!(db.extension_events("k", None, 3).await.unwrap().len(), 3);
+    assert_eq!(
+        db.extension_events("k", (None, None), 3)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
     let deleted = db
         .delete_old_extension_events(ts("2026-11-21T10:01:00Z"))
         .await
         .unwrap();
     // Those before 10:01: k's 5 to 59, other's one, small's two kept.
     assert_eq!(deleted, 58);
-    assert_eq!(db.extension_events("other", None, 10).await.unwrap(), []);
+    assert_eq!(
+        db.extension_events("other", (None, None), 10)
+            .await
+            .unwrap(),
+        []
+    );
     // DN21: one worker's only (agy's review of M5.2i5: cut from all workers' newest).
     db.insert_extension_events("w2", &[event(KEPT_EVENTS + 10, "k")], KEPT_EVENTS)
         .await
         .unwrap();
-    let of_w2 = db.extension_events("k", Some("w2"), 1).await.unwrap();
+    let of_w2 = db
+        .extension_events("k", (Some("w2"), None), 1)
+        .await
+        .unwrap();
     assert_eq!(
         of_w2
             .iter()

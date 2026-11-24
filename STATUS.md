@@ -10,15 +10,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Then:** R1.2, M5.3a, M5.3b, M5.3c, M6.1.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B292 (low/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN40 (2026-11-24): the Extensions page, extension then version then deployment (corrects D513)
 - DN39 (2026-11-24): M5.2j: runs and DAGs in numbered pages; several deployments page each one (adds to D517)
 - D522 (2026-11-24): a trigger's own cancel grace
 - DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
 - DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
-- DN36 (2026-11-23): An attempt's statuses written off the round are coalesced by phase (adds to D521)
 - M5.2k (2026-11-24): The bugs found and left before 1.2.0 fixed
 - M5.2j (2026-11-24): Runs and DAGs in numbered pages (decision 517)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)

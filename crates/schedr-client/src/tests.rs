@@ -649,3 +649,42 @@ async fn a_stalled_in_process_stream_dropped_by_its_reader_is_closed_at_once() {
         .await
         .expect("the stream dropped with its reader");
 }
+
+/// DN40: an extension's reads name its version and worker when given, escaped, and nothing
+/// else when not.
+#[tokio::test]
+async fn an_extensions_reads_carry_their_version_and_worker() {
+    let view = json!({"name": "d", "version": "1", "max_series": 1, "workers": [], "metrics": [], "panels": []});
+    let metrics = json!({"range": "1h", "bucket_s": 60, "from": "2026-11-24T10:00:00Z", "to": "2026-11-24T11:00:00Z", "metrics": []});
+    let api = client(vec![
+        (200, view.clone()),
+        (200, view),
+        (200, metrics.clone()),
+        (200, metrics),
+    ]);
+    api.extension("d x", None, None).await.unwrap();
+    api.extension("d x", Some("w 1"), Some("1.0&b"))
+        .await
+        .unwrap();
+    api.extension_metrics("d x", "1h", None, None)
+        .await
+        .unwrap();
+    api.extension_metrics("d x", "1h", Some("w 1"), Some("1.0"))
+        .await
+        .unwrap();
+    let paths: Vec<String> = api
+        .transport()
+        .seen()
+        .into_iter()
+        .map(|(_, path, _)| path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/extensions/d%20x",
+            "/api/v1/extensions/d%20x?worker=w%201&version=1.0%26b",
+            "/api/v1/extensions/d%20x/metrics?range=1h",
+            "/api/v1/extensions/d%20x/metrics?range=1h&worker=w%201&version=1.0",
+        ]
+    );
+}

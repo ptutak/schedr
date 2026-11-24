@@ -169,7 +169,8 @@ The worker serves them as `schedr_extension_<extension>_<metric>`, labelled with
 gauge's value and a histogram's new observations are kept a minute each for a day, and per 15
 minutes, summed over the workers, for 30 days, as the processes' samples are.
 `GET /api/v1/extensions/<name>/metrics?range=1h` reads them, summed over the workers;
-`&worker=<id>` gives one worker's own, for `1h` or `24h` only (they are kept a day). A metric keeps at most
+`&worker=<id>` gives one worker's own, for `1h` or `24h` only (they are kept a day), and
+`&version=<v>` that version's alone, as it declares them (the highest version without it). A metric keeps at most
 `[extensions.<name>] max_series` series (100) an hour, counted over all the workers and kept
 across a master's takeover: a new label combination past it, or a value outside its declared
 `values`, counts as `other`, and the page says the series was folded. A heartbeat carries at most
@@ -244,10 +245,15 @@ line breaks, nothing having been sent. A counter's line so reads at its busy min
 see each bucket as it was, empty ones left empty, a panel takes `bars`: a bar per bucket, the
 series stacked in it (a counter's growth, a histogram's observations, a gauge's value).
 
-The UI's **Extensions** shows each extension in a tab of its own, beside the deployment's others
-(with several deployments, choose one first). Inside a tab, **All workers** draws the page summed
-over its workers, for 1 hour up to 30 days; beside it, a tab for each worker heard from in the
-last day draws that worker's own figures and events, for 1 hour or a day.
+The UI's **Extensions** shows each extension in a tab of its own, every deployment's together.
+Inside a tab, one version is shown at a time: the highest by default (by number, so `1.10` comes
+after `1.9`), the others in the **Version** dropdown; the page is drawn from that version's
+declarations and figures alone, so versions declaring their metrics differently never mix. Below
+it, a tab for each deployment running that version (none with only one), and a line saying
+where each version runs. Inside a deployment, **All workers** draws the page summed over its
+workers, for 1 hour up to 30 days; beside it, a tab for each worker of that version heard from in
+the last day draws that worker's own figures and events, for 1 hour or a day. The page's address
+is `/extensions/<name>`, with `version`, `deployment`, `worker` and `range`.
 
 ## Being stopped
 

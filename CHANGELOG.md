@@ -64,8 +64,10 @@ task as a pod.
   to a worker whose service is ready.
 - **Plugins observed and controlled as tasks are** (decision 513): an attempt's statuses and
   links, the plugin's declared metrics stored as worker samples, stop reasons; the
-  **Extensions page**, a tab per extension, with its panels (decision 516: a chart's point,
-  combine, group_by and limit), its workers and its events.
+  **Extensions page**: a tab per extension across deployments, one version at a time (the
+  highest by default, the others in a dropdown), then a tab per deployment running it and per
+  worker, with its panels (decision 516: a chart's point, combine, group_by and limit) and its
+  events (DN40).
 - **A Kubernetes plugin** (M5.2i2, M5.2i11): each task a pod, through an async client with
   watches, with panels of every kind; `make demo-kind` shows it on kind with the Kubernetes
   Dashboard.

@@ -1,0 +1,20 @@
+title = "The Extensions page: a tab per extension, one version chosen, its deployments and workers under it"
+date = 2026-11-24
+by = "user"
+on = "D513"
+kind = "corrects"
+summary = '''
+The Extensions page is a tab per extension, every deployment's together (`/extensions` opens the
+first; no list page). Inside it one version is shown, chosen in a Version dropdown, always one:
+the highest by number (`1.10` after `1.9`, parts compared as numbers where both are) by
+default, with no "all versions"; its panels, figures and events are that version's alone
+(`?version=` on `GET /api/v1/extensions/{name}` and its metrics), so versions declaring a
+metric differently never mix. Under it a tab for each deployment running that version (none
+with one), then DN21's worker tabs (All workers and each worker of that version), and a line
+saying where each version runs. Its address is `/extensions/{name}?version=&deployment=&worker=&range=`;
+the former `/d/{deployment}/extensions/{name}` is gone (no users yet). Corrects DN21's summing
+over versions. Not chosen: a tab per `name@version` (tab sprawl, every patch a tab); deployments
+first (the page is Extensions: its first choice an extension); an "all versions" choice (whose
+declarations draw it).
+'''
+history = "JOURNAL.md#DN40"

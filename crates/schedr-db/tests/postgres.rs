@@ -3632,9 +3632,12 @@ async fn an_attempts_statuses_and_links_are_read_back_with_it() {
     db.insert_extension_events("w1", &events, schedr_model::extension::KEPT_EVENTS)
         .await
         .unwrap();
-    let kept = db.extension_events("dummy", None, 1000).await.unwrap();
+    let kept = db
+        .extension_events("dummy", (None, None), 1000)
+        .await
+        .unwrap();
     assert_eq!(
-        db.extension_events("dummy", Some("nobody"), 1000)
+        db.extension_events("dummy", (Some("nobody"), None), 1000)
             .await
             .unwrap(),
         []

@@ -368,7 +368,9 @@ if __name__ == "__main__" and sys.argv[1:] == ["--service"]:
         serve(
             on_call,
             name="dummy",
-            versions=["1.0"],
+            # Two, so a deployment configured with both shows the Extensions page's version
+            # choice (DN40); each worker offers only those its configuration lists.
+            versions=["1.0", "1.1"],
             start=start,
             stop=stop,
             on_drained=on_drained,
@@ -381,7 +383,9 @@ if __name__ == "__main__":
         main(
             run,
             name="dummy",
-            versions=["1.0"],
+            # Two, so a deployment configured with both shows the Extensions page's version
+            # choice (DN40); each worker offers only those its configuration lists.
+            versions=["1.0", "1.1"],
             cleanup=cleanup,
             metrics=METRICS,
             panels=PANELS,

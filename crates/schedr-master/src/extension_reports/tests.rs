@@ -58,7 +58,10 @@ async fn a_flush_is_written_and_events_past_what_it_keeps_of_one_extension_are_d
     reports.offer(events("w1", "dummy", 5));
     reports.offer(events("w2", "other", 1));
     reports.flushed().await;
-    let kept = db.extension_events("dummy", None, 100).await.unwrap();
+    let kept = db
+        .extension_events("dummy", (None, None), 100)
+        .await
+        .unwrap();
     assert_eq!(
         kept.len(),
         3,
@@ -66,7 +69,10 @@ async fn a_flush_is_written_and_events_past_what_it_keeps_of_one_extension_are_d
     );
     assert_eq!(dropped(&metrics, "many"), 2);
     assert_eq!(
-        db.extension_events("other", None, 100).await.unwrap().len(),
+        db.extension_events("other", (None, None), 100)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -118,7 +124,10 @@ async fn a_slow_database_drops_reports_and_never_holds_up_whoever_hands_them_ove
     reports.offer(events("w1", "dummy", 1));
     reports.flushed().await;
     assert_eq!(
-        db.extension_events("dummy", None, 100).await.unwrap().len(),
+        db.extension_events("dummy", (None, None), 100)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }

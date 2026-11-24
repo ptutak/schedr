@@ -4121,9 +4121,7 @@ fn one_workers_figures_are_its_own_and_kept_a_day(standalone: &Standalone) {
         "a worker's figures past a day are refused"
     );
     let page = standalone
-        .page(&format!(
-            "/d/default/extensions/dummy?range=7d&worker={worker}"
-        ))
+        .page(&format!("/extensions/dummy?range=7d&worker={worker}"))
         .unwrap();
     assert!(page.contains("class=\"tab open\""), "{page}");
     assert!(page.contains(">All workers</a>"), "{page}");
@@ -4151,7 +4149,7 @@ fn one_workers_figures_are_its_own_and_kept_a_day(standalone: &Standalone) {
         .unwrap();
     let answer = String::from_utf8_lossy(&output.stdout);
     assert!(
-        answer.starts_with("303 ") && answer.contains("/d/default/extensions/"),
+        answer.starts_with("303 ") && answer.contains("/extensions/dummy"),
         "{answer}"
     );
 }
@@ -4237,7 +4235,7 @@ fn a_plugin_skipped_at_discovery_is_listed_and_its_event_shown() {
         .get("/api/v1/extensions/broken/metrics?range=1h")
         .unwrap();
     assert_eq!(metrics["metrics"], serde_json::json!([]), "{metrics}");
-    let page = standalone.page("/d/default/extensions/broken").unwrap();
+    let page = standalone.page("/extensions/broken").unwrap();
     assert!(page.contains("What happened"), "{page}");
     assert!(page.contains("schedr-ext-broken"), "{page}");
 }

@@ -2,24 +2,8 @@
 {% block title %}Extensions · schedr{% endblock %}
 {% block content %}
 <h1>Extensions</h1>
-<p class="description">The extensions workers ran (decision 513): each one's versions and workers. An extension's page shows the panels its plugin declared.</p>
-{% for deployment in deployments %}
-<section>
-  {% if deployments.len() > 1 %}<h2>{{ deployment.name }}</h2>{% endif %}
-  {% if let Some(error) = deployment.error %}
-  <div class="banner warning">Unavailable: {{ error }}</div>
-  {% else if deployment.extensions.is_empty() %}
-  <p class="empty">No worker has run an extension task yet.</p>
-  {% else %}
-  <table class="list extensions">
-    <thead><tr><th>Extension</th><th>Versions</th><th>Workers</th><th>Last heard</th></tr></thead>
-    <tbody>
-    {% for extension in deployment.extensions %}
-      <tr><td><a href="{{ extension.href }}">{{ extension.name }}</a></td><td>{{ extension.versions }}</td><td class="mono">{{ extension.workers }}</td><td class="time">{{ extension.seen }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
+{% for failure in unavailable %}
+<div class="banner warning">Unavailable: {{ failure }}</div>
 {% endfor %}
+<p class="empty">No worker has run an extension task yet{% if !unavailable.is_empty() %} on the deployments that answered{% endif %}.</p>
 {% endblock %}
