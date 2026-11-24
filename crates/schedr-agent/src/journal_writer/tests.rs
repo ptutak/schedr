@@ -100,10 +100,20 @@ async fn an_attempts_requests_keep_their_order() {
 #[tokio::test]
 async fn requests_pending_together_are_written_as_one_group() {
     // A slow disk: the first request's group holds the writer; the five that arrive meanwhile
-    // go out together in the next, not one by one (six stalls).
+    // go out together, not one by one (six groups). Counted by their group numbers, not timed
+    // (B294: a slow runner took 471 ms for two groups' 200).
     let stall = Duration::from_millis(100);
-    let (_dir, journal, writer, _reported) = writer(stall);
-    let began = Instant::now();
+    let dir = tempfile::TempDir::new().unwrap();
+    let journal = Journal::new(dir.path().join("journal"));
+    let groups = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let seen = Arc::clone(&groups);
+    let writer = Writer::start(
+        journal.clone(),
+        move |w: Written<&'static str>| {
+            seen.lock().unwrap().insert(w.group);
+        },
+        stall,
+    );
     writer.submit("a0", Op::Write(Box::new(finished("a0"))), "first");
     tokio::time::sleep(Duration::from_millis(20)).await;
     for id in ["a1", "a2", "a3", "a4", "a5"] {
@@ -111,11 +121,10 @@ async fn requests_pending_together_are_written_as_one_group() {
     }
     writer.flush().await;
     assert_eq!(ids(&journal).len(), 6);
-    assert!(
-        began.elapsed() < stall * 4,
-        "two groups, not six: {:?}",
-        began.elapsed()
-    );
+    // Two, or three when the runner is slow enough that a1 starts a group of its own before
+    // the rest arrive: never one per request.
+    let count = groups.lock().unwrap().len();
+    assert!((2..=3).contains(&count), "{count} groups for six requests");
 }
 
 #[tokio::test]

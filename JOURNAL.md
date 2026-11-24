@@ -3675,3 +3675,9 @@ agy's review of the B292 fix (3 findings, all fixed): the other writer of `attem
 `add_attempt_status`, now takes the version too; the index is `(extension, extension_version, at)`
 and a version's read names it directly (an `IS NULL OR` kept it from the index); tests on
 Postgres, the API and the master's report for the version.
+
+### 2026-11-24: B294, the journal writer's grouping test timed by the wall clock
+
+CI on f4a6dda3 failed on `requests_pending_together_are_written_as_one_group` alone: 471 ms
+against its 400 ms bound for two groups of a 100 ms stall. It now counts the groups by the number
+each write reports (two, or three on a slow runner, never six), with no time bound.
