@@ -10,7 +10,8 @@ import json
 import os
 import socket
 import threading
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Protocol
 
 FD_ENV = "SCHEDR_AGENT_FD"
 """The variable naming the socket the agent hands a runner or a plugin."""
@@ -20,15 +21,21 @@ MAX_MESSAGE_SIZE = 64 * 1024 * 1024
 
 _HEADER = 4
 
+type Wire = bool | int | float | str | list[Wire] | dict[str, Wire] | None
+"""A JSON value as the channel carries it: what ``json`` reads and writes, nothing else."""
+
+type Message = dict[str, Wire]
+"""A message as received: a JSON object."""
+
 
 class Asking(Protocol):
     """What a task needs of the channel: a task's whole channel, or a watcher's part of a host's."""
 
-    def ask(self, message: dict[str, Any]) -> dict[str, Any]:
+    def ask(self, message: Mapping[str, Wire]) -> Message:
         """Sends a request and receives its answer."""
         ...
 
-    def send(self, message: dict[str, Any]) -> None:
+    def send(self, message: Mapping[str, Wire]) -> None:
         """Sends one message."""
         ...
 
@@ -36,7 +43,7 @@ class Asking(Protocol):
 class Telling(Asking, Protocol):
     """A watcher's channel, which also tells what a trigger found (M5.2h2)."""
 
-    async def tell_event(self, message: dict[str, Any], in_flight: int) -> None:
+    async def tell_event(self, message: Mapping[str, Wire], in_flight: int) -> None:
         """Sends an event, then waits while ``in_flight`` of its events aren't stored yet."""
         ...
 
@@ -53,6 +60,146 @@ class ChannelClosedError(ProtocolError):
     """The other side closed the connection between messages (the fork server's way to stop)."""
 
 
+def _where(message: Mapping[str, Wire]) -> str:
+    """A field's message, as its errors name it: its type, if it has one (not a nested object)."""
+    kind = message.get("type")
+    return f"`{kind}`: " if isinstance(kind, str) else ""
+
+
+def text(message: Mapping[str, Wire], key: str) -> str:
+    """A message's string field.
+
+    Raises:
+        ProtocolError: If it is missing or not a string.
+    """
+    value = message.get(key)
+    if not isinstance(value, str):
+        raise ProtocolError(f"{_where(message)}`{key}` must be a string")
+    return value
+
+
+def whole(message: Mapping[str, Wire], key: str) -> int:
+    """A message's integer field (not a boolean).
+
+    Raises:
+        ProtocolError: If it is missing or not an integer.
+    """
+    value = message.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolError(f"{_where(message)}`{key}` must be an integer")
+    return value
+
+
+def optional_whole(message: Mapping[str, Wire], key: str) -> int | None:
+    """A message's integer field that may be missing or null.
+
+    Raises:
+        ProtocolError: If it is there and not an integer.
+    """
+    return None if message.get(key) is None else whole(message, key)
+
+
+def flag(message: Mapping[str, Wire], key: str) -> bool:
+    """A message's boolean field; missing or null is false.
+
+    Raises:
+        ProtocolError: If it is there and not a boolean.
+    """
+    value = message.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ProtocolError(f"{_where(message)}`{key}` must be a boolean")
+    return value
+
+
+def obj(value: Wire, what: str) -> dict[str, Wire]:
+    """A value that must be a JSON object.
+
+    Raises:
+        ProtocolError: If it isn't.
+    """
+    if not isinstance(value, dict):
+        raise ProtocolError(f"{what} must be an object")
+    return value
+
+
+def listed(value: Wire, what: str) -> list[Wire]:
+    """A value that must be a JSON array; null is an empty one.
+
+    Raises:
+        ProtocolError: If it isn't.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ProtocolError(f"{what} must be an array")
+    return value
+
+
+def texts(message: Mapping[str, Wire], key: str) -> list[str]:
+    """A message's field that must be an array of strings; missing or null is empty.
+
+    Raises:
+        ProtocolError: If it isn't.
+    """
+    items = listed(message.get(key), f"{_where(message)}`{key}`")
+    if not all(isinstance(item, str) for item in items):
+        raise ProtocolError(f"{_where(message)}`{key}` must hold strings")
+    return [item for item in items if isinstance(item, str)]
+
+
+type SecretName = tuple[str | None, str, str | None]
+"""A secret by ``(storage, path, key)``."""
+
+
+def given_secrets(message: Mapping[str, Wire], what: str) -> dict[SecretName, Wire]:
+    """The secrets a message brings (a ``welcome``, an ``extension_task``), by name.
+
+    Raises:
+        ProtocolError: If one isn't ``{"name": {"path", "storage"?, "key"?}, "value"}``.
+    """
+    secrets: dict[SecretName, Wire] = {}
+    for given in listed(message.get("secrets"), f"{what}: `secrets`"):
+        secret = obj(given, f"{what}: a secret")
+        name = obj(secret.get("name"), f"{what}: a secret's `name`")
+        path, storage, key = name.get("path"), name.get("storage"), name.get("key")
+        if (
+            not isinstance(path, str)
+            or not (storage is None or isinstance(storage, str))
+            or not (key is None or isinstance(key, str))
+        ):
+            raise ProtocolError(f"{what}: a secret's `path`, `storage` and `key` must be strings")
+        secrets[storage, path, key] = secret.get("value")
+    return secrets
+
+
+def as_wire(value: object, what: str) -> Wire:
+    """A value built by the caller (a declaration, a result), checked to be plain JSON.
+
+    Mappings and lists or tuples pass, copied as ``dict`` and ``list``; a mapping's number,
+    boolean or null key becomes a string, as ``json.dumps`` writes it.
+
+    Raises:
+        TypeError: If it holds anything else (as ``json.dumps`` would).
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [as_wire(item, what) for item in value]
+    if isinstance(value, Mapping):
+        wired: dict[str, Wire] = {}
+        for key, item in value.items():
+            if isinstance(key, str):
+                wired[key] = as_wire(item, what)
+            elif key is None or isinstance(key, (bool, int, float)):
+                wired[json.dumps(key)] = as_wire(item, what)  # as `json.dumps` writes it
+            else:
+                raise TypeError(f"{what}: a key {key!r} isn't a string")
+        return wired
+    raise TypeError(f"{what}: {type(value).__name__} isn't JSON")
+
+
 class Channel:
     """One end of the channel, over a connected socket."""
 
@@ -67,7 +214,7 @@ class Channel:
         # One message's bytes at a time: a report sent beside a request can't split it.
         self._sending = threading.Lock()
 
-    def ask(self, message: dict[str, Any]) -> dict[str, Any]:
+    def ask(self, message: Mapping[str, Wire]) -> Message:
         """Sends a request and receives its answer, one request at a time on this channel.
 
         A task's threads may read secrets and open connections at once: each answer goes to
@@ -83,7 +230,7 @@ class Channel:
             self.send(message)
             return self.receive()
 
-    def send(self, message: dict[str, Any]) -> None:
+    def send(self, message: Mapping[str, Wire]) -> None:
         """Sends one message.
 
         Args:
@@ -103,7 +250,7 @@ class Channel:
         with self._sending:
             self._sock.sendall(len(data).to_bytes(_HEADER, "big") + data)
 
-    def receive(self) -> dict[str, Any]:
+    def receive(self) -> Message:
         """Receives one message.
 
         Returns:
@@ -116,7 +263,7 @@ class Channel:
         """
         return self.receive_with_fds(0)[0]
 
-    def receive_with_fds(self, max_fds: int, flags: int = 0) -> tuple[dict[str, Any], list[int]]:
+    def receive_with_fds(self, max_fds: int, flags: int = 0) -> tuple[Message, list[int]]:
         """Receives one message and the descriptors sent with it (``SCM_RIGHTS``).
 
         Args:
@@ -147,7 +294,7 @@ class Channel:
                 os.close(fd)
             raise
 
-    def _receive_body(self, header: bytes) -> dict[str, Any]:
+    def _receive_body(self, header: bytes) -> Message:
         size = int.from_bytes(header, "big")
         if size > MAX_MESSAGE_SIZE:
             raise ProtocolError(

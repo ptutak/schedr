@@ -24,9 +24,20 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
-from schedr_extension._protocol import MAX_MESSAGE_SIZE, Channel, ChannelClosedError, ProtocolError
+from schedr_extension._protocol import (
+    MAX_MESSAGE_SIZE,
+    Channel,
+    ChannelClosedError,
+    Message,
+    ProtocolError,
+    Wire,
+    given_secrets,
+    obj,
+    text,
+    whole,
+)
 
 if TYPE_CHECKING:
     from schedr_extension import ExtensionJson
@@ -68,13 +79,13 @@ class ServiceContext:
     """Its declared secrets (``service_secrets``), by ``(storage, path, key)``."""
     _control: Channel
     _asking: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _answers: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
+    _answers: asyncio.Queue[Message] = field(default_factory=asyncio.Queue)
     _gone: asyncio.Event = field(default_factory=asyncio.Event)
     # Answers owed to `secret_get`s sent: one a call cancelled never read is thrown away before
     # the next call's (Grok's review: the next call returned it, another secret's value).
     _owed: int = 0
 
-    async def _next_answer(self) -> dict[str, Any]:
+    async def _next_answer(self) -> Message:
         """The next answer to a `secret_get`, counted off what is owed; the worker gone fails it.
 
         Raises:
@@ -131,7 +142,7 @@ class ServiceContext:
         Raises:
             ServiceError: When the worker can't give it (not declared, missing, unavailable).
         """
-        name: dict[str, str] = {"path": path}
+        name: dict[str, Wire] = {"path": path}
         if key is not None:
             name["key"] = key
         if storage is not None:
@@ -160,7 +171,7 @@ class ServiceContext:
             phase: A short name, e.g. ``watching``.
             message: More about it.
         """
-        told: dict[str, object] = {"type": "status", "phase": phase}
+        told: Message = {"type": "status", "phase": phase}
         if message is not None:
             told["message"] = message
         await asyncio.to_thread(self._control.send, told)
@@ -173,7 +184,8 @@ class ServiceContext:
             value: A counter's increase, a gauge's value, a histogram's observation.
             **labels: Its labels' values.
         """
-        point = {"name": name, "labels": labels, "value": value}
+        told_labels: dict[str, Wire] = dict(labels)
+        point: Wire = {"name": name, "labels": told_labels, "value": value}
         await asyncio.to_thread(self._control.send, {"type": "metrics", "points": [point]})
 
 
@@ -193,9 +205,9 @@ class _CallTimes:
     def add(self, method: str, seconds: float) -> None:
         self.held.append((method, seconds))
 
-    def messages(self) -> list[dict[str, object]]:
+    def messages(self) -> list[Message]:
         """What was held, as `metrics` messages; none held after."""
-        points = [
+        points: list[Wire] = [
             {"name": "service_call_seconds", "labels": {"method": method}, "value": seconds}
             for method, seconds in self.held
         ]
@@ -225,7 +237,7 @@ type OnCall = Callable[[ServiceAttempt, str, object], Awaitable[object]]
 (JSON), or raises to fail the call."""
 
 
-async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any] | None:
+async def _read_frame(reader: asyncio.StreamReader) -> Message | None:
     try:
         header = await reader.readexactly(_HEADER)
     except asyncio.IncompleteReadError as e:
@@ -239,10 +251,10 @@ async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any] | None:
         body = await reader.readexactly(size)
     except asyncio.IncompleteReadError as e:
         raise ProtocolError("the connection closed within a message") from e
-    message = json.loads(body)
+    message: Wire = json.loads(body)
     if not isinstance(message, dict) or not isinstance(message.get("type"), str):
         raise ProtocolError("a message must be a JSON object with a string `type`")
-    return cast("dict[str, Any]", message)
+    return message
 
 
 def _frame(message: Mapping[str, object]) -> bytes:
@@ -323,13 +335,13 @@ async def _run(
     start, on_closed, stop = hooks.start, hooks.on_closed, hooks.stop
     from schedr_extension import _plugin_version  # noqa: PLC0415 (a cycle otherwise)
 
-    hello = {
+    hello: Message = {
         "type": "hello",
         "schedr_version": _plugin_version(),
         "mode": "service",
         "protocol": SERVICE_PROTOCOL,
         "name": name,
-        "versions": list(versions),
+        "versions": [*versions],
     }
     await asyncio.to_thread(control.send, hello)
     reply = await asyncio.to_thread(control.receive)
@@ -338,10 +350,7 @@ async def _run(
         return _EXIT_USAGE
     if reply["type"] != "welcome":
         raise ProtocolError(f"expected `welcome`, got `{reply['type']}`")
-    secrets = {
-        (s["name"].get("storage"), s["name"]["path"], s["name"].get("key")): s["value"]
-        for s in reply.get("secrets", ())
-    }
+    secrets = given_secrets(reply, "`welcome`")
     context = ServiceContext(secrets=secrets, _control=control)
     loop = asyncio.get_running_loop()
     stopping = asyncio.Event()
@@ -351,10 +360,13 @@ async def _run(
     gone = context._gone
     times = _CallTimes()
 
-    def connected(message: dict[str, Any], fd: int) -> None:
-        task = message.get("task", {})
+    def connected(message: Message, fd: int) -> None:
+        task = obj(message.get("task") or {}, "`attempt`: `task`")
+        name, version = task.get("name"), task.get("version")
         attempt = ServiceAttempt(
-            message["attempt_id"], task.get("name", ""), task.get("version", "")
+            text(message, "attempt_id"),
+            name if isinstance(name, str) else "",
+            version if isinstance(version, str) else "",
         )
         handled = loop.create_task(_attempt(control, attempt, fd, (on_call, times), on_closed))
         attempts.add(handled)
@@ -404,8 +416,8 @@ def _read_control(
     control: Channel,
     loop: asyncio.AbstractEventLoop,
     to: tuple[
-        Callable[[dict[str, Any], int], None],
-        asyncio.Queue[dict[str, Any]],
+        Callable[[Message, int], None],
+        asyncio.Queue[Message],
         asyncio.Event,
         Callable[[str], None],
     ],
@@ -476,7 +488,7 @@ async def _attempt(
             if message["type"] != "call":
                 continue
             task = asyncio.create_task(
-                handle(int(message["id"]), str(message["method"]), message.get("args"))
+                handle(whole(message, "id"), text(message, "method"), message.get("args"))
             )
             calls.add(task)
             task.add_done_callback(calls.discard)

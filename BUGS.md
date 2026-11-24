@@ -55,17 +55,21 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk | 6 | medium | likely | usability |
 | 2 | B265: the clock simulator's worker closes its stream at the master-time cutoff; the agent keeps it without cleanup gates | 4 | medium | possible | tests |
-| 3 | B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]` | 2 | low | possible | correctness |
+| 3 | B288: the Python runner reads a task's stored forms (references, inputs, run) as `Mapping[str, Any]` | 2 | low | possible | correctness |
 | 4 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
 | 5 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
-## B276: the Python runner's and the extension helper's messages are typed `dict[str, Any]`
+## B288: the Python runner reads a task's stored forms (references, inputs, run) as `Mapping[str, Any]`
 
-- **Rating:** severity **low**, probability **possible**, correctness (score 2): `schedr.runner.protocol.Channel` sends and receives `dict[str, Any]`, and `schedr.extension` (M5.2i, M5.2i5) builds and reads its messages the same way, against the rule to avoid `Any`: a message field of the wrong type passes the type checkers. `schedr.types.Json` doesn't fit as it is (it allows dates and dataclasses): replacing `Any` with it gave 78 mypy errors.
-- **Found:** 2026-11-21, by Claude in M5.2i5 piece 3, adding `ExtensionChannel.metric`.
-- **A fix:** a wire JSON type (`str | int | float | bool | None | list[...] | dict[str, ...]`)
-  for `Channel.send`/`receive`, and typed messages (TypedDicts) for each message the helper and
-  the runner build, narrowed where they are read.
+- **Rating:** severity **low**, probability **possible**, correctness (score 2): `schedr.runner.task` interprets a task's stored forms (`resolve`, `render`, `build`, `mapped_arguments`, `run_values`, the request's `task` and `run`) through `Mapping[str, Any]` and `Any` results, against the rule to avoid `Any`: a field of the wrong type in what the agent sends passes the type checkers and fails as a `KeyError` or `TypeError` deep in the build, not as a `ProtocolError` naming the field.
+- **Found:** 2026-11-24, by Claude fixing B276, which typed the channel (`Wire`, `Message`), the
+  extension helper, the watcher host's reader, the fork server's request and the parse request,
+  and narrowed the answers `task.py` reads (`secret`, `connection`, `api_answer`). The stored
+  forms were left: about 80 `Any` in `task.py`, and the run mapping isn't plain JSON (its
+  `$secrets` entry has tuple keys).
+- **A fix:** typed stored forms (a `Reference`, a `StoredValue` and the run information as
+  dataclasses or TypedDicts) read once from the request with the `_protocol` narrowing helpers;
+  the fetched secrets kept beside the run, not inside it; `build` returning `object`.
 
 ## B272: a trigger's own log can't be seen: neither the UI nor the CLI shows it, only the worker's disk
 

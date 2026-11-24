@@ -27,10 +27,21 @@ import time
 import traceback
 import weakref
 from collections.abc import Callable, Mapping
-from typing import Any, NoReturn
+from dataclasses import dataclass
+from typing import NoReturn
 
 from schedr.runner import usage
-from schedr.runner.protocol import Channel, ChannelClosedError, ProtocolError
+from schedr.runner.protocol import (
+    Channel,
+    ChannelClosedError,
+    Message,
+    ProtocolError,
+    Wire,
+    obj,
+    text,
+    texts,
+    whole,
+)
 
 FDS = 4
 """The descriptors a ``fork`` request carries: channel, stdout, stderr, status socket."""
@@ -59,7 +70,7 @@ def thread_names() -> list[str]:
 
 def run_fork_server(
     channel: Channel,
-    request: Mapping[str, Any],
+    request: Mapping[str, Wire],
     *,
     threads: Callable[[], list[str]] = thread_names,
 ) -> int:
@@ -81,7 +92,7 @@ def run_fork_server(
         ProtocolError: For a message that isn't a valid ``fork`` request.
     """
     _open_standard_descriptors()
-    disabled = _prepare(request["preload"], threads)
+    disabled = _prepare(texts(request, "preload"), threads)
     reader = usage.prepare()  # loaded here: a shim loads nothing
     flush_c_stdio = _c_stdio_flush()
     if disabled:
@@ -147,7 +158,7 @@ def _prepare(preload: list[str], threads: Callable[[], list[str]]) -> Disabled:
 
 def _fork(
     channel: Channel,
-    message: Mapping[str, Any],
+    message: Mapping[str, Wire],
     fds: list[int],
     threads: Callable[[], list[str]],
     disabled: Disabled,
@@ -158,10 +169,11 @@ def _fork(
     if message["type"] != "fork":
         raise ProtocolError(f"expected `fork`, got `{message['type']}`")
     try:
-        request_id = int(message["id"])
-        mode, env, cwd = message["mode"], dict(message["env"]), str(message["cwd"])
-    except (KeyError, TypeError, ValueError) as e:
-        raise ProtocolError(f"a malformed `fork` request: {e!r}") from e
+        request_id = whole(message, "id")
+        forked = _Forked.of(message)
+    except ProtocolError as e:
+        raise ProtocolError(f"a malformed `fork` request: {e}") from e
+    mode = forked.mode
     if disabled:
         channel.send(_failed(request_id, f"the fork server is disabled: {disabled[0]}"))
         return disabled
@@ -187,14 +199,41 @@ def _fork(
         channel.send(_failed(request_id, f"fork: {e}"))
         return None
     if pid == 0:  # pragma: no cover - the child's frame (tests: test_fork_server)
-        request = {"mode": mode, "env": env, "cwd": cwd, "barrier": message.get("barrier")}
-        _shim(channel, request, fds, reader)
+        _shim(channel, forked, fds, reader)
     channel.send({"type": "forked", "id": request_id})
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _Forked:
+    """What a ``fork`` request asks the forked process to be."""
+
+    mode: str
+    env: dict[str, str]
+    cwd: str
+    barrier: dict[str, Wire] | None
+
+    @classmethod
+    def of(cls, message: Mapping[str, Wire]) -> _Forked:
+        """The request's process.
+
+        Raises:
+            ProtocolError: If a field is missing or of the wrong type.
+        """
+        env = obj(message.get("env"), "`fork`: `env`")
+        if not all(isinstance(value, str) for value in env.values()):
+            raise ProtocolError("`fork`: `env` must hold strings")
+        barrier = message.get("barrier")
+        return cls(
+            mode=text(message, "mode"),
+            env={name: value for name, value in env.items() if isinstance(value, str)},
+            cwd=text(message, "cwd"),
+            barrier=None if barrier is None else obj(barrier, "`fork`: `barrier`"),
+        )
+
+
 def _shim(
-    control: Channel, request: Mapping[str, Any], fds: list[int], reader: usage.Reader | None
+    control: Channel, request: _Forked, fds: list[int], reader: usage.Reader | None
 ) -> NoReturn:
     """The shim: forks the process, reports it, and reaps it after the agent closes."""
     code = 1
@@ -238,9 +277,7 @@ def _shim(
         os._exit(code)
 
 
-def _process(
-    request: Mapping[str, Any], channel_fd: int, stdout_fd: int, stderr_fd: int
-) -> NoReturn:
+def _process(request: _Forked, channel_fd: int, stdout_fd: int, stderr_fd: int) -> NoReturn:
     """The forked process: set up as a spawned runner would be, then run the runner."""
     from schedr.runner.main import EXIT_ERROR, main  # noqa: PLC0415 - main imports us
     from schedr.runner.protocol import FD_ENV  # noqa: PLC0415
@@ -258,7 +295,7 @@ def _process(
         # replaced them (as a spawned process has them).
         sys.stdin, sys.stdout, sys.stderr = sys.__stdin__, sys.__stdout__, sys.__stderr__
         os.environ.clear()
-        os.environ.update(request["env"])
+        os.environ.update(request.env)
         # What an interpreter takes from its environment at start, taken again from the
         # task's: the time zone, the character type locale (Python sets LC_CTYPE from the
         # environment, the other categories stay "C") and the temporary directory.
@@ -267,12 +304,12 @@ def _process(
         with contextlib.suppress(locale.Error):  # unknown: "C", as a spawned process falls back
             locale.setlocale(locale.LC_CTYPE, "")
         tempfile.tempdir = None
-        os.chdir(request["cwd"])
-        sys.argv[1:] = [request["mode"]]
+        os.chdir(request.cwd)
+        sys.argv[1:] = [request.mode]
         _forget_server_exit_handlers()
         own_exit_handlers = True
-        if _barrier_passed(request.get("barrier")):
-            code = main([request["mode"]], {FD_ENV: str(channel_fd)})
+        if _barrier_passed(request.barrier):
+            code = main([request.mode], {FD_ENV: str(channel_fd)})
         else:
             os.write(
                 2,
@@ -295,7 +332,7 @@ EXIT_BARRIER_CLOSED = 75
 """A forked process its barrier didn't let through: nothing ran (as `schedr task-exec`'s)."""
 
 
-def _barrier_passed(barrier: Mapping[str, Any] | None) -> bool:
+def _barrier_passed(barrier: Mapping[str, Wire] | None) -> bool:
     """A `cleanup_anywhere` cleanup's barrier (B255, decision 504), as `schedr task-exec`'s.
 
     Says it waits by connecting to the worker's socket, then waits at most `wait_ms`, counted
@@ -304,11 +341,11 @@ def _barrier_passed(barrier: Mapping[str, Any] | None) -> bool:
     """
     if barrier is None:
         return True
-    until = time.monotonic() + int(barrier["wait_ms"]) / 1000
+    until = time.monotonic() + whole(barrier, "wait_ms") / 1000
     try:
         with socket.socket(socket.AF_UNIX) as stream:
             stream.settimeout(max(until - time.monotonic(), 0.001))
-            stream.connect(str(barrier["socket"]))
+            stream.connect(text(barrier, "socket"))
             left = until - time.monotonic()
             if left <= 0:
                 return False
@@ -374,7 +411,7 @@ def _c_stdio_flush() -> Callable[[], object]:
     return lambda: fflush(None)
 
 
-def _report(status: socket.socket, message: dict[str, Any]) -> None:
+def _report(status: socket.socket, message: Message) -> None:
     """Sends a message on the status socket; an agent that is gone isn't an error."""
     with contextlib.suppress(OSError):
         Channel(status).send(message)
@@ -387,14 +424,15 @@ def _wait_closed(status: socket.socket) -> None:
             pass
 
 
-def _exited(ended: os.waitid_result, used: dict[str, int] | None) -> dict[str, Any]:
+def _exited(ended: os.waitid_result, used: dict[str, int] | None) -> Message:
     exited = ended.si_code == os.CLD_EXITED
+    usage_told: dict[str, Wire] | None = None if used is None else dict(used)
     return {
         "type": "process_exited",
         "code": ended.si_status if exited else None,
         "signal": None if exited else ended.si_status,
         "core_dumped": ended.si_code == os.CLD_DUMPED,
-        "usage": used,
+        "usage": usage_told,
     }
 
 
@@ -409,11 +447,11 @@ def _reap_shims(_signum: int, _frame: object) -> None:
             return
 
 
-def _disabled(reason: str, names: list[str]) -> dict[str, Any]:
-    return {"type": "fork_server_disabled", "reason": reason, "threads": names}
+def _disabled(reason: str, names: list[str]) -> Message:
+    return {"type": "fork_server_disabled", "reason": reason, "threads": [*names]}
 
 
-def _failed(request_id: int, reason: str) -> dict[str, Any]:
+def _failed(request_id: int, reason: str) -> Message:
     return {"type": "fork_failed", "id": request_id, "reason": reason}
 
 

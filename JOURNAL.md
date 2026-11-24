@@ -3408,3 +3408,18 @@ Postgres: 300,000 runs of about 300 bytes each, the count 98-143 ms, growing wit
 Not chosen: counting the unfinished runs through `runs_unfinished` and keeping the finished as
 running totals (the same figures, with totals to carry over a master's restart, for a count no
 round waits on any more).
+
+### 2026-11-24: M5.2k, B276: the runner protocol's messages typed
+
+The channel sends `Mapping[str, Wire]` and receives `Message` (`dict[str, Wire]`, `Wire` the
+JSON a message holds), in `schedr_extension._protocol`. What reads a message narrows it with
+helpers there (`text`, `whole`, `flag`, `obj`, `listed`, `texts`, `given_secrets`), a field of
+the wrong type a `ProtocolError` naming it, not a `KeyError` or a `TypeError` further on; what a
+caller builds (a plugin's declarations and output, an API body, a handle) is checked by
+`as_wire`, which copies tuples as lists and writes a number or null key as `json.dumps` does.
+Typed so: the extension helper and its service, the watcher host's reader, the fork server's
+request (`_Forked`), the parse request, and the answers a task reads. Left, as B288: the
+interpreter of a task's stored forms in `schedr.runner.task` (references, inputs, the run),
+about 80 `Any` and a run mapping that isn't plain JSON, a rework of its own. Not chosen:
+TypedDicts per message (the record's suggestion): the narrowing helpers check at run time
+what a TypedDict only claims.

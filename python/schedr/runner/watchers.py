@@ -36,7 +36,18 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from schedr.runner.coroutines import loop_factory
 from schedr.runner.parse import extend_sys_path, import_dag_entries
-from schedr.runner.protocol import MAX_MESSAGE_SIZE, Channel, ProtocolError
+from schedr.runner.protocol import (
+    MAX_MESSAGE_SIZE,
+    Channel,
+    Message,
+    ProtocolError,
+    Wire,
+    flag,
+    obj,
+    optional_whole,
+    texts,
+    whole,
+)
 from schedr.runner.task import execute_trigger, execute_watcher, failure
 from schedr.runner.waiting import (
     StepEndedError,
@@ -46,7 +57,7 @@ from schedr.runner.waiting import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
     from schedr._model import registry
@@ -61,7 +72,7 @@ _LOG_CHUNK = MAX_MESSAGE_SIZE // 16
 """The most text of one log message: a huge ``print`` goes in several."""
 
 
-_WAKE: dict[str, Any] = {}
+_WAKE: Message = {}
 """Put among a watcher's answers to wake a call that was stopped while asking."""
 
 _running = threading.local()
@@ -99,7 +110,7 @@ class _ThreadCall[T](concurrent.futures.Future[T]):
         self._stop_asked = False
         self._raised = False
         self._holding = False
-        self._answers: queue.SimpleQueue[dict[str, Any]] | None = None
+        self._answers: queue.SimpleQueue[Message] | None = None
         self._queued: concurrent.futures.Future[T] | None = None
 
     def running_in(self) -> int | None:
@@ -151,7 +162,7 @@ class _ThreadCall[T](concurrent.futures.Future[T]):
                 _raise_in(self._thread, StepEndedError)
         return False
 
-    def hold(self, answers: queue.SimpleQueue[dict[str, Any]]) -> None:
+    def hold(self, answers: queue.SimpleQueue[Message]) -> None:
         """Raises nothing until :meth:`release`, waking ``answers`` instead: asking is counted."""
         with self._lock:
             self._holding = True
@@ -243,7 +254,7 @@ class WatcherChannel:
         self._host = host
         self.watcher = watcher
         self._asking = threading.Lock()
-        self.answers: queue.SimpleQueue[dict[str, Any]] = queue.SimpleQueue()
+        self.answers: queue.SimpleQueue[Message] = queue.SimpleQueue()
         self._owed = 0
         self.ended = False
         self.calls: set[_ThreadCall[Any]] = set()
@@ -257,15 +268,17 @@ class WatcherChannel:
         self._stored = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
 
-    def send(self, message: dict[str, Any]) -> None:
+    def send(self, message: Mapping[str, Wire]) -> None:
         """Sends one message of this watcher.
 
         Args:
             message: A JSON object with a ``type``.
         """
-        self._host.send({"type": "watcher_message", "watcher": self.watcher, "message": message})
+        self._host.send(
+            {"type": "watcher_message", "watcher": self.watcher, "message": dict(message)}
+        )
 
-    async def tell_event(self, message: dict[str, Any], in_flight: int) -> None:
+    async def tell_event(self, message: Mapping[str, Wire], in_flight: int) -> None:
         """Sends what its trigger found, then waits while ``in_flight`` of them aren't stored.
 
         The next is sent as soon as there is room: up to ``in_flight`` on their way to the
@@ -298,7 +311,7 @@ class WatcherChannel:
         self._unstored = max(self._unstored - 1, 0)
         self._stored.set()
 
-    def ask(self, message: dict[str, Any]) -> dict[str, Any]:
+    def ask(self, message: Mapping[str, Wire]) -> Message:
         """Sends a request and waits for its answer, holding what called it.
 
         That is the loop for a call from a coroutine, as ``task_ctx.secret`` is: other
@@ -327,7 +340,7 @@ class WatcherChannel:
             if call is not None:
                 call.release()
 
-    def _next_answer(self, call: _ThreadCall[Any] | None) -> dict[str, Any]:
+    def _next_answer(self, call: _ThreadCall[Any] | None) -> Message:
         while True:
             answer = self.answers.get()
             if answer is not _WAKE:
@@ -395,7 +408,7 @@ class _Host:
         self.loop_lag = 0.0
         """The longest its event loop took to get to a call, since it last said how it is."""
 
-    def send(self, message: dict[str, Any]) -> None:
+    def send(self, message: Mapping[str, Wire]) -> None:
         with self._sending:
             self._channel.send(message)
 
@@ -427,7 +440,7 @@ class _Host:
     def start(
         self,
         watcher: int,
-        request: dict[str, Any],
+        request: Message,
         *,
         moved_in: bool = False,
         grace: float = 30.0,
@@ -463,7 +476,7 @@ class _Host:
         """Tells a step's end, once what it started has ended too."""
         await asyncio.wait({step})
         if step.cancelled():
-            result: dict[str, Any] = {"type": "watcher_cancelled"}
+            result: Message = {"type": "watcher_cancelled"}
         elif (error := step.exception()) is not None:
             result = failure(error, None)
         else:
@@ -509,7 +522,7 @@ class _Host:
         if found is not None and found[0].go is not None and not found[0].go.done():
             found[0].go.set_result(max_wait_ms)
 
-    def answer(self, watcher: int, message: dict[str, Any]) -> None:
+    def answer(self, watcher: int, message: Message) -> None:
         """An answer for a watcher, on the reader's thread; one already ended is ignored."""
         found = self._watchers.get(watcher)
         if found is None:
@@ -582,7 +595,7 @@ def _warn_of_threads(own: WatcherChannel) -> None:
         )
 
 
-def _tell(own: WatcherChannel, result: dict[str, Any]) -> None:
+def _tell(own: WatcherChannel, result: Message) -> None:
     """Sends a step's end: a result that can't be sent is its failure, never its silence.
 
     Without a channel the host has no use, and its agent's reader ends it.
@@ -605,30 +618,39 @@ def _read(channel: Channel, host: _Host, loop: asyncio.AbstractEventLoop) -> Non
     """Reads the agent's messages for as long as it is there: without it the host has no use."""
     while True:
         try:
-            message = channel.receive()
+            _dispatch(channel.receive(), host, loop)
         except ProtocolError:
             _end_the_host()
-        kind = message["type"]
-        if kind == "start_watcher":
-            starting = functools.partial(
-                host.start,
-                message["watcher"],
-                message["task"],
-                moved_in=message.get("moved_in", False),
-                grace=message["cancel_grace_ms"] / 1000,
-            )
-            loop.call_soon_threadsafe(starting)
-        elif kind == "move_watcher":
-            loop.call_soon_threadsafe(host.move, message["watcher"])
-        elif kind == "go_watcher":
-            loop.call_soon_threadsafe(host.go, message["watcher"], message.get("max_wait_ms"))
-        elif kind == "cancel_watcher":
-            loop.call_soon_threadsafe(host.cancel, message["watcher"])
-        elif kind == "to_watcher":
-            host.answer(message["watcher"], message["message"])
 
 
-def _warn(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+def _dispatch(message: Message, host: _Host, loop: asyncio.AbstractEventLoop) -> None:
+    """One of the agent's messages, handed to the host.
+
+    Raises:
+        ProtocolError: If it isn't as the agent sends it.
+    """
+    kind = message["type"]
+    if kind == "start_watcher":
+        starting = functools.partial(
+            host.start,
+            whole(message, "watcher"),
+            obj(message.get("task"), "`start_watcher`: `task`"),
+            moved_in=flag(message, "moved_in"),
+            grace=whole(message, "cancel_grace_ms") / 1000,
+        )
+        loop.call_soon_threadsafe(starting)
+    elif kind == "move_watcher":
+        loop.call_soon_threadsafe(host.move, whole(message, "watcher"))
+    elif kind == "go_watcher":
+        max_wait_ms = optional_whole(message, "max_wait_ms")
+        loop.call_soon_threadsafe(host.go, whole(message, "watcher"), max_wait_ms)
+    elif kind == "cancel_watcher":
+        loop.call_soon_threadsafe(host.cancel, whole(message, "watcher"))
+    elif kind == "to_watcher":
+        host.answer(whole(message, "watcher"), obj(message.get("message"), "`to_watcher`"))
+
+
+def _warn(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
     """A background task's error, in the log of the watcher it belongs to, if any."""
     error = context.get("exception")
     detail = f": {error!r}" if error is not None else ""
@@ -753,7 +775,7 @@ def guarded_loop_factory() -> Callable[[], asyncio.AbstractEventLoop] | None:
     return Guarded
 
 
-def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
+def run_watchers(channel: Channel, request: Message) -> int:
     """Handles a ``watchers`` request: serves watchers until the agent stops the host.
 
     Args:
@@ -763,7 +785,7 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
     Returns:
         The exit code; it ends when the agent closes the channel, or is killed.
     """
-    extend_sys_path(request["sys_path"])
+    extend_sys_path(texts(request, "sys_path"))
     sys.stdout = _Routed("stdout", sys.stdout)
     sys.stderr = _Routed("stderr", sys.stderr)
     host = _Host(channel)
@@ -777,8 +799,8 @@ def run_watchers(channel: Channel, request: dict[str, Any]) -> int:
         threading.Thread(
             target=_read, args=(channel, host, loop), name="schedr-agent", daemon=True
         ).start()
-        limits = (request["block_limit_ms"] / 1000, request["import_limit_ms"] / 1000)
-        set_poke_overruns(request["poke_overruns"])
+        limits = (whole(request, "block_limit_ms") / 1000, whole(request, "import_limit_ms") / 1000)
+        set_poke_overruns(whole(request, "poke_overruns"))
         set_settled(_current_settled)
         threading.Thread(
             target=_watch_the_loop, args=(host, loop, limits), name="schedr-watchdog", daemon=True

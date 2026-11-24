@@ -11,12 +11,11 @@ import os
 import sys
 import warnings
 from pathlib import Path, PurePosixPath
-from typing import Any
 
 from schedr._model import Dag, DagLocation, registry
 from schedr.connections import take_connections
 from schedr.outcomes import DagHint, TypingHint
-from schedr.runner.protocol import Channel
+from schedr.runner.protocol import Channel, Message, Wire, text, texts
 from schedr.runner.sources import (
     clash,
     forgotten_roots,
@@ -161,7 +160,7 @@ def import_error(error: BaseException) -> dict[str, str]:
     return error_summary(error, (_SCHEDR_DIR, _IMPORTLIB_DIR, "<frozen importlib"))
 
 
-def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
+def file_result(root: str, root_dir: Path, path: str) -> Message:
     """Imports one file and builds its ``file_parsed`` message.
 
     Args:
@@ -178,15 +177,16 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
         warnings.simplefilter("always", TypingHint)
         warnings.simplefilter("always", DagHint)
         take_connections()
+        documents: list[Wire] = []
+        connections: list[Wire] = []
+        error: dict[str, Wire] | None = None
         try:
-            dags = import_dag_file(root, root_dir, path)
-            documents = [d.to_json() for d in dags]
-            connections = own_connections(root, path)
-            error = None
+            documents = [d.to_json() for d in import_dag_file(root, root_dir, path)]
+            connections = [*own_connections(root, path)]
         except (Exception, SystemExit) as e:
             take_connections()
-            documents, connections, error = [], [], import_error(e)
-    message: dict[str, Any] = {"type": "file_parsed", "path": path, "dags": documents}
+            documents, connections, error = [], [], dict(import_error(e))
+    message: Message = {"type": "file_parsed", "path": path, "dags": documents}
     message["error"] = error
     if connections:
         message["connections"] = connections
@@ -196,7 +196,7 @@ def file_result(root: str, root_dir: Path, path: str) -> dict[str, Any]:
     return message
 
 
-def own_connections(root: str, path: str) -> list[dict[str, Any]]:
+def own_connections(root: str, path: str) -> list[Message]:
     """The connections the file just imported defines itself, as reported.
 
     A module it imports may define connections too, reported when that module's own file is
@@ -213,7 +213,7 @@ def own_connections(root: str, path: str) -> list[dict[str, Any]]:
         ValueError: When the file defines two connections of one name.
     """
     here = DagLocation(root, PurePosixPath(path).as_posix())
-    own: dict[str, dict[str, Any]] = {}
+    own: dict[str, Message] = {}
     for defined in take_connections():
         if defined.location != here:
             continue
@@ -249,21 +249,21 @@ def extend_sys_path(entries: list[str]) -> None:
     search_for_clashes(ordered, others)
 
 
-def run_parse(channel: Channel, request: dict[str, Any]) -> None:
+def run_parse(channel: Channel, request: Message) -> None:
     """Handles a ``parse`` request: imports each file, reporting progress and results.
 
     Args:
         channel: The channel to the agent.
         request: The ``parse`` message (root, root directory, files, ``sys.path`` entries).
     """
-    extend_sys_path(request["sys_path"])
-    root, root_dir = request["root"], Path(request["root_dir"])
+    extend_sys_path(texts(request, "sys_path"))
+    root, root_dir = text(request, "root"), Path(text(request, "root_dir"))
 
-    def ask(reference: str) -> dict[str, Any]:
+    def ask(reference: str) -> Message:
         return channel.ask({"type": "script_declaration", "reference": reference})
 
     with registry.script_declarations(ask):
-        for path in request["files"]:
+        for path in texts(request, "files"):
             channel.send({"type": "file_started", "path": path})
             channel.send(file_result(root, root_dir, path))
     channel.send({"type": "parse_finished"})

@@ -788,6 +788,9 @@ def test_outside_linux_the_fork_server_is_disabled(monkeypatch: pytest.MonkeyPat
         ({"type": "task"}, "expected `fork`, got `task`"),
         ({"type": "fork", "id": 1}, "a malformed `fork` request"),
         ({"type": "fork", "id": "x", "mode": "task", "env": {}, "cwd": "/"}, "a malformed `fork`"),
+        ({"type": "fork", "id": 1, "mode": "task", "env": {"A": 1}, "cwd": "/"}, "`env`"),
+        ({"type": "fork", "id": 1, "mode": "task", "env": {}, "cwd": 2}, "`cwd`"),
+        ({"type": "fork", "id": 1, "mode": "task", "env": {}, "cwd": "/", "barrier": 3}, "barrier"),
     ],
 )
 def test_a_message_that_isnt_a_fork_request_is_a_protocol_error(

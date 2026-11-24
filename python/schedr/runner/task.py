@@ -68,7 +68,18 @@ from schedr.outcomes import (
     outcome_enum,
 )
 from schedr.runner.parse import extend_sys_path, import_dag_entries, import_error, module_name
-from schedr.runner.protocol import Asking, Channel, Telling
+from schedr.runner.protocol import (
+    Asking,
+    Channel,
+    Message,
+    ProtocolError,
+    Telling,
+    Wire,
+    as_wire,
+    obj,
+    text,
+    whole,
+)
 from schedr.sensors import NOT_YET, NOT_YET_OUTCOME, output_hint
 
 if TYPE_CHECKING:
@@ -205,16 +216,28 @@ def secret_reader(channel: Asking) -> SecretReader:
     """
 
     def read(ref: SecretRef) -> str | dict[str, str]:
-        name = {k: v for k, v in ref.to_json().items() if k != "kind"}
+        name: dict[str, Wire] = {k: v for k, v in ref.to_json().items() if k != "kind"}
         answer = channel.ask({"type": "secret_get", "secret": name})
         if answer.get("type") == "secret":
-            value: str | dict[str, str] = answer["value"]
-            return value
+            return _secret_value(answer.get("value"))
         if answer.get("type") == "secret_failed":
-            raise SecretError(str(answer["kind"]), str(answer["message"]))
+            raise SecretError(text(answer, "kind"), text(answer, "message"))
         raise SecretError("secret_unavailable", f"unexpected answer {answer.get('type')!r}")
 
     return read
+
+
+def _secret_value(value: Wire) -> str | dict[str, str]:
+    """A ``secret`` answer's value: a key's text, or a whole secret's keys and texts.
+
+    Raises:
+        ProtocolError: If it is anything else.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and all(isinstance(v, str) for v in value.values()):
+        return {k: v for k, v in value.items() if isinstance(v, str)}
+    raise ProtocolError("`secret`: `value` must be a string or an object of strings")
 
 
 def connection_opener(channel: Asking) -> ConnectionOpener:
@@ -232,10 +255,9 @@ def connection_opener(channel: Asking) -> ConnectionOpener:
     def values_of(name: str) -> Mapping[str, object]:
         answer = channel.ask({"type": "connection_get", "name": name})
         if answer.get("type") == "connection":
-            values: Mapping[str, object] = answer["values"]
-            return values
+            return obj(answer.get("values"), "`connection`: `values`")
         if answer.get("type") == "connection_failed":
-            kind, message = str(answer["kind"]), str(answer["message"])
+            kind, message = text(answer, "kind"), text(answer, "message")
             if kind == CONNECTION_NOT_FOUND:
                 raise ConnectionNotFoundError(message)
             if kind == CONNECTION_DENIED:
@@ -1133,16 +1155,16 @@ def api_caller(channel: Asking) -> ApiCaller:
     """
 
     def call(method: str, path: str, body: object, key: str | None) -> tuple[int, object]:
-        request: dict[str, Any] = {"type": "api_call", "method": method, "path": path}
+        request: Message = {"type": "api_call", "method": method, "path": path}
         if body is not None:
-            request["body"] = body
+            request["body"] = as_wire(body, "schedr.api: the body")
         if key is not None:
             request["idempotency_key"] = key
         answer = channel.ask(request)
         if answer.get("type") != "api_answer":
             raise RuntimeError(f"schedr.api: unexpected answer {answer.get('type')!r}")
         tell_note(answer.get("note"))
-        return int(answer["status"]), answer.get("body")
+        return whole(answer, "status"), answer.get("body")
 
     return call
 
@@ -1158,10 +1180,10 @@ def handle_adder(channel: Asking) -> HandleAdder:
     """
 
     def add(_handle: object, handle_type: str, value: object) -> None:
-        handle = {"handle_type": handle_type, "value": value}
+        handle: Message = {"handle_type": handle_type, "value": as_wire(value, "a handle")}
         answer = channel.ask({"type": "handle_add", "handle": handle})
         if answer.get("type") == "handle_refused":
-            raise RuntimeError(f"cleanup_handle: {answer['message']}")
+            raise RuntimeError(f"cleanup_handle: {answer.get('message')}")
         if answer.get("type") != "handle_added":
             raise RuntimeError(f"cleanup_handle: unexpected answer {answer.get('type')!r}")
 

@@ -29,7 +29,7 @@ from importlib.metadata import version
 from typing import Any
 
 from schedr.context import RunValues, dag_ctx, use_script_values
-from schedr.runner.protocol import Channel, ProtocolError
+from schedr.runner.protocol import Channel, ProtocolError, whole
 
 __all__ = ["dag_ctx"]
 
@@ -257,7 +257,7 @@ def call_api(
         raise RuntimeError(f"talking to the task's agent: {e} (the task may have ended)") from None
     finally:
         channel.close()
-    return int(reply["status"]), reply.get("body")
+    return whole(reply, "status"), reply.get("body")
 
 
 def _values() -> RunValues:

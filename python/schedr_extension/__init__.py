@@ -35,12 +35,26 @@ import signal
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict
 
 from schedr_extension._errors import error_summary
 from schedr_extension._log import install as install_structured_logging
 from schedr_extension._output import CodecError, check_size
-from schedr_extension._protocol import FD_ENV, Channel, ProtocolError, from_fd
+from schedr_extension._protocol import (
+    FD_ENV,
+    Channel,
+    Message,
+    ProtocolError,
+    Wire,
+    as_wire,
+    from_fd,
+    given_secrets,
+    listed,
+    obj,
+    optional_whole,
+    text,
+    whole,
+)
 from schedr_extension._service import (
     SERVICE_FD_ENV,
     ServiceAttempt,
@@ -220,7 +234,7 @@ class ExtensionRequest:
     raw: Mapping[str, ExtensionJson] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_message(cls, message: Mapping[str, Any]) -> ExtensionRequest:
+    def from_message(cls, message: Mapping[str, Wire]) -> ExtensionRequest:
         """The request in an ``extension_task`` message.
 
         Args:
@@ -232,25 +246,27 @@ class ExtensionRequest:
         Raises:
             ProtocolError: For a task that isn't an extension's.
         """
-        task = message["task"]
+        task = obj(message.get("task"), "`extension_task`: `task`")
         if task.get("kind") != "extension":
             raise ProtocolError(f"expected an extension task, got `{task.get('kind')}`")
         given = message.get("cleanup")
+        handles = (
+            obj(h, "`extension_task`: a handle")
+            for h in listed(given, "`extension_task`: `cleanup`")
+        )
+        settings = obj(task.get("settings") or {}, "`extension_task`: `settings`")
         return cls(
-            name=task["name"],
-            version=task["version"],
+            name=text(task, "name"),
+            version=text(task, "version"),
             payload=task.get("payload"),
-            task_id=task["id"],
-            dag_id=message["dag_id"],
-            run=message["run"],
-            handles=tuple(Handle(h["handle_type"], h["value"]) for h in given or ()),
+            task_id=text(task, "id"),
+            dag_id=text(message, "dag_id"),
+            run=obj(message.get("run"), "`extension_task`: `run`"),
+            handles=tuple(Handle(text(h, "handle_type"), h.get("value")) for h in handles),
             cleanup=given is not None,
             # The worker always sends it; a request built by hand (a plugin's test) may not.
-            max_output_size=int(
-                (task.get("settings") or {}).get("max_output_size") or _DEFAULT_MAX_OUTPUT
-            ),
-            # The worker's message, decoded from JSON.
-            raw=cast("Mapping[str, ExtensionJson]", message),
+            max_output_size=optional_whole(settings, "max_output_size") or _DEFAULT_MAX_OUTPUT,
+            raw=message,
         )
 
 
@@ -261,7 +277,7 @@ class ExtensionChannel:
     """
 
     def __init__(
-        self, channel: Channel, request: Mapping[str, Any], service: ServiceCalls | None = None
+        self, channel: Channel, request: Mapping[str, Wire], service: ServiceCalls | None = None
     ) -> None:
         """Wraps the worker's channel.
 
@@ -272,12 +288,9 @@ class ExtensionChannel:
         """
         self._channel = channel
         self._service = service
-        self._given = {
-            (s["name"].get("storage"), s["name"]["path"], s["name"].get("key")): s["value"]
-            for s in request.get("secrets", ())
-        }
+        self._given = given_secrets(request, "`extension_task`")
 
-    async def _ask(self, message: dict[str, Any]) -> dict[str, Any]:
+    async def _ask(self, message: Mapping[str, Wire]) -> Message:
         return await asyncio.to_thread(self._channel.ask, message)
 
     async def secret(
@@ -298,18 +311,16 @@ class ExtensionChannel:
         """
         given = self._given.get((storage, path, key))
         if given is not None:
-            # The worker's JSON: a key's value or a whole secret's object.
-            return cast("ExtensionJson", given)
-        name: dict[str, str] = {"path": path}
+            return given
+        name: dict[str, Wire] = {"path": path}
         if key is not None:
             name["key"] = key
         if storage is not None:
             name["storage"] = storage
         answer = await self._ask({"type": "secret_get", "secret": name})
         if answer["type"] != "secret":
-            raise ExtensionError(answer.get("kind", ""), answer.get("message", str(answer)))
-        # The worker's `secret` answer: its value is JSON.
-        return cast("ExtensionJson", answer["value"])
+            raise _refused(answer)
+        return answer.get("value")
 
     async def connection(self, name: str) -> dict[str, ExtensionJson]:
         """A connection the task declared (``connections=``): its values, rendered.
@@ -325,11 +336,10 @@ class ExtensionChannel:
         """
         answer = await self._ask({"type": "connection_get", "name": name})
         if answer["type"] != "connection":
-            raise ExtensionError(answer.get("kind", ""), answer.get("message", str(answer)))
-        # The worker's `connection` answer: its values by parameter, JSON.
-        return cast("dict[str, ExtensionJson]", answer["values"])
+            raise _refused(answer)
+        return obj(answer.get("values"), "`connection`: `values`")
 
-    async def _tell(self, message: dict[str, Any]) -> None:
+    async def _tell(self, message: Mapping[str, Wire]) -> None:
         await asyncio.to_thread(self._channel.send, message)
 
     async def status(
@@ -344,7 +354,7 @@ class ExtensionChannel:
             message: More about it.
             progress: How far along, 0 to 1, when known.
         """
-        report: dict[str, Any] = {"type": "status", "phase": phase}
+        report: Message = {"type": "status", "phase": phase}
         if message is not None:
             report["message"] = message
         if progress is not None:
@@ -373,9 +383,10 @@ class ExtensionChannel:
             value: The value.
             **labels: Its labels' values.
         """
-        point: dict[str, Any] = {"name": name, "value": value}
+        point: dict[str, Wire] = {"name": name, "value": value}
         if labels:
-            point["labels"] = labels
+            told_labels: dict[str, Wire] = dict(labels)
+            point["labels"] = told_labels
         await self._tell({"type": "metrics", "points": [point]})
 
     async def notify(self, event: str, text: str | None = None, data: ExtensionJson = None) -> None:
@@ -391,7 +402,7 @@ class ExtensionChannel:
             text: What happened, one line; ``None``: schedr's summary.
             data: More about it, JSON.
         """
-        message: dict[str, Any] = {"type": "notify", "event": event}
+        message: Message = {"type": "notify", "event": event}
         if text is not None:
             message["text"] = text
         if data is not None:
@@ -410,7 +421,10 @@ class ExtensionChannel:
         answer = await self._ask({"type": "stop_reason_get"})
         if answer["type"] != "stop_reason":
             raise ExtensionError("unexpected", f"expected `stop_reason`, got `{answer['type']}`")
-        return answer.get("reason"), int(answer.get("grace_ms", 0)) / 1000
+        reason = answer.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise ProtocolError("`stop_reason`: `reason` must be a string")
+        return reason, (optional_whole(answer, "grace_ms") or 0) / 1000
 
     async def add_handle(self, handle_type: str, value: ExtensionJson) -> None:
         """Registers what the cleanup needs, made by this attempt (a job's ID, a pod's name).
@@ -429,7 +443,7 @@ class ExtensionChannel:
             {"type": "handle_add", "handle": {"handle_type": handle_type, "value": value}}
         )
         if answer["type"] != "handle_added":
-            raise ExtensionError("handle_refused", answer.get("message", str(answer)))
+            raise ExtensionError("handle_refused", _said(answer, "message", str(answer)))
 
     @property
     def service(self) -> ServiceCalls:
@@ -465,13 +479,13 @@ class ExtensionChannel:
         Returns:
             The HTTP status and the JSON body.
         """
-        message: dict[str, Any] = {"type": "api_call", "method": method, "path": path}
+        message: Message = {"type": "api_call", "method": method, "path": path}
         if body is not None:
             message["body"] = body
         if idempotency_key is not None:
             message["idempotency_key"] = idempotency_key
         answer = await self._ask(message)
-        return answer["status"], answer["body"]
+        return whole(answer, "status"), answer.get("body")
 
 
 type Run = Callable[[ExtensionRequest, ExtensionChannel], Awaitable[object]]
@@ -489,6 +503,20 @@ _INTERNAL = (
 def import_error(error: BaseException) -> dict[str, str]:
     """`error` as sent to the agent, its traceback from the plugin's code on."""
     return error_summary(error, _INTERNAL)
+
+
+def _error(error: BaseException) -> dict[str, Wire]:
+    return dict(import_error(error))
+
+
+def _said(answer: Message, key: str, default: str) -> str:
+    """A refusal's string field, or ``default`` when it hasn't one."""
+    value = answer.get(key)
+    return value if isinstance(value, str) else default
+
+
+def _refused(answer: Message) -> ExtensionError:
+    return ExtensionError(_said(answer, "kind", ""), _said(answer, "message", str(answer)))
 
 
 def _plugin_version() -> str:
@@ -554,13 +582,13 @@ def main(
         return _EXIT_USAGE
     channel = from_fd(int(value))
     try:
-        declared: dict[str, object] = {}
+        declared: Message = {}
         if metrics:
-            declared["metrics"] = [dict(m) for m in metrics]
+            declared["metrics"] = as_wire(metrics, "metrics")
         if panels:
-            declared["panels"] = [dict(p) for p in panels]
+            declared["panels"] = as_wire(panels, "panels")
         if notifications:
-            declared["notifications"] = [dict(n) for n in notifications]
+            declared["notifications"] = as_wire(notifications, "notifications")
         # Its `logging` as structured lines (decision 514), unless it configures its own.
         install_structured_logging()
         service = environ.get(SERVICE_FD_ENV, "")
@@ -577,10 +605,10 @@ def _serve(
     channel: Channel,
     run: Run,
     cleanup: Run | None,
-    given: tuple[Mapping[str, object], ServiceCalls | None],
+    given: tuple[Mapping[str, Wire], ServiceCalls | None],
 ) -> int:
     declared, service = given
-    hello: dict[str, object] = {
+    hello: Message = {
         "type": "hello",
         "schedr_version": _plugin_version(),
         "mode": "extension",
@@ -606,29 +634,30 @@ def _serve(
 
 def _result(
     request: ExtensionRequest, channel: ExtensionChannel, run: Run, cleanup: Run | None
-) -> dict[str, Any]:
+) -> Message:
     call = run
     if request.cleanup:
         if cleanup is None:
             error = ProtocolError(f"extension `{request.name}` has no cleanup")
-            return {"type": "task_failed", "error": import_error(error), "kind": None}
+            return {"type": "task_failed", "error": _error(error), "kind": None}
         call = cleanup
     try:
         output = asyncio.run(_called(call, request, channel))
     except asyncio.CancelledError:
         # SIGTERM (decision 513): the worker ends the attempt with its own reason.
         stopped = RuntimeError("stopped by the worker (SIGTERM)")
-        return {"type": "task_failed", "error": import_error(stopped), "kind": None}
+        return {"type": "task_failed", "error": _error(stopped), "kind": None}
     except Exception as e:  # the plugin's own failure
-        return {"type": "task_failed", "error": import_error(e), "kind": None}
+        return {"type": "task_failed", "error": _error(e), "kind": None}
     try:
         json.dumps(output, allow_nan=False)
         check_size(output, request.max_output_size)
+        sent = as_wire(output, "the output")
     except CodecError as e:
-        return {"type": "task_failed", "error": import_error(e), "kind": "output_too_large"}
+        return {"type": "task_failed", "error": _error(e), "kind": "output_too_large"}
     except (TypeError, ValueError) as e:
-        return {"type": "task_failed", "error": import_error(e), "kind": "output_not_serializable"}
-    return {"type": "task_succeeded", "output": output, "outcome": "SUCCESS"}
+        return {"type": "task_failed", "error": _error(e), "kind": "output_not_serializable"}
+    return {"type": "task_succeeded", "output": sent, "outcome": "SUCCESS"}
 
 
 async def _called(call: Run, request: ExtensionRequest, channel: ExtensionChannel) -> object:

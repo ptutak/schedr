@@ -12,8 +12,17 @@ from schedr.runner.protocol import (
     Channel,
     ChannelClosedError,
     ProtocolError,
+    as_wire,
+    flag,
     from_fd,
+    listed,
+    obj,
+    optional_whole,
+    text,
+    texts,
+    whole,
 )
+from schedr_extension._protocol import given_secrets
 
 
 @pytest.fixture
@@ -187,3 +196,53 @@ def test_from_fd_makes_a_non_blocking_descriptor_blocking() -> None:
     finally:
         channel.close()
         theirs.close()
+
+
+def test_a_messages_fields_are_read_as_their_types_or_refused() -> None:
+    message = {"type": "t", "s": "x", "n": 3, "b": True, "f": 1.5, "l": ["a"], "o": {"k": 1}}
+    assert (text(message, "s"), whole(message, "n"), flag(message, "b")) == ("x", 3, True)
+    assert (optional_whole(message, "gone"), flag(message, "gone")) == (None, False)
+    assert texts(message, "l") == ["a"]
+    assert texts(message, "gone") == []
+    assert obj(message["o"], "o") == {"k": 1}
+    assert listed(None, "l") == []
+    for read, key in [(text, "n"), (whole, "b"), (whole, "f"), (whole, "gone"), (flag, "n")]:
+        with pytest.raises(ProtocolError, match=f"`t`: `{key}` must be"):
+            read(message, key)
+    with pytest.raises(ProtocolError, match="must hold strings"):
+        texts({"type": "t", "l": ["a", 1]}, "l")
+    with pytest.raises(ProtocolError, match="o must be an object"):
+        obj([], "o")
+    with pytest.raises(ProtocolError, match="l must be an array"):
+        listed({}, "l")
+
+
+def test_as_wire_copies_plain_json_and_refuses_the_rest() -> None:
+    assert as_wire({"a": (1, [2.5, None]), 3: True, None: "x"}, "v") == {
+        "a": [1, [2.5, None]],
+        "3": True,
+        "null": "x",
+    }
+    assert json.loads(json.dumps({3: True, None: "x"})) == as_wire({3: True, None: "x"}, "v")
+    with pytest.raises(TypeError, match="v: set isn't JSON"):
+        as_wire({"a": {1}}, "v")
+    with pytest.raises(TypeError, match="isn't a string"):
+        as_wire({(1, 2): 3}, "v")
+
+
+def test_given_secrets_are_read_by_name_or_refused() -> None:
+    message = {
+        "type": "welcome",
+        "secrets": [
+            {"name": {"path": "db"}, "value": {"user": "u"}},
+            {"name": {"path": "db", "key": "pw", "storage": "vault"}, "value": "p"},
+        ],
+    }
+    assert given_secrets(message, "`welcome`") == {
+        (None, "db", None): {"user": "u"},
+        ("vault", "db", "pw"): "p",
+    }
+    assert given_secrets({"type": "welcome"}, "`welcome`") == {}
+    for secrets in ([{"name": {"key": "k"}}], [{"name": {"path": "p", "key": 1}}], ["s"], {}):
+        with pytest.raises(ProtocolError, match="`welcome`"):
+            given_secrets({"type": "welcome", "secrets": secrets}, "`welcome`")
