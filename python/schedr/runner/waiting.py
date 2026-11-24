@@ -270,7 +270,7 @@ async def _poked(
 
 
 async def waited(
-    function: Callable[..., Coroutine[object, object, object]],
+    function: Callable[..., object],
     arguments: Mapping[str, object],
     task: Mapping[str, object],
     moving: asyncio.Event | None = None,
@@ -301,7 +301,7 @@ async def waited(
 
 
 async def _waited(
-    function: Callable[..., Coroutine[object, object, object]],
+    function: Callable[..., object],
     arguments: Mapping[str, object],
     task: Mapping[str, object],
     moving: asyncio.Event | None,
@@ -323,14 +323,25 @@ async def _waited(
     if isinstance(call_ms, int) and (seconds is None or call_ms / 1000 < seconds):
         # Its own limit comes first: a call over it hung, a failure its retries cover (the
         # same run), not the end of the wait.
-        ended, value, _ = await _within(function(**arguments), call_ms / 1000)
+        ended, value, _ = await _within(_coroutine(function(**arguments)), call_ms / 1000)
         if not ended:
             raise CallTimedOutError(
                 f"a call took longer than its `timeout` ({call_ms / 1000:g} s), and was cancelled"
             )
         return value
-    ended, value, _ = await _within(function(**arguments), seconds)
+    ended, value, _ = await _within(_coroutine(function(**arguments)), seconds)
     return value if ended else TimedOut()
+
+
+def _coroutine(called: object) -> Coroutine[object, object, object]:
+    """What an ``@sensor``'s call returned: its coroutine (its load refuses a plain ``def``).
+
+    Raises:
+        TypeError: If it isn't one (a wrapper returning something else).
+    """
+    if not inspect.iscoroutine(called):
+        raise TypeError(f"an @sensor's call returns a coroutine, got {type(called).__name__}")
+    return called
 
 
 async def _poked_trigger(

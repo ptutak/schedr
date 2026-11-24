@@ -78,6 +78,15 @@ def text(message: Mapping[str, Wire], key: str) -> str:
     return value
 
 
+def optional_text(message: Mapping[str, Wire], key: str) -> str | None:
+    """A message's string field that may be missing or null.
+
+    Raises:
+        ProtocolError: If it is there and not a string.
+    """
+    return None if message.get(key) is None else text(message, key)
+
+
 def whole(message: Mapping[str, Wire], key: str) -> int:
     """A message's integer field (not a boolean).
 

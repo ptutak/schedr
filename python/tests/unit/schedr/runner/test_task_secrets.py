@@ -99,8 +99,8 @@ def test_a_secret_not_fetched_is_an_input_error(root: Path) -> None:
 
 
 def test_a_whole_secret_shaped_like_a_tag_reads_back_as_written() -> None:
-    run = {**RUN, "$secrets": {(None, "x", None, None): {"$date": "not a date"}}}
-    stored = resolve({"kind": "secret", "path": "x"}, {}, run)
+    secrets = {(None, "x", None, None): {"$date": "not a date"}}
+    stored = resolve({"kind": "secret", "path": "x"}, {}, RUN, secrets=secrets)
     assert stored == {"$dict": {"$date": "not a date"}}
 
 

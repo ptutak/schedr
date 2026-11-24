@@ -3433,3 +3433,14 @@ Found in the full stress run on CI: a master starved between two statements long
 the worker sends the message again. Not chosen: the whole class 25 (invalid transaction state):
 its other codes (a statement in an aborted transaction, a read-only one) are mistakes of the
 statement's own, not a moment's trouble.
+
+### 2026-11-24: M5.2k, B288: a task's stored forms typed
+
+The rest of B276: `schedr.runner.task` reads the stored forms (a reference, a value, a
+template, the inputs, the run, the request's task) as `Stored` (`Mapping[str, Wire]`), narrowed
+where read with the `_protocol` helpers; a built argument is `object`. The secrets a request
+brings no longer ride in the run mapping under `$secrets` (their tuple keys aren't JSON): they
+go to `resolve`, `render`, `build` and `mapped_arguments` as a keyword. `waited` takes any
+callable, as a `@sensor.poke` may be a plain `def`, and checks an `@sensor`'s call returned a
+coroutine. `typing.Any` stays only as a value: the annotation of a parameter with none, handed
+to the codec.

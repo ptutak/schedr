@@ -76,8 +76,12 @@ from schedr.runner.protocol import (
     Telling,
     Wire,
     as_wire,
+    listed,
     obj,
+    optional_text,
+    optional_whole,
     text,
+    texts,
     whole,
 )
 from schedr.sensors import NOT_YET, NOT_YET_OUTCOME, output_hint
@@ -87,6 +91,9 @@ if TYPE_CHECKING:
 
 type EntriesOf = Callable[[str, Path, str], list[registry.DefinedDag]]
 """Gives a DAG file's DAGs: its root's name and folder, and its path in it."""
+
+type Stored = Mapping[str, Wire]
+"""A stored form as the agent sends it: a task, a value, a reference, the inputs, the run."""
 
 SUCCESS = "SUCCESS"
 """The outcome of a task without outcomes of its own (``DefaultOutcome.SUCCESS``)."""
@@ -101,11 +108,13 @@ class TaskSetupError(Exception):
 
 
 def resolve(
-    reference: Mapping[str, Any],
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None = None,
-) -> Any:
+    reference: Stored,
+    inputs: Stored,
+    run: Stored,
+    outcomes: Stored | None = None,
+    *,
+    secrets: Secrets | None = None,
+) -> Wire:
     """The stored value a reference stands for.
 
     Args:
@@ -116,6 +125,7 @@ def resolve(
         run: The request's run information.
         outcomes: The upstream tasks' outcomes, by task ID: a name, or ``None`` for one that
             was skipped.
+        secrets: The secrets the request brought, by :func:`secret_key`.
 
     Returns:
         The stored value (``planned_for`` / ``since`` tagged as ``$datetime``); ``None`` for
@@ -124,52 +134,60 @@ def resolve(
 
     Raises:
         TaskInputError: For a missing input or path, or a truncated stream.
+        ProtocolError: For a reference or run information that isn't as the agent sends it.
     """
     outcomes = outcomes or {}
-    if reference["kind"] == "secret":
+    kind = reference.get("kind")
+    if kind == "secret":
         name = secret_key(reference)
-        secrets = run.get(SECRETS, {})
-        if name not in secrets:
+        if secrets is None or name not in secrets:
             raise TaskInputError(f"the secret `{_label(reference)}` wasn't fetched")
         value = secrets[name]
         return escaped(value) if isinstance(value, dict) else value
-    if reference["kind"] == "param":
-        return _follow("dag_ctx.params", run.get("params", {}), reference.get("path", []))
-    if reference["kind"] == "dag_ctx":
-        field = reference["field"]
-        values = {
-            "dag_id": run["dag_id"],
-            "run_id": run["run_id"],
-            "run_kind": run["kind"],
-            "planned_for": {"$datetime": run["planned_for"]},
-            "since": {"$datetime": run["since"]},
-        }
-        event = run.get("event")
-        if event is not None:
-            values["event_key"] = event["key"]
-            values["event_data"] = event["data"]
-            values["event_at"] = {"$datetime": event.get("at") or run["planned_for"]}
-        if field not in values:
-            raise TaskInputError("`dag_ctx.event`: this run wasn't started by an event")
-        return values[field]
-    task = reference["task"]
-    if reference["kind"] == "outcome":
+    if kind == "param":
+        return _follow("dag_ctx.params", run.get("params") or {}, _path(reference))
+    if kind == "dag_ctx":
+        return _run_field(text(reference, "field"), run)
+    task = text(reference, "task")
+    if kind == "outcome":
         if task not in outcomes:
             raise TaskInputError(f"the outcome of `{task}` isn't among the task's inputs")
         return outcomes[task]
     if task in outcomes:
         outcome = outcomes[task]
-        on = reference.get("on", [])
+        on = listed(reference.get("on"), "a reference's `on`")
         # Skipped, or another outcome than the edge is taken on: the data rule's `None`.
         if outcome is None or (on and outcome not in on):
             return None
     if task not in inputs:
         raise TaskInputError(f"the output of `{task}` isn't among the task's inputs")
-    return _follow(task, inputs[task], reference.get("path", []))
+    return _follow(task, inputs[task], _path(reference))
 
 
-SECRETS = "$secrets"
-"""Where :func:`execute` puts the request's fetched secrets in the run mapping."""
+def _path(reference: Stored) -> list[Wire]:
+    return listed(reference.get("path"), "a reference's `path`")
+
+
+def _run_field(field: str, run: Stored) -> Wire:
+    """A ``dag_ctx`` field's stored value, from the run information."""
+    planned_for = text(run, "planned_for")
+    values: dict[str, Wire] = {
+        "dag_id": text(run, "dag_id"),
+        "run_id": text(run, "run_id"),
+        "run_kind": text(run, "kind"),
+        "planned_for": {"$datetime": planned_for},
+        "since": {"$datetime": text(run, "since")},
+    }
+    event = run.get("event")
+    if event is not None:
+        told = obj(event, "the run's `event`")
+        values["event_key"] = told.get("key")
+        values["event_data"] = told.get("data")
+        values["event_at"] = {"$datetime": told.get("at") or planned_for}
+    if field not in values:
+        raise TaskInputError("`dag_ctx.event`: this run wasn't started by an event")
+    return values[field]
+
 
 CONNECTION_NOT_FOUND = "connection_not_found"
 """The error kind of a connection the agent doesn't know (not in the DAG folder's registry)."""
@@ -177,10 +195,14 @@ CONNECTION_NOT_FOUND = "connection_not_found"
 CONNECTION_DENIED = "connection_denied"
 """The error kind of a connection the task doesn't declare in ``connections=``."""
 
+type SecretKey = tuple[str | None, str, str | None, str | None]
+"""A secret by ``(storage, path, key, default)``."""
 
-def secret_key(
-    name: Mapping[str, Any],
-) -> tuple[str | None, str, str | None, str | None]:
+type Secrets = Mapping[SecretKey, Wire]
+"""The secrets a request brought, by their keys."""
+
+
+def secret_key(name: Stored) -> SecretKey:
     """A secret's name as stored, as a key.
 
     ``{"storage": ..., "path": ..., "key": ..., "default": ...}``.
@@ -190,14 +212,21 @@ def secret_key(
 
     Returns:
         ``(storage, path, key, default)``.
+
+    Raises:
+        ProtocolError: If a part isn't a string.
     """
-    return (name.get("storage"), name["path"], name.get("key"), name.get("default"))
+    return (
+        optional_text(name, "storage"),
+        text(name, "path"),
+        optional_text(name, "key"),
+        optional_text(name, "default"),
+    )
 
 
-def _label(name: Mapping[str, Any]) -> str:
-    return SecretRef(
-        name["path"], name.get("key"), name.get("storage"), name.get("default")
-    ).label()
+def _label(name: Stored) -> str:
+    storage, path, key, default = secret_key(name)
+    return SecretRef(path, key, storage, default).label()
 
 
 DEFAULT_IN_FLIGHT = 16
@@ -279,11 +308,11 @@ PROCESS_RESULT = frozenset(
 """The fields of a stored ``ProcessResult``: only its streams are ever truncated (B75)."""
 
 
-def _is_process_result(value: Mapping[str, Any]) -> bool:
+def _is_process_result(value: Stored) -> bool:
     return value.keys() == PROCESS_RESULT
 
 
-def _follow(task: str, value: Any, path: list[Any]) -> Any:
+def _follow(task: str, value: Wire, path: list[Wire]) -> Wire:
     """The part of ``task``'s stored output ``value`` at ``path`` (keys and indexes)."""
     for step in path:
         if isinstance(step, str):
@@ -297,19 +326,23 @@ def _follow(task: str, value: Any, path: list[Any]) -> Any:
                     "take the whole ProcessResult instead"
                 )
             value = value[step]
-        else:
+        elif isinstance(step, int) and not isinstance(step, bool):
             items = value.get("$tuple") if isinstance(value, dict) else value
             if not isinstance(items, list) or step >= len(items):
                 raise TaskInputError(f"`{task}`: index {step} doesn't exist in the output")
             value = items[step]
+        else:
+            raise ProtocolError(f"a reference's path holds {step!r}: a key or an index")
     return value
 
 
 def render(
-    parts: list[Any],
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None = None,
+    parts: list[Wire],
+    inputs: Stored,
+    run: Stored,
+    outcomes: Stored | None = None,
+    *,
+    secrets: Secrets | None = None,
 ) -> str:
     """Renders a stored template to text, the way the agent renders command lines.
 
@@ -318,6 +351,7 @@ def render(
         inputs: The upstream outputs.
         run: The run information.
         outcomes: The upstream tasks' outcomes (see :func:`resolve`).
+        secrets: The secrets the request brought (see :func:`resolve`).
 
     Returns:
         The text.
@@ -326,13 +360,14 @@ def render(
         TaskInputError: For a reference that can't be resolved or written as text.
     """
     out: list[str] = []
-    for part in parts:
+    for given in parts:
+        part = obj(given, "a template's part")
         if "text" in part:
-            out.append(part["text"])
+            out.append(text(part, "text"))
             continue
-        reference = part["ref"]
-        value = decode_any(resolve(reference, inputs, run, outcomes))
-        spec = reference.get("format")
+        reference = obj(part.get("ref"), "a template's reference")
+        value = decode_any(resolve(reference, inputs, run, outcomes, secrets=secrets))
+        spec = optional_text(reference, "format")
         if value is None or isinstance(value, list | dict | tuple):
             raise TaskInputError(f"a {type(value).__name__} can't be rendered into text")
         written = value.strftime(spec) if spec and "%" in spec else as_text(value)
@@ -342,12 +377,14 @@ def render(
 
 
 def build(
-    value: Mapping[str, Any],
+    value: Stored,
     annotation: object,
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None = None,
-) -> Any:
+    inputs: Stored,
+    run: Stored,
+    outcomes: Stored | None = None,
+    *,
+    secrets: Secrets | None = None,
+) -> object:
     """An argument's Python value from its stored form, decoded against the parameter type.
 
     Args:
@@ -356,6 +393,7 @@ def build(
         inputs: The upstream outputs.
         run: The run information.
         outcomes: The upstream tasks' outcomes (see :func:`resolve`).
+        secrets: The secrets the request brought (see :func:`resolve`).
 
     Returns:
         The value to pass.
@@ -363,29 +401,42 @@ def build(
     Raises:
         TaskInputError: If a stored value doesn't fit the parameter.
     """
+    given = _Given(inputs, run, outcomes, secrets)
     try:
         if "literal" in value:
-            return decode(value["literal"], _run_result_narrowed(annotation, value["literal"]))
+            literal = value["literal"]
+            return decode(literal, _run_result_narrowed(annotation, literal))
         if "ref" in value:
+            reference = obj(value["ref"], "a stored reference")
             return decode(
-                resolve(value["ref"], inputs, run, outcomes),
-                _narrowed(value["ref"], annotation, outcomes),
+                resolve(reference, inputs, run, outcomes, secrets=secrets),
+                _narrowed(reference, annotation, outcomes),
             )
         if "template" in value:
             # Text, which must fit the place it fills (B124: a union member taking it).
-            return decode(render(value["template"], inputs, run, outcomes), annotation)
-        return _built(value, unwrap(annotation), inputs, run, outcomes)
+            parts = listed(value["template"], "a stored template")
+            return decode(render(parts, inputs, run, outcomes, secrets=secrets), annotation)
+        return _built(value, unwrap(annotation), given)
     except CodecError as e:
         raise TaskInputError(f"a stored value doesn't fit the parameter's type, {e}") from e
 
 
-def _built(
-    value: Mapping[str, Any],
-    target: object,
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None,
-) -> Any:
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Given:
+    """What stored values are built from: the inputs, the run, the outcomes, the secrets."""
+
+    inputs: Stored
+    run: Stored
+    outcomes: Stored | None
+    secrets: Secrets | None
+
+    def build(self, value: Wire, annotation: object) -> object:
+        """A stored value inside a list or a map, built as :func:`build` builds one."""
+        stored = obj(value, "a stored value")
+        return build(stored, annotation, self.inputs, self.run, self.outcomes, secrets=self.secrets)
+
+
+def _built(value: Stored, target: object, given: _Given) -> object:
     """A list or dict written with references inside, as the parameter's type.
 
     For a union, as the first member of that shape it builds as (B121: ``tuple[int, int] |
@@ -397,20 +448,14 @@ def _built(
     for member in members:
         try:
             if shape is list:
-                return _built_list(value["list"], member, inputs, run, outcomes)
-            return _built_map(value["map"], member, inputs, run, outcomes)
+                return _built_list(listed(value.get("list"), "a stored list"), member, given)
+            return _built_map(obj(value.get("map"), "a stored map"), member, given)
         except (TaskInputError, CodecError) as e:
             error = e
     raise error
 
 
-def _built_list(
-    items: list[Any],
-    target: object,
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None,
-) -> Any:
+def _built_list(items: list[Wire], target: object, given: _Given) -> object:
     """A list written with references inside, as the parameter's type.
 
     A tuple for a tuple parameter (B65), else a list.
@@ -420,18 +465,12 @@ def _built_list(
         types_ = tuple_items(args)
         if len(types_) != len(items):
             raise TaskInputError(f"expected a tuple of {len(types_)}, got {len(items)} values")
-        return tuple(build(v, t, inputs, run, outcomes) for v, t in zip(items, types_, strict=True))
+        return tuple(given.build(v, t) for v, t in zip(items, types_, strict=True))
     item = args[0] if origin in SEQUENCE_ORIGINS and args else Any
-    return [build(v, item, inputs, run, outcomes) for v in items]
+    return [given.build(v, item) for v in items]
 
 
-def _built_map(
-    fields: Mapping[str, Any],
-    target: object,
-    inputs: Mapping[str, Any],
-    run: Mapping[str, Any],
-    outcomes: Mapping[str, Any] | None,
-) -> Any:
+def _built_map(fields: Stored, target: object, given: _Given) -> object:
     """A dict written with references inside, as the parameter's type.
 
     A dataclass or a Pydantic model is built from its fields (B65); a ``TypedDict`` or a
@@ -440,7 +479,7 @@ def _built_map(
     origin, args = get_origin(target), get_args(target)
     if origin in MAPPING_ORIGINS or target in MAPPING_ORIGINS or not isinstance(target, type):
         item = args[1] if origin in MAPPING_ORIGINS and args else Any
-        return {k: build(v, item, inputs, run, outcomes) for k, v in fields.items()}
+        return {k: given.build(v, item) for k, v in fields.items()}
     hints = type_hints(target, f"`{target.__name__}`")
     if is_typeddict(target):
         # Its keys, as a dataclass or a model checks its fields when built (B124).
@@ -448,7 +487,7 @@ def _built_map(
             raise TaskInputError(f"`{target.__name__}` has no field `{unknown[0]}`")
         if missing := sorted(set(getattr(target, "__required_keys__", ())) - set(fields)):
             raise TaskInputError(f"`{target.__name__}` needs `{missing[0]}`")
-    built = {k: build(v, hints.get(k, Any), inputs, run, outcomes) for k, v in fields.items()}
+    built = {k: given.build(v, hints.get(k, Any)) for k, v in fields.items()}
     try:
         if dataclasses.is_dataclass(target):
             return target(**built)
@@ -459,19 +498,20 @@ def _built_map(
     return built
 
 
-def _narrowed(
-    reference: Mapping[str, Any], annotation: object, outcomes: Mapping[str, Any] | None
-) -> object:
+def _narrowed(reference: Stored, annotation: object, outcomes: Stored | None) -> object:
     """The member of a union annotation the upstream's outcome names, else the annotation.
 
     A plain JSON object can fit several dataclasses of an outcome union: the stored outcome
     says which one it is (only a whole output: a path reaches into one member already; a
     ``first_of``'s value is its winner's whole output, with the winner's outcome).
     """
-    outcome = (outcomes or {}).get(reference.get("task", ""))
-    path = list(reference.get("path") or ())
-    if reference.get("kind") != "output" or (path and path != [FIRST_OF_VALUE]):
+    if reference.get("kind") != "output":
+        return annotation  # a secret's `path` is the secret's, not a path into an output
+    path = _path(reference)
+    if path and path != [FIRST_OF_VALUE]:
         return annotation
+    task = reference.get("task")
+    outcome = (outcomes or {}).get(task) if isinstance(task, str) else None
     return member_named(annotation, outcome)
 
 
@@ -519,11 +559,13 @@ def member_named(annotation: object, outcome: object) -> object:
 
 
 def mapped_arguments(
-    inputs: Mapping[str, Any],
-    hints: Mapping[str, Any],
-    run: Mapping[str, Any] | None = None,
-    upstream_outcomes: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+    inputs: Stored,
+    hints: Mapping[str, object],
+    run: Stored | None = None,
+    upstream_outcomes: Stored | None = None,
+    *,
+    secrets: Secrets | None = None,
+) -> dict[str, object]:
     """A mapped task instance's own arguments: the elements the master resolved for it.
 
     They come with the inputs under ``$expand`` (decision 76); one taken element by element
@@ -537,6 +579,7 @@ def mapped_arguments(
         hints: The task function's type hints.
         run: The run information, for ``$expand_values``.
         upstream_outcomes: The upstream tasks' outcomes, for ``$expand_values``.
+        secrets: The secrets the request brought, for ``$expand_values``.
 
     Returns:
         The arguments by parameter name (none for a task that isn't mapped).
@@ -544,9 +587,9 @@ def mapped_arguments(
     Raises:
         TaskInputError: If an element doesn't fit its parameter.
     """
-    outcomes = inputs.get("$expand_outcomes", {})
-    arguments = {}
-    for name, value in inputs.get("$expand", {}).items():
+    outcomes = obj(inputs.get("$expand_outcomes") or {}, "`$expand_outcomes`")
+    arguments: dict[str, object] = {}
+    for name, value in obj(inputs.get("$expand") or {}, "`$expand`").items():
         annotation = member_named(hints.get(name, Any), outcomes.get(name))
         try:
             arguments[name] = decode(value, annotation)
@@ -554,17 +597,16 @@ def mapped_arguments(
             raise TaskInputError(
                 f"mapped argument `{name}`: the element doesn't fit the parameter's type, {e}"
             ) from e
-    for name, value in inputs.get("$expand_values", {}).items():
+    given = _Given(inputs, run or {}, upstream_outcomes, secrets)
+    for name, value in obj(inputs.get("$expand_values") or {}, "`$expand_values`").items():
         try:
-            arguments[name] = build(
-                value, hints.get(name, Any), inputs, run or {}, upstream_outcomes
-            )
+            arguments[name] = given.build(value, hints.get(name, Any))
         except TaskInputError as e:
             raise TaskInputError(f"mapped argument `{name}`: {e}") from e
     return arguments
 
 
-def run_values(run: Mapping[str, Any], params_class: type | None = None) -> RunValues:
+def run_values(run: Stored, params_class: type | None = None) -> RunValues:
     """The ``dag_ctx`` values for a request's run information.
 
     Args:
@@ -573,20 +615,24 @@ def run_values(run: Mapping[str, Any], params_class: type | None = None) -> RunV
 
     Returns:
         The values.
+
+    Raises:
+        ProtocolError: For run information that isn't as the agent sends it.
     """
+    event = run.get("event")
     return RunValues(
-        dag_id=run["dag_id"],
-        run_id=run["run_id"],
-        kind=run["kind"],
-        planned_for=datetime.fromisoformat(run["planned_for"]),
-        since=datetime.fromisoformat(run["since"]),
-        params=run.get("params", {}),
+        dag_id=text(run, "dag_id"),
+        run_id=text(run, "run_id"),
+        kind=text(run, "kind"),
+        planned_for=datetime.fromisoformat(text(run, "planned_for")),
+        since=datetime.fromisoformat(text(run, "since")),
+        params=obj(run.get("params") or {}, "the run's `params`"),
         params_class=params_class,
-        event=run.get("event"),
+        event=None if event is None else obj(event, "the run's `event`"),
     )
 
 
-def find_function(request: Mapping[str, Any]) -> Callable[..., Any]:
+def find_function(request: Stored) -> Callable[..., object]:
     """Imports the DAG file and finds the task's function.
 
     Args:
@@ -598,7 +644,7 @@ def find_function(request: Mapping[str, Any]) -> Callable[..., Any]:
     return find_task(request)[0]
 
 
-def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset[str]]:
+def find_task(request: Stored) -> tuple[Callable[..., object], frozenset[str]]:
     """Imports the DAG file and finds the task's function and its direct downstream tasks.
 
     Args:
@@ -612,8 +658,8 @@ def find_task(request: Mapping[str, Any]) -> tuple[Callable[..., Any], frozenset
 
 
 def find_task_of_dag(
-    request: Mapping[str, Any],
-) -> tuple[Callable[..., Any], frozenset[str], type | None]:
+    request: Stored,
+) -> tuple[Callable[..., object], frozenset[str], type | None]:
     """As :func:`find_task`, with the class the DAG declares its parameters with.
 
     Args:
@@ -626,14 +672,27 @@ def find_task_of_dag(
         TaskSetupError: If the DAG or the task isn't in the file.
     """
     entry = find_entry(request)
-    task_id = request["task"]["id"]
+    task_id = _task_id(request)
     downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
     return entry.functions[task_id], downstream, entry.params_class
 
 
-def find_entry(
-    request: Mapping[str, Any], entries_of: EntriesOf = import_dag_entries
-) -> registry.DefinedDag:
+def _task(request: Stored) -> dict[str, Wire]:
+    """A request's ``task``: the stored task."""
+    return obj(request.get("task"), "the request's `task`")
+
+
+def _task_id(request: Stored) -> str:
+    return text(_task(request), "id")
+
+
+def _dag_file(request: Stored) -> tuple[str, Path, str]:
+    """A request's DAG file: its root's name, the root's folder, its path in the root."""
+    dag_file = obj(request.get("dag_file"), "the request's `dag_file`")
+    return text(dag_file, "root"), Path(text(dag_file, "root_dir")), text(dag_file, "path")
+
+
+def find_entry(request: Stored, entries_of: EntriesOf = import_dag_entries) -> registry.DefinedDag:
     """The DAG of a task request, its file imported, with the task's function in it.
 
     Args:
@@ -646,19 +705,15 @@ def find_entry(
     Raises:
         TaskSetupError: If the DAG or the task isn't in the file.
     """
-    dag_file = request["dag_file"]
-    entries = entries_of(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
-    task_id = request["task"]["id"]
+    root, root_dir, path = _dag_file(request)
+    entries = entries_of(root, root_dir, path)
+    task_id, dag_id = _task_id(request), text(request, "dag_id")
     for entry in entries:
-        if entry.model.id == request["dag_id"]:
+        if entry.model.id == dag_id:
             if task_id not in entry.functions:
-                raise TaskSetupError(
-                    f"DAG `{request['dag_id']}` has no Python task `{task_id}` (any more?)"
-                )
+                raise TaskSetupError(f"DAG `{dag_id}` has no Python task `{task_id}` (any more?)")
             return entry
-    raise TaskSetupError(
-        f"`{dag_file['path']}` doesn't define DAG `{request['dag_id']}` (any more?)"
-    )
+    raise TaskSetupError(f"`{path}` doesn't define DAG `{dag_id}` (any more?)")
 
 
 def chosen_ids(result: object, downstream: frozenset[str], dag_id: str) -> list[str]:
@@ -697,7 +752,7 @@ def chosen_ids(result: object, downstream: frozenset[str], dag_id: str) -> list[
     return chosen
 
 
-def failure(error: BaseException, kind: str | None, message: str | None = None) -> dict[str, Any]:
+def failure(error: BaseException, kind: str | None, message: str | None = None) -> Message:
     """A ``task_failed`` message.
 
     Args:
@@ -708,7 +763,7 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
     Returns:
         The message.
     """
-    summary = import_error(error)
+    summary: dict[str, Wire] = dict(import_error(error))
     if message is not None:
         summary["message"] = message
     return {"type": "task_failed", "error": summary, "kind": kind}
@@ -718,47 +773,49 @@ def failure(error: BaseException, kind: str | None, message: str | None = None) 
 class _Begun:
     """A task ready for its function: everything before the call."""
 
-    function: Callable[..., Any]
-    arguments: dict[str, Any]
-    hints: Mapping[str, Any]
+    function: Callable[..., object]
+    arguments: dict[str, object]
+    hints: Mapping[str, object]
     values: RunValues
     own: TaskValues
     downstream: frozenset[str]
 
 
 def _begin(
-    request: Mapping[str, Any],
+    request: Stored,
     imported: Callable[[], None],
     secrets: SecretReader | None,
     channel: Asking | None,
     entries: EntriesOf = import_dag_entries,
     *,
     binding: bool = False,
-) -> _Begun | dict[str, Any]:
+) -> _Begun | Message:
     """Imports the DAG file and builds the call; a ``task_failed`` message when that fails.
 
     With ``binding``, a call its function's signature doesn't take fails here, before anything
     is told it can start (a poke moving to new code, which then stays on its own).
     """
-    task, inputs, run = request["task"], request["inputs"], request["run"]
-    if request.get("secrets"):
-        fetched = {secret_key(s["name"]): s["value"] for s in request["secrets"]}
-        run = {**run, SECRETS: fetched}
-    outcomes = request.get("outcomes", {})
-    task_id = task["id"]
+    task = _task(request)
+    inputs = obj(request.get("inputs") or {}, "the request's `inputs`")
+    run = obj(request.get("run"), "the request's `run`")
+    fetched = _fetched(request)
+    outcomes = obj(request.get("outcomes") or {}, "the request's `outcomes`")
+    task_id = text(task, "id")
     try:
         entry = find_entry(request, entries)
         function, params_class = entry.functions[task_id], entry.params_class
         downstream = frozenset(e.to for e in entry.model.edges if e.from_ == task_id)
         hints = type_hints(function, f"task `{task_id}`")
+        given = _Given(inputs, run, outcomes, fetched)
+        stored = obj(task.get("arguments") or {}, "the task's `arguments`")
         arguments = {
-            name: build(value, hints.get(name, Any), inputs, run, outcomes)
-            for name, value in task.get("arguments", {}).items()
+            name: given.build(value, hints.get(name, Any)) for name, value in stored.items()
         }
-        arguments.update(mapped_arguments(inputs, hints, run, outcomes))
+        arguments.update(mapped_arguments(inputs, hints, run, outcomes, secrets=fetched))
         handles = request.get("cleanup")
         if handles is not None:
-            function, arguments = cleanup_call(entry, function, task_id, arguments, handles)
+            registered = listed(handles, "the request's `cleanup`")
+            function, arguments = cleanup_call(entry, function, task_id, arguments, registered)
         if binding:
             inspect.signature(function).bind(**arguments)
     except TaskSetupError as e:
@@ -771,11 +828,11 @@ def _begin(
     opener = connection_opener(channel) if channel is not None else None
     adder = handle_adder(channel) if channel is not None else None
     api = api_caller(channel) if channel is not None else None
-    first = run.get("first_started")
+    first = optional_text(run, "first_started")
     own = TaskValues(
         task_id,
-        int(run.get("try_number", 1)),
-        run.get("map_index"),
+        optional_whole(run, "try_number") or 1,
+        optional_whole(run, "map_index"),
         secrets,
         opener,
         adder,
@@ -785,9 +842,16 @@ def _begin(
     return _Begun(function, arguments, hints, run_values(run, params_class), own, downstream)
 
 
-async def execute_trigger(
-    request: Mapping[str, Any], channel: Telling, entries: EntriesOf
-) -> dict[str, Any]:
+def _fetched(request: Stored) -> dict[SecretKey, Wire]:
+    """The secrets a request brought, by :func:`secret_key`."""
+    fetched: dict[SecretKey, Wire] = {}
+    for given in listed(request.get("secrets"), "the request's `secrets`"):
+        secret = obj(given, "a secret")
+        fetched[secret_key(obj(secret.get("name"), "a secret's `name`"))] = secret.get("value")
+    return fetched
+
+
+async def execute_trigger(request: Stored, channel: Telling, entries: EntriesOf) -> Message:
     """Runs a trigger in the watcher host's loop, until it is stopped or it fails.
 
     Args:
@@ -810,12 +874,13 @@ async def execute_trigger(
     # Slow to import; most tasks aren't triggers.
     from schedr.runner.waiting import Batch, run_trigger  # noqa: PLC0415
 
-    limit: int = request["task"]["settings"]["max_output_size"]
-    in_flight: int = request["task"].get("in_flight") or DEFAULT_IN_FLIGHT
-    if request["task"].get("wait_for") is not None:
+    task = _task(request)
+    limit = _max_output_size(task)
+    in_flight = optional_whole(task, "in_flight") or DEFAULT_IN_FLIGHT
+    if task.get("wait_for") is not None:
         return await _called_for_run(request, begun, channel, limit)
-    hint = event_data_hint(begun.hints.get("return"), f"@trigger `{request['task']['id']}`")
-    batch_ms = request["task"].get("batch_ms")
+    hint = event_data_hint(begun.hints.get("return"), f"@trigger `{text(task, 'id')}`")
+    batch_ms = task.get("batch_ms")
     batch = None
     if isinstance(batch_ms, int):
         # One event of the items gathered: its data the items themselves (decision 352).
@@ -827,8 +892,8 @@ async def execute_trigger(
             await run_trigger(
                 begun.function,
                 begun.arguments,
-                request["task"],
-                request["trigger"].get("after"),
+                task,
+                optional_text(obj(request.get("trigger"), "the request's `trigger`"), "after"),
                 lambda event: _tell_event(channel, event, hint, limit, in_flight),
                 lambda error: channel.send({"type": "trigger_poked", "error": error}),
                 batch,
@@ -845,25 +910,31 @@ async def execute_trigger(
     )
 
 
-async def _called_for_run(
-    request: Mapping[str, Any], begun: _Begun, channel: Telling, limit: int
-) -> dict[str, Any]:
+def _max_output_size(task: Stored) -> int:
+    """The most bytes a task's output may take, from its settings."""
+    return whole(obj(task.get("settings"), "the task's `settings`"), "max_output_size")
+
+
+async def _called_for_run(request: Stored, begun: _Begun, channel: Telling, limit: int) -> Message:
     """An ``@trigger(wait_for=...)``'s one call, for the run it was given (decision 353).
 
     The event it returns is told, its key that run's ID unless it gives one, planned for that
     run's moment plus ``lag``; then a clean end, which moves its trigger past the run.
     """
-    task = request["task"]
-    wait_for = task["wait_for"]
-    run = begun.arguments[wait_for["param"]]
-    where = f"@trigger `{task['id']}`"
-    limit_ms = wait_for.get("timeout_ms")
+    task = _task(request)
+    wait_for = obj(task.get("wait_for"), "the task's `wait_for`")
+    run = begun.arguments[text(wait_for, "param")]
+    where = f"@trigger `{text(task, 'id')}`"
+    limit_ms = optional_whole(wait_for, "timeout_ms")
     deadline = asyncio.timeout(None if limit_ms is None else limit_ms / 1000)
     try:
         try:
             async with deadline:
                 with running(begun.values, begun.own):
-                    found = await begun.function(**begun.arguments)
+                    called = begun.function(**begun.arguments)
+                    if not inspect.isawaitable(called):
+                        raise TypeError(f"{where} must be an `async def`")
+                    found = await called
         except TimeoutError as error:
             if not deadline.expired():
                 raise
@@ -876,7 +947,11 @@ async def _called_for_run(
         if found is not None:
             if not isinstance(found, Event):
                 raise TypeError(f"{where} returns an `Event` or `None`, got {type(found).__name__}")
-            lag = wait_for.get("run_of", {}).get("lag_ms")
+            lag = optional_whole(obj(wait_for.get("run_of") or {}, "`run_of`"), "lag_ms")
+            from schedr.run_of import RunResult  # noqa: PLC0415 (only a wait_for needs it)
+
+            if not isinstance(run, RunResult | Event):
+                raise TypeError(f"{where} was given {type(run).__name__}, not a run or an event")
             event = event_for_run(found, run, None if lag is None else timedelta(milliseconds=lag))
             returned = begun.hints.get("return")
             hint = next(
@@ -897,7 +972,7 @@ def _called_for(run: object) -> str:
     return f"run {getattr(run, 'run_id', '?')}"
 
 
-def _size(item: Event[Any], hint: object, limit: int) -> int:
+def _size[T](item: Event[T], hint: object, limit: int) -> int:
     """An item's size in a batch, as stored (decision 352), with room for the agent's masking.
 
     A secret masked grows only as a number (``12345`` becomes ``"****"``), by one byte at most;
@@ -927,8 +1002,8 @@ def _numbers(data: object) -> int:
     return count
 
 
-async def _tell_event(
-    channel: Telling, event: Event[Any], hint: object, limit: int, in_flight: int = 1
+async def _tell_event[T](
+    channel: Telling, event: Event[T], hint: object, limit: int, in_flight: int = 1
 ) -> None:
     """Tells the agent what a trigger found; waits while ``in_flight`` aren't stored (M5.2h2).
 
@@ -949,7 +1024,7 @@ async def _tell_event(
     await channel.tell_event(message, in_flight)
 
 
-def _raised(error: BaseException) -> dict[str, Any]:
+def _raised(error: BaseException) -> Message:
     """The message for what a task's function raised."""
     if isinstance(error, SecretError):
         return failure(error, error.kind)
@@ -960,9 +1035,9 @@ def _raised(error: BaseException) -> dict[str, Any]:
     return failure(error, None)
 
 
-def _finish(request: Mapping[str, Any], begun: _Begun, result: object) -> dict[str, Any]:
+def _finish(request: Stored, begun: _Begun, result: object) -> Message:
     """The message for what a task's function returned."""
-    task, hints = request["task"], begun.hints
+    task, hints = _task(request), begun.hints
     sensing = task.get("kind") == "sensor"
     if request.get("cleanup") is not None:
         return {"type": "task_succeeded", "output": encode(None, type(None)), "outcome": SUCCESS}
@@ -971,15 +1046,13 @@ def _finish(request: Mapping[str, Any], begun: _Begun, result: object) -> dict[s
     if not task.get("branch"):
         return _stored(result, hints.get("return", Any), task)
     try:
-        chosen = chosen_ids(result, begun.downstream, request["dag_id"])
+        chosen = chosen_ids(result, begun.downstream, text(request, "dag_id"))
     except CodecError as e:
-        return failure(e, "output_not_serializable", f"`{task['id']}`: {e.reason}")
+        return failure(e, "output_not_serializable", f"`{text(task, 'id')}`: {e.reason}")
     return _stored(chosen, list[str], task)
 
 
-def _sensed_result(
-    result: object, hints: Mapping[str, object], task: Mapping[str, Any]
-) -> dict[str, Any]:
+def _sensed_result(result: object, hints: Mapping[str, object], task: Stored) -> Message:
     """The message for what a wait step's function returned."""
     if isinstance(result, TimedOut):
         return _stored(result, TimedOut, task, TIMED_OUT_NAME)
@@ -990,11 +1063,11 @@ def _sensed_result(
 
 
 def execute(
-    request: Mapping[str, Any],
+    request: Stored,
     imported: Callable[[], None] = lambda: None,
     secrets: SecretReader | None = None,
     channel: Channel | None = None,
-) -> dict[str, Any]:
+) -> Message:
     """Runs a task request and returns the message to send.
 
     Args:
@@ -1015,7 +1088,7 @@ def execute(
         return begun
     try:
         with running(begun.values, begun.own):
-            task = request["task"]
+            task = _task(request)
             function, arguments = begun.function, begun.arguments
             sensing = task.get("kind") == "sensor"
             result = _sensed(function, arguments, task) if sensing else function(**arguments)
@@ -1030,12 +1103,12 @@ def execute(
 
 
 async def execute_watcher(
-    request: Mapping[str, Any],
+    request: Stored,
     channel: Asking,
     entries: EntriesOf,
     moving: asyncio.Event | None = None,
     go: Callable[[], Awaitable[int | None]] | None = None,
-) -> dict[str, Any]:
+) -> Message:
     """Runs a wait step in the watcher host's loop, its file imported at most once there.
 
     Args:
@@ -1059,7 +1132,7 @@ async def execute_watcher(
     )
     if isinstance(begun, dict):
         return begun
-    task = request["task"]
+    task = _task(request)
     if go is not None:
         task = {**task, "max_wait_ms": await go()}
     # Slow to import; most tasks aren't wait steps.
@@ -1077,11 +1150,11 @@ async def execute_watcher(
 
 def cleanup_call(
     entry: registry.DefinedDag,
-    function: Callable[..., Any],
+    function: Callable[..., object],
     task_id: str,
     arguments: Mapping[str, object],
-    handles: Sequence[Mapping[str, Any]],
-) -> tuple[Callable[..., Any], dict[str, object]]:
+    handles: Sequence[Wire],
+) -> tuple[Callable[..., object], dict[str, object]]:
     """The cleanup of a task, with the task's inputs it names and the attempt's handles.
 
     Args:
@@ -1113,11 +1186,11 @@ def cleanup_call(
     hints = type_hints(cleanup, f"the cleanup of task `{task_id}`")
     if HANDLES_PARAMETER in inspect.signature(cleanup).parameters:
         classes = {cls.__name__: cls for cls in handle_classes(hints.get(HANDLES_PARAMETER))}
-        given[HANDLES_PARAMETER] = [_handle(h, classes, task_id) for h in handles]
+        given[HANDLES_PARAMETER] = [_handle(obj(h, "a handle"), classes, task_id) for h in handles]
     return cleanup, given
 
 
-def _handle(handle: Mapping[str, Any], classes: Mapping[str, type], task_id: str) -> object:
+def _handle(handle: Stored, classes: Mapping[str, type], task_id: str) -> object:
     """A registered handle as its class's instance."""
     name = str(handle["handle_type"])
     if name not in classes:
@@ -1191,10 +1264,10 @@ def handle_adder(channel: Asking) -> HandleAdder:
 
 
 def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)
-    request: Mapping[str, Any],
+    request: Stored,
     imported: Callable[[], None] = lambda: None,
     channel: Channel | None = None,
-) -> dict[str, Any]:
+) -> Message:
     """Runs ``schedr connections test NAME`` on this worker (decision 198).
 
     Imports the file defining the connection, opens it and runs its check (or opens and
@@ -1208,11 +1281,11 @@ def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)
     Returns:
         ``task_succeeded`` with no output, or ``task_failed``.
     """
-    name = str(request["connection_test"])
-    dag_file = request["dag_file"]
+    name = text(request, "connection_test")
+    root, root_dir, path = _dag_file(request)
     try:
-        import_dag_entries(dag_file["root"], Path(dag_file["root_dir"]), dag_file["path"])
-        found = defined_connection(module_name(dag_file["root"], dag_file["path"]), name)
+        import_dag_entries(root, root_dir, path)
+        found = defined_connection(module_name(root, path), name)
     except TaskSetupError as e:
         return failure(e, CONNECTION_NOT_FOUND)
     except (Exception, SystemExit) as e:
@@ -1221,7 +1294,7 @@ def run_connection_test(  # noqa: PLR0911 (a result for each way a test ends)
     try:
         opener = connection_opener(channel) if channel is not None else None
         own = TaskValues(name, 1, None, None, opener)
-        with running(run_values(request["run"], None), own):
+        with running(run_values(obj(request.get("run"), "the request's `run`"), None), own):
             found.run_test()
     except SecretError as e:
         return failure(e, e.kind)
@@ -1287,9 +1360,9 @@ def outcome_of(result: object, annotation: object) -> tuple[str, object, object]
 
 
 def _sensed(
-    function: Callable[..., Any],
+    function: Callable[..., object],
     arguments: Mapping[str, object],
-    task: Mapping[str, Any],
+    task: Stored,
     moving: asyncio.Event | None = None,
 ) -> Coroutine[object, object, object]:
     """A wait step's coroutine, waiting for its value or its deadline."""
@@ -1299,9 +1372,7 @@ def _sensed(
     return waited(function, arguments, task, moving)
 
 
-def _stored(
-    result: object, annotation: object, task: Mapping[str, Any], named: str | None = None
-) -> dict[str, Any]:
+def _stored(result: object, annotation: object, task: Stored, named: str | None = None) -> Message:
     try:
         outcome, result, annotation = (
             outcome_of(result, annotation) if named is None else (named, result, annotation)
@@ -1318,7 +1389,7 @@ def _stored(
             f"the output of `{task['id']}` can't be stored, {type(e).__name__}: {e}",
         )
     try:
-        check_size(output, task["settings"]["max_output_size"])
+        check_size(output, _max_output_size(task))
     except CodecError as e:
         return failure(e, "output_too_large", f"the output of `{task['id']}`: {e.reason}")
     except Exception as e:  # JSON or UTF-8 conversion (B67)
@@ -1330,7 +1401,7 @@ def _stored(
     return {"type": "task_succeeded", "output": output, "outcome": outcome}
 
 
-def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
+def run_task(channel: Channel, request: Stored) -> int:
     """Handles a ``task`` request: runs it and reports the result.
 
     Args:
@@ -1340,7 +1411,7 @@ def run_task(channel: Channel, request: Mapping[str, Any]) -> int:
     Returns:
         The exit code: 0 if the task succeeded, 1 otherwise.
     """
-    extend_sys_path(request["sys_path"])
+    extend_sys_path(texts(request, "sys_path"))
     # Its `logging` as structured lines (decision 514), unless it configures its own.
     install_structured_logging()
     # The agent times the start from it: the interpreter's, then the DAG file's import.
