@@ -17,4 +17,4 @@ history = "JOURNAL.md#D499"
 step = "R1.1"
 code = ["crates/schedr-api/src/series.rs", "crates/schedr-ui/src/metrics.rs", "crates/schedr-api/src/views.rs"]
 also = ["observability"]
-checked = 2026-11-21
+checked = 2026-11-24

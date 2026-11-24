@@ -26,4 +26,4 @@ Runs page stays newest first.
 history = "JOURNAL.md#D500"
 step = "R1.1"
 code = ["crates/schedr-ui/src/dag_filters.rs", "crates/schedr-ui/src/pages.rs::dags", "crates/schedr-ui/templates/dags.html", "crates/schedr-ui/templates/runs.html", "crates/schedr-db/src/reads.rs::RunFilter", "crates/schedr-api/src/views.rs::AllRunsQuery"]
-checked = 2026-11-21
+checked = 2026-11-24

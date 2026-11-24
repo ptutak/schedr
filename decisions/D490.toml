@@ -14,5 +14,5 @@ its own time, as before. `schedr_master_start_recorded_seconds` times a start to
 '''
 history = "JOURNAL.md#D490"  # <a id="D490"></a> starts its JOURNAL.md entry
 step = "M5.1m"  # the plan step that builds it; "later"; "n/a" for a rule
-checked = 2026-11-23
+checked = 2026-11-24
 code = ["crates/schedr-agent/src/master_time.rs::estimate", "crates/schedr-master/src/dispatch.rs::start_time", "crates/schedr-db/src/attempts.rs::mark_started_many"]
