@@ -53,7 +53,13 @@ def late(timed_out: TimedOut) -> str:
     return "no orders in time"
 
 
-with Dag("orders", description="Collects the day's orders."):
+with Dag(
+    "orders",
+    description=(
+        "Collects the day's orders. To try it: unpause tally_orders and big_orders, then trigger"
+        " orders and report with the same `--for` (`schedr runs trigger orders --for 2026-11-24`)."
+    ),
+):
     load()
 
 

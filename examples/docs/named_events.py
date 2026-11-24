@@ -26,7 +26,11 @@ def late(outcome: TimedOut) -> str:
 
 with Dag(
     "ship_paid",
-    description="Ships each paid order once its package is packed.",
+    description=(
+        "Ships each paid order once its package is packed. To try it: unpause it,"
+        " `schedr events post paid --key order-1`, then within 3 s"
+        " `schedr events post packed --key order-1`; later, the wait times out."
+    ),
     trigger=EventNamed("paid"),
 ):
     packed = wait_for(EventNamed("packed", key=dag_ctx.event.key), max_wait=timedelta(seconds=3))

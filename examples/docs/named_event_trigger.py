@@ -20,7 +20,10 @@ def handle(key: str) -> str:
 
 with Dag(
     "inspect_payment",
-    description="Starts a run for each paid event whose data passes a check.",
+    description=(
+        "Starts a run for each paid event that has data. To try it: unpause it, then"
+        " `schedr events post paid --key order-1 --data '{\"amount\": 5}'` (without data, no run)."
+    ),
     trigger=paid_with_data(),
 ):
     handle(dag_ctx.event.key)

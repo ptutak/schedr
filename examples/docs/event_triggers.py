@@ -60,7 +60,10 @@ def load(key: str, file: Arrived) -> str:
 
 with Dag(
     "event_triggers",
-    description="Starts a run for each file that arrives in /tmp/schedr-incoming.",
+    description=(
+        "Starts a run for each file that arrives in /tmp/schedr-incoming. To try it: unpause it,"
+        " then `touch /tmp/schedr-incoming/2026-11-07T10.csv` (a later name for each next file)."
+    ),
     trigger=new_files(folder="/tmp/schedr-incoming"),
 ):
     load(dag_ctx.event.key, dag_ctx.event.data)  # pyright: ignore[reportAny]

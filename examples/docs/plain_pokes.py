@@ -41,7 +41,14 @@ def load_orders(count: int) -> str:
     return f"{count} orders"
 
 
-with Dag("plain_poke_demo", description="A plain `def` poke waits for a marker file."):
+with Dag(
+    "plain_poke_demo",
+    description=(
+        "A plain `def` poke waits for a marker file, up to 2 hours. To try it: trigger a run, then"
+        " `echo 3 > /tmp/schedr-plain-pokes/orders.done` (the poke also asks the webserver on"
+        " localhost:8080, the `orders_inbox` connection)."
+    ),
+):
     load_orders(orders_ready().on(int))
 
 
@@ -61,5 +68,12 @@ def read_report(name: str) -> str:
     return name
 
 
-with Dag("plain_trigger_demo", trigger=new_reports()):
+with Dag(
+    "plain_trigger_demo",
+    description=(
+        "Starts a run for each new `.csv` report in /tmp/schedr-plain-pokes, looked at every"
+        " minute. To try it: unpause it, then `touch /tmp/schedr-plain-pokes/a.csv`."
+    ),
+    trigger=new_reports(),
+):
     read_report(dag_ctx.event.key)

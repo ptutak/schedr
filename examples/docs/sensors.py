@@ -81,7 +81,13 @@ def fast_report(value: str, winner: str) -> str:
     return said
 
 
-with Dag("sensors_demo", description="Waits for a value, and routes on whether it came in time."):
+with Dag(
+    "sensors_demo",
+    description=(
+        "Waits for a value, and routes on whether it came in time. To try it: trigger a run; its"
+        " wait steps ask the webserver on localhost:8080 (the `schedr_api` connection)."
+    ),
+):
     slow_task()
     slow = sees_slow_task()
     absent = sees_absent_task()

@@ -22,7 +22,11 @@ def late(outcome: TimedOut) -> str:
 
 with Dag(
     "inspect_packing",
-    description="For each paid order, waits until its package is packed.",
+    description=(
+        "For each paid order, waits until its package is packed. To try it: unpause it,"
+        " `schedr events post paid --key order-1`, then within 3 s"
+        " `schedr events post packed --key order-1`."
+    ),
     trigger=EventNamed("paid"),
 ):
 
