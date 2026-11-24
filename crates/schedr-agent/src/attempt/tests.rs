@@ -101,6 +101,7 @@ fn setup() -> (TempDir, WorkerSetup) {
         timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
         extensions: crate::extensions::Plugins::new(),
+        live_logs: crate::logs::LiveLogs::default(),
     };
     (dir, setup)
 }

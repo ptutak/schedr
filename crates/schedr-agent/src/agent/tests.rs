@@ -306,6 +306,7 @@ async fn world_timed(
             timeouts: *timeouts,
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -948,6 +949,7 @@ async fn against_master(
             timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -1591,6 +1593,7 @@ async fn what_ends_while_the_master_is_away_is_journalled() {
             timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -1852,6 +1855,7 @@ fn a_second_shutdown_request_interrupts_at_once() {
             timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -1906,6 +1910,7 @@ async fn a_cancelled_attempt_keeps_its_slot_until_its_process_has_ended() {
             timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -2849,6 +2854,7 @@ fn command_needing_secret(
         timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
         extensions: crate::extensions::Plugins::new(),
+        live_logs: crate::logs::LiveLogs::default(),
     };
     let stores = SecretStores::new(
         std::collections::BTreeMap::from([("main".to_owned(), Storage::new(storage))]),
@@ -3099,6 +3105,7 @@ async fn command_with_connection(
         timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
         extensions: crate::extensions::Plugins::new(),
+        live_logs: crate::logs::LiveLogs::default(),
     };
     let executor = ProcessExecutor {
         services: crate::service::Services::default(),
@@ -3262,6 +3269,7 @@ fn offline_agent(dir: &Path) -> Agent<Fake> {
             timeouts: crate::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: crate::extensions::Plugins::new(),
+            live_logs: crate::logs::LiveLogs::default(),
         },
         poll_interval: Duration::from_millis(20),
         settle_time: Duration::ZERO,
@@ -3407,6 +3415,7 @@ fn attempt_with_timed_cleanup(
         timeouts: crate::attempt::WorkerTimeouts::default(),
         fork_server: None,
         extensions: crate::extensions::Plugins::new(),
+        live_logs: crate::logs::LiveLogs::default(),
     };
     let executor = ProcessExecutor {
         services: crate::service::Services::default(),

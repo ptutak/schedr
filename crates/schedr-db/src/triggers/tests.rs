@@ -163,7 +163,7 @@ async fn only_the_run_of_a_trigger_it_names_is_ended() {
     .unwrap();
     let later = ts("2026-10-14T03:00:00Z");
     assert!(
-        !db.trigger_ended(dag.as_str(), "old", Some("boom"), Some(later))
+        !db.trigger_ended(dag.as_str(), "old", Some("boom"), Some(later), (later, 20))
             .await
             .unwrap(),
         "a stale instance changes nothing"
@@ -173,7 +173,7 @@ async fn only_the_run_of_a_trigger_it_names_is_ended() {
         Some("new")
     );
     assert!(
-        db.trigger_ended(dag.as_str(), "new", Some("boom"), Some(later))
+        db.trigger_ended(dag.as_str(), "new", Some("boom"), Some(later), (later, 20))
             .await
             .unwrap()
     );
@@ -276,4 +276,54 @@ async fn a_heartbeats_pokes_are_stored_together_each_on_its_own_run_of_the_trigg
     let record = db.trigger(dag.as_str()).await.unwrap().unwrap();
     assert_eq!(record.last_poked_at, Some(ts("2026-10-01T00:03:00Z")));
     assert_eq!((record.last_error, record.failures), (None, 0));
+}
+
+#[tokio::test]
+async fn a_triggers_runs_are_kept_the_newest_with_their_ends() {
+    // B272: where each run's log is, the newest few, a running one never pruned.
+    let (db, dag, version) = with_dag().await;
+    let at = |hour: u32| ts(&format!("2026-10-14T{hour:02}:00:00Z"));
+    for (instance, hour) in [("a", 1), ("b", 2), ("c", 3)] {
+        db.trigger_assigned(dag.as_str(), instance, "w1", &version, "h1", at(hour))
+            .await
+            .unwrap();
+    }
+    db.trigger_ended(dag.as_str(), "a", Some("boom"), None, (at(4), 2))
+        .await
+        .unwrap();
+    db.trigger_ended(dag.as_str(), "b", None, None, (at(5), 2))
+        .await
+        .unwrap();
+    let runs = db.trigger_runs(dag.as_str(), 10).await.unwrap();
+    let names: Vec<&str> = runs.iter().map(|r| r.instance_id.as_str()).collect();
+    assert_eq!(names, ["c", "b"], "the oldest pruned past two");
+    assert_eq!(runs[0].ended_at, None, "c still runs");
+    assert_eq!(
+        (runs[1].ended_at, runs[1].worker_id.as_str()),
+        (Some(at(5)), "w1")
+    );
+    db.trigger_assigned(dag.as_str(), "d", "w2", &version, "h1", at(6))
+        .await
+        .unwrap();
+    db.trigger_ended(dag.as_str(), "d", Some("boom"), None, (at(7), 1))
+        .await
+        .unwrap();
+    let kept: Vec<String> = db
+        .trigger_runs(dag.as_str(), 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.instance_id)
+        .collect();
+    assert_eq!(kept, ["d", "c"], "c runs: kept beside the newest");
+    let d = db.trigger_run(dag.as_str(), "d").await.unwrap().unwrap();
+    assert_eq!(
+        (d.error.as_deref(), d.ended_at),
+        (Some("boom"), Some(at(7)))
+    );
+    assert_eq!(
+        db.trigger_run("other", "d").await.unwrap(),
+        None,
+        "another DAG's"
+    );
 }

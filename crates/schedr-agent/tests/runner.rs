@@ -604,6 +604,7 @@ async fn a_connection_test_runs_at_its_code_and_ends_by_its_deadline() {
             timeouts: schedr_agent::attempt::WorkerTimeouts::default(),
             fork_server: None,
             extensions: schedr_agent::extensions::Plugins::new(),
+            live_logs: schedr_agent::logs::LiveLogs::default(),
         },
         parse: schedr_agent::parse::ParseLimits::one_at_a_time(Duration::from_secs(5)),
         metrics: AgentMetrics::default(),

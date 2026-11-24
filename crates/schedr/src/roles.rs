@@ -241,6 +241,7 @@ pub fn master_settings(config: &Config) -> Settings {
         cancel_grace: config.master.cancel_grace,
         switch_off_after: config.watchers.switch_off_after,
         max_queued_events: config.triggers.max_queued_events,
+        trigger_runs_kept: config.limits.trigger_runs_kept,
         failing_after: config.triggers.failing_after,
         sensor_max_wait: config.sensors.default_max_wait,
         parse_job_timeout: config.master.parse_job_timeout,
@@ -494,6 +495,7 @@ pub fn agent_settings(
             fork_server: fork_config(config),
             // Those discovered are added by the role, which may run them (`discover_plugins`).
             extensions: configured_plugins(config),
+            live_logs: schedr_agent::logs::LiveLogs::default(),
         },
         poll_interval: config.dags.poll_interval,
         settle_time: config.dags.settle_time,
@@ -1394,6 +1396,16 @@ pub struct WorkerLinks {
     pub max_message_size: usize,
 }
 
+/// What a worker's log endpoint serves: its log folder, its journal, its triggers' logs.
+fn served_logs(agent: &AgentSettings) -> LogEndpoint {
+    LogEndpoint {
+        worker_id: agent.worker_id.clone(),
+        log_dir: agent.setup.log_dir.clone(),
+        journal: Journal::new(agent.journal_dir.clone()),
+        live: agent.setup.live_logs.clone(),
+    }
+}
+
 /// Runs a worker agent connected to the master until it has drained after a stop request
 /// (`stop` counts them; see [`schedr_agent::drain`]), with its log endpoint and log
 /// retention beside it until then.
@@ -1412,11 +1424,7 @@ pub async fn run_worker(
         max_message_size,
     } = links;
     let timeouts = agent.setup.timeouts;
-    let endpoint = LogEndpoint {
-        worker_id: agent.worker_id.clone(),
-        log_dir: agent.setup.log_dir.clone(),
-        journal: Journal::new(agent.journal_dir.clone()),
-    };
+    let endpoint = served_logs(&agent);
     let (done, finished) = watch::channel(0);
     let logs = match incoming(
         log_listener,
@@ -1436,7 +1444,7 @@ pub async fn run_worker(
     };
     let sweeping = tokio::spawn(sweep_logs(
         endpoint.log_dir,
-        endpoint.journal,
+        (endpoint.journal, endpoint.live),
         retention,
         observed.metrics.clone(),
         timeouts.log_sweep,

@@ -397,7 +397,7 @@ fn check_not_zero(config: &Config) -> Result<(), ConfigError> {
 }
 
 /// The `SCHEDR_HIDDEN__*` variables of [`HiddenLimits`], read by [`hidden_limits`].
-const HIDDEN_LIMITS: [&str; 42] = [
+const HIDDEN_LIMITS: [&str; 43] = [
     "MASTER__WORKER_REPORT_RECORDS",
     "MASTER__WORKER_REPORT_TEXT",
     "MASTER__NOTIFICATION_BODY",
@@ -440,6 +440,7 @@ const HIDDEN_LIMITS: [&str; 42] = [
     "MASTER__EXTENSION_EVENTS_KEPT",
     "MASTER__EXTENSION_QUEUE",
     "MASTER__EXTENSION_EVENTS_PER_FLUSH",
+    "MASTER__TRIGGER_RUNS_KEPT",
 ];
 
 /// The hidden waiting queue's factor (decision 509): a fraction from 0 to 4, not a whole number.
@@ -523,6 +524,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
             Some("WORKER__EXTENSION_REPORTS_AT_ONCE") => &mut limits.extension_reports_at_once,
             Some("WORKER__EXTENSION_EVENTS_PENDING") => &mut limits.extension_events_pending,
             Some("MASTER__EXTENSION_EVENTS_KEPT") => &mut limits.extension_events_kept,
+            Some("MASTER__TRIGGER_RUNS_KEPT") => &mut limits.trigger_runs_kept,
             Some("MASTER__EXTENSION_QUEUE") => &mut limits.extension_queue,
             Some("MASTER__EXTENSION_EVENTS_PER_FLUSH") => &mut limits.extension_events_per_flush,
             Some("WEBSERVER__EVENTS_BACKLOG") => &mut limits.webserver_events_backlog,

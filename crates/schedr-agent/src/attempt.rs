@@ -531,6 +531,8 @@ pub struct WorkerSetup {
     pub pass_env: Vec<String>,
     /// Where task log files go.
     pub log_dir: PathBuf,
+    /// The logs of the triggers running here, which the journal doesn't name (B272).
+    pub live_logs: crate::logs::LiveLogs,
     /// Where a command's connection files go (decision 184): a folder per attempt, mode
     /// 0700, removed when it ends.
     pub connection_dir: PathBuf,

@@ -18,6 +18,7 @@ fn endpoint() -> (TempDir, LogEndpoint) {
         worker_id: "w1".to_owned(),
         log_dir: dir.path().join("logs"),
         journal: Journal::new(dir.path().join("journal")),
+        live: LiveLogs::default(),
     };
     (dir, endpoint)
 }
@@ -102,6 +103,22 @@ async fn a_running_attempt_says_so() {
         .unwrap();
     let (_, headers, _) = get(&endpoint, &format!("/logs/{ATTEMPT}")).await;
     assert_eq!(headers[2], "true");
+}
+
+#[tokio::test]
+async fn a_running_triggers_log_says_so_until_it_ends() {
+    // B272: a trigger is never journaled; its log runs while the agent runs it.
+    let (_dir, endpoint) = endpoint();
+    std::fs::write(endpoint.log_dir.join(format!("{ATTEMPT}.log")), "watching").unwrap();
+    endpoint.live.add(ATTEMPT);
+    let (status, headers, body) = get(&endpoint, &format!("/logs/{ATTEMPT}")).await;
+    assert_eq!(
+        (status, headers[2].as_str(), body.as_slice()),
+        (200, "true", &b"watching"[..])
+    );
+    endpoint.live.remove(ATTEMPT);
+    let (_, headers, _) = get(&endpoint, &format!("/logs/{ATTEMPT}")).await;
+    assert_eq!(headers[2], "false");
 }
 
 #[tokio::test]

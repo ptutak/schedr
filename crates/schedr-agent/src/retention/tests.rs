@@ -53,7 +53,13 @@ fn logs_past_their_age_go_unless_the_journal_has_their_attempt() {
         max_age: DAY * 30,
         max_size: None,
     };
-    let swept = sweep(&dir.path().join("logs"), &journal, retention, now).unwrap();
+    let swept = sweep(
+        &dir.path().join("logs"),
+        (&journal, &LiveLogs::default()),
+        retention,
+        now,
+    )
+    .unwrap();
     assert_eq!(
         swept,
         Swept {
@@ -78,7 +84,13 @@ fn over_the_size_limit_the_oldest_go_first() {
         max_age: DAY * 30,
         max_size: Some(250),
     };
-    let swept = sweep(&dir.path().join("logs"), &journal, retention, now).unwrap();
+    let swept = sweep(
+        &dir.path().join("logs"),
+        (&journal, &LiveLogs::default()),
+        retention,
+        now,
+    )
+    .unwrap();
     // `a` is spared (running) but counts: `b` and `c` go to get from 400 to 200 bytes.
     assert_eq!(
         swept,
@@ -101,7 +113,7 @@ fn a_missing_directory_has_nothing_to_sweep() {
     };
     let swept = sweep(
         &dir.path().join("logs"),
-        &journal,
+        (&journal, &LiveLogs::default()),
         retention,
         SystemTime::now(),
     )
@@ -119,7 +131,7 @@ fn a_file_that_cant_be_deleted_is_kept() {
         max_age: DAY,
         max_size: None,
     };
-    let swept = sweep(&log_dir, &journal, retention, now).unwrap();
+    let swept = sweep(&log_dir, (&journal, &LiveLogs::default()), retention, now).unwrap();
     assert_eq!(swept.files, 1);
     assert_eq!(left(&dir), ["dir.log"]);
 }
@@ -134,7 +146,7 @@ async fn sweep_logs_sweeps_at_once_and_stops() {
     let metrics = crate::metrics::AgentMetrics::default();
     sweep_logs(
         dir.path().join("logs"),
-        journal,
+        (journal, LiveLogs::default()),
         retention,
         metrics.clone(),
         SWEEP_INTERVAL,
@@ -146,4 +158,24 @@ async fn sweep_logs_sweeps_at_once_and_stops() {
         (metrics.log_bytes.get(), metrics.log_swept_bytes.get()),
         (10, 10)
     );
+}
+
+#[test]
+fn a_running_triggers_log_is_spared_however_old() {
+    // B272: a trigger quiet for longer than the age limit still writes its log.
+    let (dir, journal, now) = logs(&[("trigger.log", 10, 40), ("ended.log", 10, 40)]);
+    let live = LiveLogs::default();
+    live.add("trigger");
+    let retention = LogRetention {
+        max_age: DAY * 30,
+        max_size: None,
+    };
+    let swept = sweep(&dir.path().join("logs"), (&journal, &live), retention, now).unwrap();
+    assert_eq!(
+        (swept.files, left(&dir)),
+        (1, vec!["trigger.log".to_owned()])
+    );
+    live.remove("trigger");
+    let swept = sweep(&dir.path().join("logs"), (&journal, &live), retention, now).unwrap();
+    assert_eq!((swept.files, left(&dir)), (1, Vec::<String>::new()));
 }

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::journal::Journal;
+use crate::logs::LiveLogs;
 use crate::metrics::AgentMetrics;
 
 #[cfg(test)]
@@ -47,18 +48,19 @@ struct LogFile {
 }
 
 /// Deletes from `log_dir` what `retention` doesn't keep at `now`, sparing the logs of
-/// attempts in `journal`. A file that can't be deleted is logged and counted as kept.
+/// attempts in `journal` and those `live` names (the triggers running, B272). A file that
+/// can't be deleted is logged and counted as kept.
 ///
 /// # Errors
 ///
 /// An I/O error if the directory can't be read (a missing one has nothing to sweep).
 pub fn sweep(
     log_dir: &Path,
-    journal: &Journal,
+    (journal, live): (&Journal, &LiveLogs),
     retention: LogRetention,
     now: SystemTime,
 ) -> io::Result<Swept> {
-    let kept: Vec<String> = match journal.records() {
+    let mut kept: Vec<String> = match journal.records() {
         Ok(records) => records
             .into_iter()
             .map(|(id, _)| format!("{id}.log"))
@@ -66,6 +68,7 @@ pub fn sweep(
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e),
     };
+    kept.extend(live.files());
     let entries = match std::fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Swept::default()),
@@ -125,7 +128,7 @@ pub fn sweep(
 /// and deleted in `metrics`.
 pub async fn sweep_logs(
     log_dir: PathBuf,
-    journal: Journal,
+    (journal, live): (Journal, LiveLogs),
     retention: LogRetention,
     metrics: AgentMetrics,
     interval: Duration,
@@ -139,9 +142,9 @@ pub async fn sweep_logs(
             () = &mut stop => return,
             _ = tick.tick() => {}
         }
-        let (dir, journal) = (log_dir.clone(), journal.clone());
+        let (dir, journal, live) = (log_dir.clone(), journal.clone(), live.clone());
         let swept = tokio::task::spawn_blocking(move || {
-            sweep(&dir, &journal, retention, SystemTime::now())
+            sweep(&dir, (&journal, &live), retention, SystemTime::now())
         })
         .await;
         if let Ok(Ok(swept)) = &swept {

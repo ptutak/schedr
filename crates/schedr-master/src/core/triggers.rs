@@ -162,6 +162,22 @@ pub(crate) enum TriggersFailed {
 }
 
 impl MasterCore {
+    /// Ends a run of a DAG's trigger in the database ([`schedr_db::Database::trigger_ended`]),
+    /// its runs kept as `trigger_runs_kept` says. Gives whether it was the current one.
+    async fn trigger_run_ended(
+        &self,
+        dag_id: &str,
+        instance: &str,
+        error: Option<&str>,
+        not_before: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<bool, schedr_db::DbError> {
+        let kept = self.settings.trigger_runs_kept;
+        self.db
+            .trigger_ended(dag_id, instance, error, not_before, (now, kept))
+            .await
+    }
+
     /// Stops the triggers that should not run where they are, and starts those that should run
     /// and don't.
     pub(crate) async fn trigger_pass(
@@ -535,8 +551,7 @@ impl MasterCore {
         let (Some(instance), Some(worker)) = (&record.instance_id, &record.worker_id) else {
             return Ok(());
         };
-        self.db
-            .trigger_ended(&record.dag_id, instance, None, None)
+        self.trigger_run_ended(&record.dag_id, instance, None, None, now)
             .await?;
         if keep == Keep::Forget {
             self.dispatcher.trigger_released(instance);
@@ -1141,8 +1156,7 @@ impl MasterCore {
                 _ => false,
             };
             if !passed {
-                self.db
-                    .trigger_ended(&stopped.dag_id, &stopped.instance_id, None, None)
+                self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, None, None, now)
                     .await?;
             }
             return Ok(Vec::new());
@@ -1185,8 +1199,7 @@ impl MasterCore {
                 .await?
                 .is_err()
             {
-                self.db
-                    .trigger_ended(&stopped.dag_id, &stopped.instance_id, None, None)
+                self.trigger_run_ended(&stopped.dag_id, &stopped.instance_id, None, None, now)
                     .await?;
             }
             return Ok(Vec::new());
@@ -1372,9 +1385,14 @@ impl MasterCore {
             && !why.starts_with(TRIGGER_RETURNED);
         let db = self.db.clone();
         Box::pin(db.atomically(async {
-            self.db
-                .trigger_ended(dag_id, instance, Some(&why), now.checked_add(wait).ok())
-                .await?;
+            self.trigger_run_ended(
+                dag_id,
+                instance,
+                Some(&why),
+                now.checked_add(wait).ok(),
+                now,
+            )
+            .await?;
             if failing {
                 self.notify_trigger_failing(dag_id, &why, now).await?;
             }
@@ -1540,8 +1558,7 @@ impl MasterCore {
                 self.dispatcher.trigger_kept(worker_id, instance, now);
             } else {
                 self.dispatcher.trigger_released(instance);
-                self.db
-                    .trigger_ended(&record.dag_id, instance, None, None)
+                self.trigger_run_ended(&record.dag_id, instance, None, None, now)
                     .await?;
             }
         }

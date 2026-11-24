@@ -647,6 +647,9 @@ pub struct HiddenLimits {
     pub extension_events_pending: usize,
     /// The events the master keeps per extension, the newest. (`MASTER__EXTENSION_EVENTS_KEPT`)
     pub extension_events_kept: usize,
+    /// The runs of a DAG's trigger the master keeps, the newest, for their logs (B272).
+    /// (`MASTER__TRIGGER_RUNS_KEPT`)
+    pub trigger_runs_kept: usize,
     /// The extensions' reports the master holds for its writer (decision 521): past them, a
     /// report is dropped, never waited for. (`MASTER__EXTENSION_QUEUE`)
     pub extension_queue: usize,
@@ -709,6 +712,7 @@ impl Default for HiddenLimits {
             extension_reports_at_once: 50,
             extension_events_pending: 100,
             extension_events_kept: 200,
+            trigger_runs_kept: 20,
             extension_queue: 10_000,
             extension_events_per_flush: 100,
             webserver_events_backlog: 1024,

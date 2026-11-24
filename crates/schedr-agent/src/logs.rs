@@ -6,15 +6,18 @@
 //!   answered (`Schedr-Worker-Id`), how long the log is now (`Schedr-Log-Size`) and whether
 //!   the attempt still runs here (`Schedr-Attempt-Running`, from the journal, checked before
 //!   the file is read: an attempt said to be finished has all its output in the answer's
-//!   size). Reading on from the size returned follows a running task's log.
+//!   size). Reading on from the size returned follows a running task's log. A trigger's log
+//!   is named by its instance, running while the agent runs it ([`LiveLogs`], B272).
 //! - **Errors** are JSON (`{"error": "…"}`): 400 for an ID that isn't an attempt ID, 404 for
 //!   a log this worker doesn't have (deleted by retention, or another worker's).
 //!
 //! Access is decided by TLS (`tls.mode = "app"`: only clients with a certificate from the
 //! CA) or by the mesh; the endpoint serves logs only, never actions.
 
+use std::collections::BTreeSet;
 use std::io::SeekFrom;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
@@ -43,6 +46,50 @@ pub struct LogEndpoint {
     pub log_dir: PathBuf,
     /// The journal, which knows the attempts running here.
     pub journal: Journal,
+    /// The logs written now that the journal doesn't know: the triggers running here.
+    pub live: LiveLogs,
+}
+
+/// The logs being written that no journal record names: the triggers running on this worker
+/// (B272), which are never attempts. Shared by the agent (which adds and removes them), the
+/// log endpoint (which says they run) and the sweep (which spares them).
+#[derive(Debug, Clone, Default)]
+pub struct LiveLogs(Arc<Mutex<BTreeSet<String>>>);
+
+impl LiveLogs {
+    /// A log being written from now on, by its ID.
+    pub fn add(&self, id: &str) {
+        self.names().insert(id.to_owned());
+    }
+
+    /// A log no longer written.
+    pub fn remove(&self, id: &str) {
+        self.names().remove(id);
+    }
+
+    /// Whether this log is being written.
+    #[must_use]
+    pub fn contains(&self, id: &str) -> bool {
+        self.names().contains(id)
+    }
+
+    /// The log files being written, as named in the log folder.
+    #[must_use]
+    pub fn files(&self) -> Vec<String> {
+        self.names().iter().map(|id| format!("{id}.log")).collect()
+    }
+
+    fn names(&self) -> std::sync::MutexGuard<'_, BTreeSet<String>> {
+        // A set of names: whatever panicked holding it left it whole.
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One handle is equal to itself only: two workers' sets are told apart.
+impl PartialEq for LiveLogs {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// The query of a log request.
@@ -110,7 +157,8 @@ async fn get_log(
         .ok()
         .and_then(Result::ok)
         .flatten()
-        .is_some_and(|record| matches!(record, JournalRecord::Running(_)));
+        .is_some_and(|record| matches!(record, JournalRecord::Running(_)))
+        || endpoint.live.contains(&attempt_id);
     let path = endpoint.log_dir.join(format!("{attempt_id}.log"));
     let read = read_part(
         &path,

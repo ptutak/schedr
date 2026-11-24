@@ -1413,6 +1413,7 @@ fn the_hidden_settings_reach_the_roles() {
         ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE", "51"),
         ("SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING", "52"),
         ("SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT", "53"),
+        ("SCHEDR_HIDDEN__MASTER__TRIGGER_RUNS_KEPT", "54"),
         ("SCHEDR_HIDDEN__MASTER__SAMPLE_INTERVAL", "49s"),
     ];
     let env: BTreeMap<String, String> = vars
@@ -1451,6 +1452,7 @@ fn the_hidden_settings_reach_the_roles() {
         master_outbox(&config, &BTreeMap::new()).unwrap().per_pass,
         23
     );
+    assert_eq!(master.trigger_runs_kept, 54);
     let secs = Duration::from_secs;
     assert_eq!(
         (master.for_future_tolerance, master.code_retry_delay),

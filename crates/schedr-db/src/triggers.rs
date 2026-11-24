@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use schedr_model::RunEvent;
 
 use crate::database::{Database, DbError};
-use crate::query::{db_time, in_tx, on_pool, optional_time, sql, sql_text, to_json};
+use crate::query::{db_time, in_tx, on_pool, optional_time, parse_time, sql, sql_text, to_json};
 use crate::runs::NewRun;
 
 /// A trigger's bookmark moved to the key acted on, its failures cleared, the last run's moment
@@ -121,6 +121,48 @@ pub struct TriggerRecord {
     /// When a poke's call last ended.
     pub last_poked_at: Option<Timestamp>,
 }
+
+/// One run of a DAG's trigger on a worker (B272): where its log is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriggerRun {
+    /// The instance the worker ran it as: its log file's name there.
+    pub instance_id: String,
+    /// Its DAG.
+    pub dag_id: String,
+    /// The worker that ran it.
+    pub worker_id: String,
+    /// When it was given to the worker.
+    pub started_at: Timestamp,
+    /// When it ended; `None` while it runs.
+    pub ended_at: Option<Timestamp>,
+    /// Why it ended, if it failed.
+    pub error: Option<String>,
+}
+
+type RunRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
+
+fn trigger_run(row: RunRow) -> Result<TriggerRun, DbError> {
+    let (instance_id, dag_id, worker_id, started_at, ended_at, error) = row;
+    Ok(TriggerRun {
+        instance_id,
+        dag_id,
+        worker_id,
+        started_at: parse_time("trigger_runs.started_at", &started_at)?,
+        ended_at: optional_time("trigger_runs.ended_at", ended_at)?,
+        error,
+    })
+}
+
+/// A trigger run's columns, as [`trigger_run`] reads them.
+const RUN_COLUMNS: &str = "instance_id, dag_id, worker_id, {ts<}started_at{>ts}, \
+    {ts<}ended_at{>ts}, error FROM trigger_runs";
 
 /// Why a trigger isn't to run: too many queued event runs, until they have started.
 pub const STOPPED_BACK_PRESSURE: &str = "back_pressure";
@@ -245,6 +287,8 @@ impl Database {
             instance_id = excluded.instance_id, worker_id = excluded.worker_id, \
             dag_version_id = excluded.dag_version_id, code_hash = excluded.code_hash, \
             started_at = excluded.started_at, stopped_why = NULL, stopped_on = NULL";
+        const RUN: &str = "INSERT INTO trigger_runs (instance_id, dag_id, worker_id, started_at) \
+            VALUES ($1, $2, $3, $4{ts}) ON CONFLICT (instance_id) DO NOTHING";
         in_tx!(self, |tx, backend| {
             crate::query::query(sql(backend, SET))
                 .bind(dag_id)
@@ -255,12 +299,20 @@ impl Database {
                 .bind(db_time(now))
                 .execute(&mut *tx)
                 .await?;
+            crate::query::query(sql(backend, RUN))
+                .bind(instance_id)
+                .bind(dag_id)
+                .bind(worker_id)
+                .bind(db_time(now))
+                .execute(&mut *tx)
+                .await?;
         });
         Ok(())
     }
 
     /// Records that this run of a DAG's trigger ended, with why if it failed, and when it may
-    /// start again; what isn't this run any more is left alone. Gives whether it was.
+    /// start again; what isn't this run any more is left alone. Gives whether it was. The run
+    /// is kept among its DAG's trigger runs, ended at `now`, of which the newest `kept` stay.
     ///
     /// # Errors
     ///
@@ -271,13 +323,20 @@ impl Database {
         instance_id: &str,
         error: Option<&str>,
         not_before: Option<Timestamp>,
+        (now, kept): (Timestamp, usize),
     ) -> Result<bool, DbError> {
+        const RUN_ENDED: &str = "UPDATE trigger_runs SET ended_at = COALESCE(ended_at, $1{ts}), \
+            error = COALESCE(error, $2) WHERE instance_id = $3";
+        const PRUNE: &str = "DELETE FROM trigger_runs WHERE dag_id = $1 AND ended_at IS NOT NULL \
+            AND instance_id NOT IN (SELECT instance_id FROM trigger_runs WHERE dag_id = $1 \
+            ORDER BY started_at DESC, instance_id DESC LIMIT $2)";
         const END: &str = "UPDATE trigger_progress SET instance_id = NULL, worker_id = NULL, \
             dag_version_id = NULL, code_hash = NULL, last_error = COALESCE($1, last_error), \
             failures = failures + $2, not_before = $3{ts} \
             WHERE dag_id = $4 AND instance_id = $5";
+        let kept = i64::try_from(kept).unwrap_or(i64::MAX);
         let ended = in_tx!(self, |tx, backend| {
-            crate::query::query(sql(backend, END))
+            let ended = crate::query::query(sql(backend, END))
                 .bind(error)
                 .bind(i32::from(error.is_some()))
                 .bind(not_before.map(db_time))
@@ -285,9 +344,67 @@ impl Database {
                 .bind(instance_id)
                 .execute(&mut *tx)
                 .await?
-                .rows_affected()
+                .rows_affected();
+            crate::query::query(sql(backend, RUN_ENDED))
+                .bind(db_time(now))
+                .bind(error)
+                .bind(instance_id)
+                .execute(&mut *tx)
+                .await?;
+            crate::query::query(sql(backend, PRUNE))
+                .bind(dag_id)
+                .bind(kept)
+                .execute(&mut *tx)
+                .await?;
+            ended
         });
         Ok(ended == 1)
+    }
+
+    /// A DAG's trigger runs, the newest first, at most `limit` (B272).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn trigger_runs(
+        &self,
+        dag_id: &str,
+        limit: usize,
+    ) -> Result<Vec<TriggerRun>, DbError> {
+        let query = format!(
+            "SELECT {RUN_COLUMNS} WHERE dag_id = $1 ORDER BY started_at DESC, instance_id DESC \
+             LIMIT $2"
+        );
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows: Vec<RunRow> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql_text(backend, &query))
+                .bind(dag_id)
+                .bind(limit)
+                .fetch_all(pool)
+                .await?
+        });
+        rows.into_iter().map(trigger_run).collect()
+    }
+
+    /// One of a DAG's trigger runs, by its instance (B272).
+    ///
+    /// # Errors
+    ///
+    /// [`DbError`] if the query fails or stored data doesn't read.
+    pub async fn trigger_run(
+        &self,
+        dag_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<TriggerRun>, DbError> {
+        let query = format!("SELECT {RUN_COLUMNS} WHERE dag_id = $1 AND instance_id = $2");
+        let row: Option<RunRow> = on_pool!(self, |pool, backend| {
+            crate::query::query_as(sql_text(backend, &query))
+                .bind(dag_id)
+                .bind(instance_id)
+                .fetch_optional(pool)
+                .await?
+        });
+        row.map(trigger_run).transpose()
     }
 
     /// Stores what a trigger found, in one transaction: the event; for a key not seen before,

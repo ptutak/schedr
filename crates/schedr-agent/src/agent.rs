@@ -4175,7 +4175,7 @@ impl<E: Executor> Agent<E> {
         self.remember_code(&task_assign, &spec);
         let (stop, stops) = Stops::new();
         let trigger = RunningTrigger::new(assign.dag_id.clone(), stop, assign.failures);
-        self.triggers.insert(instance_id.clone(), trigger);
+        self.track_trigger(instance_id.clone(), trigger);
         let executor = self.executor.clone();
         let ended = self.done_tx.clone();
         tokio::spawn(async move {
@@ -4530,6 +4530,13 @@ impl<E: Executor> Agent<E> {
         sent
     }
 
+    /// A trigger started here: kept while it runs, its log written though no journal record
+    /// names it (B272).
+    fn track_trigger(&mut self, instance_id: String, trigger: RunningTrigger) {
+        self.settings.setup.live_logs.add(&instance_id);
+        self.triggers.insert(instance_id, trigger);
+    }
+
     /// A trigger ended: its slot and its code are free. A master that doesn't hear it learns
     /// from the next registration, which no longer lists it.
     fn trigger_ended(
@@ -4543,6 +4550,7 @@ impl<E: Executor> Agent<E> {
         let Some(trigger) = self.triggers.remove(instance_id) else {
             return;
         };
+        self.settings.setup.live_logs.remove(instance_id);
         let mut stopped = trigger_stopped(trigger.dag_id, instance_id.to_owned(), finished);
         stopped.returned_event = trigger.next_seq > 0;
         if let Some(code) = code {

@@ -2700,9 +2700,15 @@ async fn a_trigger_s_events_and_bookmark_are_stored() {
     assert_eq!(record.last_planned_for, Some(ts(NOW)));
     assert_eq!(record.dag_version_id.as_deref(), Some(version.as_str()));
     assert!(
-        !db.trigger_ended("sync", "01a00000-0000-7000-8000-000000000009", None, None)
-            .await
-            .unwrap(),
+        !db.trigger_ended(
+            "sync",
+            "01a00000-0000-7000-8000-000000000009",
+            None,
+            None,
+            (ts(NOW), 20)
+        )
+        .await
+        .unwrap(),
         "another run of it isn't this one"
     );
     assert!(
@@ -2710,7 +2716,8 @@ async fn a_trigger_s_events_and_bookmark_are_stored() {
             "sync",
             "01a00000-0000-7000-8000-000000000001",
             Some("failed"),
-            Some(ts(NOW))
+            Some(ts(NOW)),
+            (ts(NOW), 20),
         )
         .await
         .unwrap()

@@ -67,6 +67,8 @@ pub struct Settings {
     pub switch_off_after: u32,
     /// Queued event runs of a DAG that stop its trigger.
     pub max_queued_events: u32,
+    /// The runs of a DAG's trigger kept, the newest, for their logs (B272).
+    pub trigger_runs_kept: usize,
     /// Errors in a row that make a trigger `failing`.
     pub failing_after: u32,
     /// How long a wait step without a `max_wait` waits.
@@ -274,6 +276,7 @@ impl Default for Settings {
             cancel_grace: DEFAULT_CANCEL_GRACE,
             switch_off_after: 3,
             max_queued_events: 1000,
+            trigger_runs_kept: 20,
             failing_after: 5,
             sensor_max_wait: Duration::from_hours(24),
             parse_job_timeout: PARSE_JOB_TIMEOUT,

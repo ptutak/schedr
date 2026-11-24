@@ -95,3 +95,16 @@ CREATE INDEX named_events_unannounced ON named_events (posted_at, id) WHERE anno
 -- A worker's extensions' services' memory, a part of its own (B281): on average, as the other
 -- parts are.
 ALTER TABLE samples ADD COLUMN services_avg BIGINT;
+
+-- Each run of a DAG's trigger on a worker (B272): where its log is (the worker, the instance its
+-- log file is named by), when it started and ended, and why it failed. The newest ones of a DAG
+-- are kept (`MASTER__TRIGGER_RUNS_KEPT`), the older pruned as one ends.
+CREATE TABLE trigger_runs (
+    instance_id  TEXT PRIMARY KEY,
+    dag_id       TEXT NOT NULL,
+    worker_id    TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    ended_at     TEXT,
+    error        TEXT
+);
+CREATE INDEX trigger_runs_newest ON trigger_runs (dag_id, started_at DESC, instance_id DESC);

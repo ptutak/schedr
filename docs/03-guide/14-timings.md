@@ -224,6 +224,7 @@ after measuring yours, and one at a time.
 | `SCHEDR_HIDDEN__MASTER__NOTIFICATION_BODY` | 1 MiB | The most bytes a notification's body may take once filled. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_BATCH` | 100 | The most runs retention deletes in one transaction. |
 | `SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT` | 200 | The events the master keeps per extension, the newest: what its page's events panel can show. |
+| `SCHEDR_HIDDEN__MASTER__TRIGGER_RUNS_KEPT` | 20 | The runs of a DAG's trigger the master keeps, the newest: the ones whose logs its DAG page and `schedr triggers logs` reach. |
 | `SCHEDR_HIDDEN__MASTER__MESSAGES_PER_TURN` | 80 | The most messages from one worker taken in a turn. Its `Started`s and results are queued for the next round, which stores every worker's in one transaction (decision 505). |
 | `SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND` | 50 | The most assignments a round makes in a batch transaction. The rest wait for later rounds, the longest ready first. More starts a burst sooner and holds the core lock longer for that transaction. |
 | `SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND` | 50 | The most assignments a round takes back as never started. |

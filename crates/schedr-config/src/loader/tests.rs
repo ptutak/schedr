@@ -835,8 +835,9 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
     // `WORKER__QUEUE_CHECK_INTERVAL` and `WORKER__QUEUE_FACTOR`, 126 with the master's
     // `MASTER__SLOW_EQUALS_FLOOR` and `MASTER__SLOW_EQUALS_FACTOR` (decision 509); 127 with
     // `WORKER__EXTENSION_FIGURES_INTERVAL` (decision 513); 131 with the extension reports'
-    // rate and burst and the events held and kept (D493, M5.2i5).
-    assert_eq!(names.len(), 131, "{names:?}");
+    // rate and burst and the events held and kept (D493, M5.2i5); 132 with the trigger runs
+    // kept (B272).
+    assert_eq!(names.len(), 132, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute
@@ -1387,6 +1388,7 @@ fn decision_493s_hidden_limits_each_set_their_own() {
         ("SCHEDR_HIDDEN__WORKER__EXTENSION_REPORTS_AT_ONCE", "38"),
         ("SCHEDR_HIDDEN__WORKER__EXTENSION_EVENTS_PENDING", "39"),
         ("SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT", "40"),
+        ("SCHEDR_HIDDEN__MASTER__TRIGGER_RUNS_KEPT", "41"),
     ];
     let config = load(None, &env(&given), &[]).unwrap();
     let set = [
@@ -1525,6 +1527,10 @@ fn decision_493s_hidden_limits_each_set_their_own() {
         (
             "SCHEDR_HIDDEN__MASTER__EXTENSION_EVENTS_KEPT",
             config.limits.extension_events_kept,
+        ),
+        (
+            "SCHEDR_HIDDEN__MASTER__TRIGGER_RUNS_KEPT",
+            config.limits.trigger_runs_kept,
         ),
     ];
     for ((name, text), (named, value)) in given.iter().zip(set) {

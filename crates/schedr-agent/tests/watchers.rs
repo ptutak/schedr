@@ -356,6 +356,7 @@ impl Worker {
             timeouts: WorkerTimeouts::default(),
             fork_server: None,
             extensions: schedr_agent::extensions::Plugins::new(),
+            live_logs: schedr_agent::logs::LiveLogs::default(),
         };
         let parser = ProcessParseRunner {
             process: spec(&setup, &root, &logs.join("parse.log"), "parse"),
