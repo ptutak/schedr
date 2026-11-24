@@ -283,8 +283,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i13 | Stress 21b: seeded random chaos aimed at extensions | done 2026-11-23 |  |
 | M5.2i4 | The plugin protocol's specification, and a schema of just its messages | done 2026-11-23 |  |
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
-| M5.2j | Runs and DAGs in numbered pages (decision 517) | planned | D517 |
-| M5.2k | The bugs found and left before 1.2.0 fixed | planned | D522 |
+| M5.2j | Runs and DAGs in numbered pages (decision 517) | done 2026-11-24 | D517 |
+| M5.2k | The bugs found and left before 1.2.0 fixed | done 2026-11-24 | D522 |
 | R1.2 | Release 1.2.0 | planned |  |
 | M5.3a | Hot standby masters in the chart | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |

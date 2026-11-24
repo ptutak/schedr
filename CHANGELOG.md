@@ -5,6 +5,129 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
+## 1.2.0
+
+A faster master, and extensions: task kinds run by a plugin, in any language, beside the
+built-in ones. The master's round costs about a third less, a worker queues the ready tasks
+past its slots, and a trigger's events are stored in batches: on CI's runner the stress suite's
+throughput scenario runs 107-112 tasks a second (the first CI numbers recorded, on the guide's
+Stress tests page). An extension's
+plugin runs each task of its kind, reports its status, links, metrics and events, may keep a
+long-running service on each worker, and gets an Extensions page; a Kubernetes plugin runs each
+task as a pod.
+
+### Upgrading from 1.1.0
+
+- **Upgrade the master first, then migrate.** The protocol goes from 2.1 to 2.2: a 1.2.0 master
+  takes 1.1.0 workers, a 1.1.0 master refuses 1.2.0 ones. One migration adds whether a task is a
+  cleanup or a wait step, an attempt's statuses and links, the extensions' declarations, samples
+  and events, whether a run's start and a posted event were announced (runs and events before
+  the upgrade count as announced: nothing already going is announced again), the services' part
+  of a worker's memory, and each trigger's runs: run `schedr db migrate` (or start the master
+  with `--migrate`) before the webservers.
+- **A worker's certificate must name the worker** (decision 520): with TLS, the master takes a
+  worker's client certificate only if it names `[tls] worker_name` (the chart's do), so another
+  role's certificate can't act as a worker. Certificates made by hand need that name. With
+  `[tls] worker_identity = "certificate"` the worker's ID must be named too, as
+  `<id>.<worker_name>`.
+- **A worker without a default secret storage refuses DAGs reading secrets** (decision 511):
+  validation refuses a DAG reading `secrets[...]` with no storage named that the worker can't
+  serve, instead of the task failing at run time. A worker may use the `db` storage only by
+  opting in (`[secret_storage.db] type = "db"`), and is warned at start; use Vault in
+  production.
+- **A trigger stops in 5 s** (decision 522): a trigger's time between SIGTERM and SIGKILL is
+  `[triggers] cancel_grace`, 5 s by default, no longer `[master] cancel_grace` (30 s, still the
+  tasks'). A trigger needing longer in its `finally`: set it. A lost worker's trigger now starts
+  elsewhere only after that grace, so it never runs twice at once.
+- **Logs are structured** (decision 514): a Python task's `logging` records are written as JSON
+  lines (`schedr_log`, `level`, `message`, `fields`, `time`), shown with their level and
+  filterable in the Logs tab; a task configuring logging itself keeps its own. `[worker]
+  log_format = "plain"` stores them as readable lines instead.
+- **The Runs page pages differently** (decisions 517, DN39): its Older runs button is gone. One
+  deployment's runs are in numbered pages; every deployment's together move by Newest,
+  Previous, Next and Oldest. `GET /api/v1/runs`, `GET /api/v1/dags/{dag}/runs` and `GET
+  /api/v1/dags` take `page` and `limit` and say what follows (`more`, `pages_ahead`,
+  `more_past`); `schedr runs list` and `schedr dags list` take `--page` and `--limit`.
+
+### New
+
+- **Extensions** (decisions 510, 512-519): a task kind run by a plugin executable the worker
+  supervises, one process a task, never sharing a loop with another task. A plugin is written
+  in Python (`schedr_extension`, which imports nothing of schedr), in Rust (the
+  `schedr-extension` crate), or as a shell script (`schedr extension shell`, `schedr task-ctx
+  extension`); `[extensions]` discovers and configures them. The protocol between the worker and
+  a plugin is specified on its own page, with a schema of its messages
+  (`schema/extension.schema.json`).
+- **An extension's service** (decision 518): one long-running process per worker beside its
+  plugins, for what tasks of the kind share (a client, a watch): started before the first task,
+  restarted with backoff, its memory, calls and readiness reported; a task of the kind goes only
+  to a worker whose service is ready.
+- **Plugins observed and controlled as tasks are** (decision 513): an attempt's statuses and
+  links, the plugin's declared metrics stored as worker samples, stop reasons; the
+  **Extensions page**, a tab per extension, with its panels (decision 516: a chart's point,
+  combine, group_by and limit), its workers and its events.
+- **A Kubernetes plugin** (M5.2i2, M5.2i11): each task a pod, through an async client with
+  watches, with panels of every kind; `make demo-kind` shows it on kind with the Kubernetes
+  Dashboard.
+- **Notifications of extensions and more events** (decision 515): an extension's own declared
+  events, and `RUN_STARTED`, `TRIGGER_FIRED` and `EVENT_POSTED`.
+- **A trigger's runs and logs** (B272): each run of a DAG's trigger is kept (the newest 20), its
+  log read from its worker while it runs and after: on the DAG page, through `GET
+  /api/v1/dags/{dag}/trigger/runs` and `.../runs/{instance}/log`, and with `schedr triggers runs`
+  and `schedr triggers logs`.
+- **Numbered pages** (decision 517): the Runs and DAGs pages show `< Previous 1 2 [3] 4 5 ...
+  Next >`, with no total counted; every deployment's runs move by cursor (DN39).
+- **A worker's identity in its certificate** (decision 520): `[tls] worker_identity =
+  "certificate"` binds a worker's ID to its certificate (the chart issues one per pod through
+  cert-manager's CSI driver). Standalone's gRPC port and log endpoint use mTLS made in memory at
+  each start.
+- **A worker's waiting queue** (decision 509): ready tasks past a worker's slots wait on it, so
+  a slot freed starts the next at once; given back when the cluster is faster (`[worker]
+  queue`).
+- **`[database] prepared_statements`** (decision 503): on by default; off for a pooler in
+  transaction mode that doesn't carry prepared statements.
+
+### Performance
+
+- **The master's round a third cheaper** (decisions 501, 502, 505, 506): the core lock released
+  during database calls, one probe a round, only the round moving runs forward with each
+  worker's starts and results queued for it, and its slow parts on due flags.
+- **The worker's start path** (decision 507): its journal written beside its loop, a start in
+  flight held unreported.
+- **A trigger's events batched** (M5.2h-M5.2h3): several in flight per trigger, a turn's events
+  stored in one transaction, about seven statements a trigger instead of seven an event.
+- **Poke reports in the heartbeat** (M5.2f), and many DAG triggers in a stress scenario.
+- **Extensions never hold the master up** (decision 521): their reports are written off the
+  round, in batches, and dropped first under pressure, counted and warned of.
+- **The CLI reads a command's decision after 50 ms** (M5.2h5), not a second.
+- **Deep pages and cursors read a range** (M5.2j): a run list's page 1,000 of 250,000 runs in
+  about 30 ms; Next from near the oldest run in 9 ms (1.1.0's Older runs: about 0.5 s).
+
+### Fixed
+
+- **A worker reporting a trigger the master doesn't know held every `wait_for` DAG waiting on
+  it** (B279) until it stopped it; held now for at most the grace and a lease.
+- **A cut-off worker kept its triggers running** (B290) when it ran no task whose cleanup may
+  move; it stops them at its deadline now, and the master starts them elsewhere only after
+  their grace.
+- **A transaction Postgres ended for its idle time or length lost a worker's message** (B289):
+  it counts as the database's trouble, and the message is handled again after the reconnect.
+- **A task unschedulable for missing code, or for its extension's service not ready, stayed so**
+  (B284, B285, B287) after the code or the service came; a worker able again gives it another
+  chance.
+- **Prepared statements leaked** with the cache off (B256): each query was prepared under a new
+  name until its connection retired.
+- **Through PgBouncer in transaction mode the webserver could panic at start** (B264).
+- **The gauge refresh counted every run in history every 15 s inside the master's loop** (B270);
+  it runs on its own, off the loop.
+- **A drained worker's interrupted task sometimes never ended** after the worker was killed and
+  came back (B282).
+- **A cancelled or failed task's refusals stayed in the master's memory** (B286).
+- **A worker's RUNNING count included its wait steps** (B254): tasks and wait steps are counted
+  apart, against their own slots.
+- **A worker's memory split left out its extensions' services** (B281).
+- **`make distributed`'s workers on the latest release were given what they refuse** (B273).
+
 ## 1.1.0
 
 Faster scheduling and metrics in the web UI. On the same machine as 1.0.0, the stress suite

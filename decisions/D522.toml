@@ -6,7 +6,8 @@ topic = "triggers"
 section = "Placement and ordering"
 summary = '''
 `[triggers] cancel_grace` (5 s by default) is the time between SIGTERM and SIGKILL for every stop
-of a trigger: a restart, a cancel, a drain, its worker cut off from the master. A trigger's work
+of a trigger: a restart, a cancel, a maintenance drain, its worker cut off from the master (a
+worker shutting down gives its triggers `[worker] drain_terminate_period`). A trigger's work
 is its source's, read again from its bookmark, so it needs little time to stop; tasks and wait
 steps keep `[master] cancel_grace` (30 s). The master places a lost worker's trigger elsewhere
 only after this grace (its worker stops it at its deadline, B290), so one trigger never runs in

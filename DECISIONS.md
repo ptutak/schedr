@@ -77,12 +77,12 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D522 | 2026-11-24 | user | planned (M5.2k) | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |
+| D522 | 2026-11-24 | user | built M5.2k | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |
 | D521 | 2026-11-23 | user | built M5.2i12 | task-processes | Extensions never hold the master up: their reports are dropped first |
 | D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
 | D519 | 2026-11-21 | user | built M5.2i6 | task-processes | Shell plugins: declarations in config, configured only; status and link for command tasks |
 | D518 | 2026-11-21 | user | built M5.2i9 | task-processes | An extension's service: one long-running process per worker beside its plugins |
-| D517 | 2026-11-21 | user | planned (M5.2j) | ui-cli | Runs and DAGs in numbered pages |
+| D517 | 2026-11-21 | user | built M5.2j | ui-cli | Runs and DAGs in numbered pages |
 | D516 | 2026-11-21 | user | built M5.2i10 | task-processes | Chart functions: point, combine, group_by and limit |
 | D515 | 2026-11-21 | user | built M5.2i8 | outcomes | Notifications: an extension's own declared events; RUN_STARTED, TRIGGER_FIRED and EVENT_POSTED |
 | D514 | 2026-11-20 | user | built M5.2i5 | task-logs | Logs: stdout and stderr only; one structured line format for every task kind; big logs as links; an extension's own events on its page |

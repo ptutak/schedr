@@ -3,11 +3,11 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-23)
+## Now (2026-11-24)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.2cB4, The path from a task's result to its slot's next assignment (decisions D506). Done when: scenario 1 (release) at 100 tasks a second or more (120 very good; the user, 2026-11-18), or the limit found named; every stress scenario passes, the cut scenarios 17-21 locally (with M5.2c's review)
-- **Then:** M5.2j, M5.2k, R1.2, M5.3a, M5.3b.
+- **Then:** R1.2, M5.3a, M5.3b, M5.3c, M6.1.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -19,31 +19,31 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
 - DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
 - DN36 (2026-11-23): An attempt's statuses written off the round are coalesced by phase (adds to D521)
+- M5.2k (2026-11-24): The bugs found and left before 1.2.0 fixed
+- M5.2j (2026-11-24): Runs and DAGs in numbered pages (decision 517)
 - M5.2i9 (2026-11-23): An extension's service: a long-running process per worker beside its plugins (decision 518)
-- M5.2i4 (2026-11-23): The plugin protocol's specification, and a schema of just its messages
-- M5.2i13 (2026-11-23): Stress 21b: seeded random chaos aimed at extensions
 
 ## In progress
 
-- M5.2i12 finished, being pushed: extensions' reports off the master's round (D521; statuses coalesced by phase, DN36), built-in service metrics (DN35), plugins on `schedr_extension` (DN34, B283 fixed), stress 25 in four runs (extension tasks 3.1 to 11.9 tasks a second), a master-level round test; agy's 12 and Grok's 2 new findings fixed. Then i13 and i4, then k and j; M5.3c (a small `schedr-ctx`) after 1.2.0. The night of 2026-11-23's terms (memory: night-2026-11-23): each step reviewed, checked and pushed; a step measuring performance closes its gaps before the next. The GitLab mirror runs (its token until about 2027-11-23). For the user: the service's constants kept in code (CONNECTS_WAITING, STATUS_SPACING, MAX_LINE, MAX_WARNED).
+- R1.2: 1.2.0rc1 being cut. M5.2k (every open bug but B38/B39) and M5.2j (numbered pages; the All view of runs by cursor, DN39) done, reviewed by agy (Grok on M5.2k's trust boundaries), D522 (a trigger's own cancel grace) added. Next: the version commit (Cargo 1.2.0-rc1, the chart, the OpenAPI file, CHANGELOG.md's 1.2.0 section), pushed with the commits before it; the rc checks (upgrade from 1.1.0 on SQLite and Postgres, a 1.1.0 worker under the new master, the wheel's smoke test and twine check); the tag v1.2.0rc1; then CI's Stress workflow, full profile, on it. Then stop: the user tests standalone and the kind demo, and if all is well goes straight to 1.2.0.
 
 ## Waiting for the user
 
-Nothing.
+- The user reads CHANGELOG.md's 1.2.0 section before the final tag.
 
 ## Rules in force
 
-- Pre-accepted (the user, 2026-11-17): each part of M5.2c, then M5.2d, committed by Claude after its measurement and make check, no push; stop for any decision (M5.2cB4's layout agreed with the user, 2026-11-18). One review at the end of M5.2c over all its parts (the user: "I mean at the end of M5.2c"), then the whole stress suite; M5.2d reviewed on its own.
-- Release prep pre-accepted (the user, 2026-11-15): commits and pushes after review, `make check` and `make docs`; R1.1 is done, so this pre-acceptance has ended. Docs reworks stay local until the user reviews them, unless the user said otherwise for them (the docs review's batches: merge into 1.1.0).
-- One review per step: agy (gemini-4-neon-high, the agy skill) since 2026-11-21, Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.
+- Release 1.2.0rc1 pre-accepted (the user, 2026-11-24, memory release-1-2-rc-plan): push and tag the rc, start CI's stress run, then stop; the final 1.2.0 is the user's.
+- One review per step: agy (gemini-4-neon-high, the agy skill), Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.
 - Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).
-- Stress runs only nightly or when the user asks; a step changing how the master recovers runs the cut scenarios 17-21 locally before pushing.
+- Stress tests on CI, not locally (the user, 2026-11-24): the Stress workflow after a push, filtered to what a change touches (cut scenarios 17-21 for recovery changes), full for a release; locally only a quick single scenario aimed at a feature.
+- Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet); released migrations and the protocol rules still hold.
 - Before stating how something behaves, read the code or run it, and say which.
 - Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).
 
 ## Colleagues
 
-Codex (gpt-6.1-sol again, the user, 2026-11-20) reviewed M5.2i2: its week at 83% (resets Sat 21 Nov 23:45). Grok reviewed M5.2i after Codex's filter refused it twice (~3% of its week).
+agy reviewed M5.2k, M5.2j and the All view (2026-11-24); Grok M5.2k's trust boundaries.
 
 Resume this session with:
 
