@@ -17,3 +17,4 @@ plain entries.
 history = "JOURNAL.md#D508"
 step = "n/a"
 code = ["scripts/records.py::new_decision_note", "scripts/records.py::new_note", "scripts/records.py::note_problems", "scripts/records.py::render_notes"]
+checked = 2026-11-25

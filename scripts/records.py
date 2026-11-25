@@ -1423,12 +1423,15 @@ def bullets(items: tuple[str, ...]) -> str:
 
 def render_status(records: Records, root: Path, notes: StatusNotes) -> str:
     """STATUS.md, whole: the records' state, then `status.toml`'s notes."""
+    # A migrated project's old log, for the decisions taken before the journal.
+    archived = (root / "archive" / "PROJECT.md").exists()
+    older = " (`archive/PROJECT.md` before D367)" if archived else ""
     parts = [
         generated("plan/, decisions/, questions/, notes/, bugs/, JOURNAL.md and status.toml"),
         "# Status\n\n",
         "Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md`"
-        " and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md`"
-        " before D367). The notes below come from `status.toml`: edit that, then `make records`.\n",
+        f" and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md`{older}."
+        " The notes below come from `status.toml`: edit that, then `make records`.\n",
         f"\n## Now ({notes.updated})\n\n",
         status_block(records, root),
         "\n## Recent\n\n",

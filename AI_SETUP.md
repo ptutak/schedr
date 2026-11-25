@@ -1,497 +1,126 @@
-# AI_SETUP: how to set up a project
+# AI_SETUP: how a Python + Rust project is set up
 
-For coding agents. Copy this file into a new repository: it says how the user likes a project
-laid out and tooled, mainly for **Python** and **Rust** (either alone or both together). Adapt
-names and versions to the project; keep the principles. How to work with the user is in
-`AI_INSTRUCTIONS.md`.
+For coding agents, meant to be read whole. It says how the user likes a project laid out and
+tooled, for **Python** and **Rust**, alone or together (drop the part that doesn't apply). It is
+the same in every project: what is true of one project only (its crates, release, machine) is in
+its `AI_PROJECT.md`; how to work with the user in `AI_INSTRUCTIONS.md`; the records (status, plan,
+decisions, bugs) in the `project-docs` skill, whose `init.sh <repo>` seeds a new project.
 
 ## Principles
 
-- **One command checks everything:** `make check` runs exactly what CI runs (formatting,
-  linters, type checks, tests with coverage, integration tests, generated-file checks). If it
-  passes locally, CI passes.
-- **Strict from the first commit:** strict type checking, a broad linter rule set, warnings
-  as errors in CI, a coverage floor. Loosen a rule only with a comment saying why.
-- **Generated files are committed and checked:** schemas, API descriptions and other files
-  generated from code are committed; CI fails when they are stale.
-- **Decisions are written down** (see Project documents) and the code points to them.
-- **Few dependencies,** each one justified, versions pinned in one place.
+- **`make check` is the gate:** everything CI runs that a developer's machine runs reasonably fast.
+  What only CI or a separate target runs (browser tests, wheels, docs) is listed in `AI_PROJECT.md`.
+- **Strict from the first commit:** strict types, broad lints, warnings as errors, a coverage
+  floor. A rule is loosened only with a comment saying why.
+- **Generated files are committed and checked** (schemas, API descriptions, record views): CI fails
+  when one is stale. Built docs aren't committed.
+- **Few dependencies,** each justified, versions pinned in one place.
+- **Each fact has one home;** other files point there.
 
-## Repository layout
+## Layout
 
 ```
-README.md               # what it is, how to install and run
-STATUS.md               # where things stand, what's next (generated; its notes in status.toml)
-PLAN.md                 # milestones and steps
-design/<topic>.md       # how each part works now; design/README.md lists the topics
-decisions/D<n>.toml     # one file per decision; DECISIONS.md generated from them
-JOURNAL.md              # the history: each decision's question, options, reasons (dated entries appended)
-archive/                # read only: a migrated project's old log (schedr: PROJECT.md) and old hand-offs
-BUGS.md                 # open bugs, generated from bugs/ (one TOML file per bug)
-AI_SETUP.md, AI_INSTRUCTIONS.md   # the skills (grok, codex, project-docs) live in ~/.claude/skills, not here
-Makefile                # every task has a target; `make help` lists them
-.pre-commit-config.yaml
-.github/workflows/ci.yml
-pyproject.toml          # Python project (also the build config for a Rust+Python wheel)
-uv.lock
-Cargo.toml              # Rust workspace (shared versions, lints)
-Cargo.lock
-rust-toolchain.toml
-rustfmt.toml, clippy.toml
-crates/<name>/          # Rust crates, one per responsibility
-  src/<module>.rs       # code
-  src/<module>/tests.rs # its unit tests
-  tests/                # integration tests (public API only)
-  xtask/                # development tasks in Rust (code generation, doc sources)
-python/<package>/       # the Python package (src-like layout under python/)
-python/tests/unit/<package>/...   # unit tests, mirroring the package
-python/tests/integration/         # integration tests
-examples/               # runnable examples, with their tests
-scripts/                # shell scripts used by CI and make (e.g. a package smoke test)
-schema/                 # generated, committed (JSON Schema, OpenAPI, ...)
-testdata/               # fixtures shared between languages
-docs/                   # documentation sources (conf, index pages, the guide); output goes to site/
+README.md  CHANGELOG.md
+CLAUDE.md                     # one line: @AI_INSTRUCTIONS.md
+AI_INSTRUCTIONS.md  AI_SETUP.md  AI_PROJECT.md
+STATUS.md PLAN.md DECISIONS.md NOTES.md BUGS.md   # generated from the records
+status.toml plan/ decisions/ questions/ notes/ bugs/ JOURNAL.md   # the records, edited
+design/<topic>.md             # generated from the decisions; README.md lists the topics
+Makefile  .pre-commit-config.yaml  .github/workflows/
+Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml clippy.toml
+crates/<name>/src/<module>.rs, src/<module>/tests.rs, tests/   # crates/xtask: code generation
+pyproject.toml uv.lock
+python/<package>/             # python/tests/unit/ mirrors it; python/tests/integration/
+examples/                     # runnable, tested; the docs include them
+scripts/  schema/  docs/      # docs: numbered in the site's order; output in site/
 ```
-
-A Python-only project drops the Rust parts (and vice versa); everything else stays.
 
 ## Python
 
-- **Version:** the newest stable Python the project can use; set `requires-python` and the
-  tools' target version to it.
-- **Environment and dependencies: uv.** `uv.lock` committed; development tools in
-  `[dependency-groups]` (`dev`, `docs`), never in the runtime dependencies. A local virtualenv
-  (e.g. pyenv-virtualenv selected by a git-ignored `.python-version`) is fine; the Makefile
-  points uv at it.
-- **Runtime dependencies:** as few as possible; a library that runs inside users'
-  environments should be dependency-free, with optional extras for integrations.
-- **Formatting and linting: ruff,** line length 100, a broad rule set:
-
-  ```toml
-  [tool.ruff.lint]
-  select = ["E", "W", "F", "I", "B", "UP", "SIM", "N", "RUF", "PT", "C4", "PL", "D"]
-
-  [tool.ruff.lint.pydocstyle]
-  convention = "google"
-
-  [tool.ruff.lint.per-file-ignores]
-  "python/tests/**" = ["PLR2004", "D"]
-  ```
-
-- **Type checking: mypy `strict = true`** on the package; the package ships `py.typed`.
-- **Docstrings:** Google style (`Args:`, `Returns:`, `Raises:`, `Yields:`) on every public
-  module, class, function and method; private (`_name`) ones are exempt.
-- **Tests: pytest** with `--import-mode=importlib` (no `__init__.py` in test folders, same
-  file names in different folders don't clash), `--strict-markers`, `--strict-config`;
-  coverage with `pytest-cov`, branch coverage on, `fail_under = 85`.
-- **Test layout mirrors the package:** `pkg/sub/module.py` →
-  `tests/unit/pkg/sub/test_module.py`; a package's `__init__.py` → `test_init.py` in its test
-  folder.
+- The newest stable Python the project can use, in `requires-python` and the tools' targets.
+- **uv**, `uv.lock` committed; tools in `[dependency-groups]`. A library that runs in users'
+  environments has no runtime dependencies; integrations are extras.
+- **ruff**, line length 100, `select = ["E","W","F","I","B","UP","SIM","N","RUF","PT","C4","PL","D"]`,
+  Google docstrings on every public name (tests exempt from `D` and `PLR2004`).
+- **mypy `strict`**, `py.typed` shipped.
+- **pytest** with `--import-mode=importlib --strict-markers --strict-config`; no `__init__.py` in
+  test folders; `pkg/sub/mod.py` is tested in `tests/unit/pkg/sub/test_mod.py`.
 
 ## Rust
 
-- **Toolchain:** an exact release in `rust-toolchain.toml` (components `rustfmt`, `clippy`,
-  `llvm-tools-preview`); edition 2024; an explicit MSRV (`rust-version`) in the workspace.
-  This project pins `1.99.1`.
-- **Workspace:** crates under `crates/`, split along responsibilities so each one's
-  dependencies stay small; every third-party version in `[workspace.dependencies]` only.
-- **Lints, shared by the workspace:**
-
-  ```toml
-  [workspace.lints.rust]
-  unsafe_code = "forbid"
-  missing_docs = "warn"
-
-  [workspace.lints.clippy]
-  all = { level = "warn", priority = -1 }
-  pedantic = { level = "warn", priority = -1 }
-  ```
-
-  CI runs `cargo clippy --workspace --all-targets -- -D warnings`; `rustfmt` with
-  `max_width = 100`. Docs: `RUSTDOCFLAGS="-D warnings"`, broken intra-doc links are errors.
-- **Debug builds keep line tables only** (`[profile.dev] debug = "line-tables-only"`):
-  backtraces keep functions and `file:line`, builds write about half as much (binaries a
-  third of the size); `CARGO_PROFILE_DEV_DEBUG=full` when a debugger is needed.
-- **Unit tests next to the code, in their own file:** `src/foo.rs` ends with
-  `#[cfg(test)] mod tests;` and the tests live in `src/foo/tests.rs` (the crate root's in
-  `src/tests.rs`). They can reach `pub(crate)` items; `tests/` can't.
-- **Test tools:** `cargo-nextest` (runner), `cargo-llvm-cov` (coverage, `--fail-under-lines
-  85`, ignoring `tests.rs` files and a binary's thin `main.rs`), `rstest` (fixtures, cases),
-  `proptest` (properties), `insta` (snapshots), `pretty_assertions`, `tempfile`.
-- **Common crates:** `thiserror` for error types, `tracing` for logs, `serde` for data,
-  `clap` (derive) for CLIs, `tokio` for async. A binary keeps its logic in its library part
-  (`lib.rs`), so `main.rs` only calls it and everything is testable.
-- **Code generation:** an `xtask` crate (`cargo xtask <task>`), e.g. JSON Schemas from Rust
-  types with a `--check` mode for CI.
+- An exact toolchain in `rust-toolchain.toml` (rustfmt, clippy, llvm-tools-preview), edition 2024,
+  an explicit `rust-version`.
+- Crates split by responsibility; third-party versions in `[workspace.dependencies]` only.
+- Workspace lints: `unsafe_code = "forbid"`, `missing_docs = "warn"`, clippy `all` and `pedantic`
+  at warn, broken doc links denied; CI uses `-D warnings`. `max_width = 100`.
+- `[profile.dev] debug = "line-tables-only"` (builds half the size).
+- Unit tests in `src/<module>/tests.rs`; integration tests in `tests/`, through the public API.
+- Tools: `cargo-nextest`, `cargo-llvm-cov`, `rstest`, `proptest`, `insta`, `pretty_assertions`.
+  Common crates: `thiserror`, `tracing`, `serde`, `clap`, `tokio`.
+- A binary's logic is in its library, so `main.rs` only calls it.
 
 ## Rust and Python together
 
-- Rust is the reference for shared data shapes; Python types are written by hand and tested
-  against the schemas generated from Rust.
-- A Rust binary shipped with a Python package: **maturin** with `bindings = "bin"` (the wheel
-  holds the binary and the pure-Python package); the Python version comes from the Cargo
-  workspace. uv rebuilds the project when Rust sources change (`[tool.uv] cache-keys`).
-- Processes talk over explicit channels (sockets, files), not by embedding one language in
-  the other, unless the project needs otherwise.
+- Rust is the reference for shared data; Python types are by hand, tested against its schemas.
+- **maturin**, `bindings = "bin"`: the wheel holds the binary and the Python package, the version
+  comes from the Cargo workspace, and `[tool.uv] cache-keys` rebuilds on Rust changes.
+- They talk over sockets and files; neither is embedded in the other.
 
 ## Tests
 
-- **Every public function, method and class has unit tests;** private ones are covered
-  through the public ones, never tested directly. **85 % coverage floor** per language, on
-  the whole code base, enforced by `make check` and CI.
-- **Unit vs integration:** unit tests use fakes and in-memory stand-ins. Anything that starts
-  a real process, binds a real server, uses a real database or the built binary is an
-  **integration test** (`crates/*/tests/`, `python/tests/integration/`, `examples/`). They run
-  with `make test-integration` and in CI, and don't count towards coverage.
-- **Integration tests come with every step,** not at the end.
-- **What a test needs is provided, never skipped:** the Makefile starts throwaway services
-  (e.g. a database in a container, Podman when installed, else Docker, on a random port) and
-  passes them through environment variables; a test run without them fails saying how to run
-  it. Never skip, ignore or xfail a test without asking the user first.
-- **Each test is isolated:** its own temporary directories, ports, databases; tests run in
-  parallel.
-- **Examples are tested,** and an example quoted in the docs is checked to be identical to
-  the file.
-- **Packages are smoke-tested as users get them:** build the release artifact, install it
-  into a fresh environment, run the main flows (a script, run by CI and `make smoke`).
+- 85 % coverage floor per language, over the whole code base, without counting integration tests.
+  Public items have unit tests; private ones are covered through them.
+- Anything with a real process, server, database or the built binary is an **integration test**.
+- **What a test needs is provided, never skipped:** make starts throwaway containers (podman first)
+  on random ports and passes them by environment variable; without them a test fails saying how.
+- Tests are isolated (own directories, ports, databases) and run in parallel. Build the test
+  binaries, then `sync`, before starting a database: its fsyncs wait behind the build's writes.
+- Examples are tested. Packages are smoke-tested as users get them: built, installed fresh, run.
 
 ## Documentation
 
-- One command builds a site from the repository: `make docs` (and `make docs-serve`, on a
-  configurable port). Nothing generated is committed.
-- **Sphinx** with **MyST** (Markdown pages), **Furo** (theme), **autodoc** + **autosummary**
-  + **napoleon** (the Python API from docstrings); **rustdoc** copied under `rust/`.
-- Long Markdown documents (e.g. `JOURNAL.md`) stay one file in the repository; a small
-  generator splits them into pages at build time.
-- **Four kinds of pages:**
-  - **Writing DAGs** (`docs/02-dags/`, written by hand, committed): how to define a DAG with
-    the native API, as built, not as planned. A planned feature is one line pointing at its
-    Design chapter. Non-trivial examples are files (included, and tested). Updated in the same
-    step as the API it describes.
-  - **The guide** (e.g. `docs/03-guide/`, written by hand, committed): how the running system works
-    (components, the flow of a request, loops, failure handling, deployment), as built, not
-    as planned. It describes, and links to the design log for the reasons. Updated in the same
-    step as the code it describes.
-  - **The reference**, generated from the code at build time so it can't go stale: the
-    configuration (from its JSON Schema, doc comments included), the CLI (from the argument
-    parser), the API (from its OpenAPI description), the metrics (from a list per component
-    that the code registers from, checked by a test against a scrape).
-  - **The design and its history** (`design/`, `DECISIONS.md`, `JOURNAL.md`, a migrated project's
-    `archive/PROJECT.md` split into pages at build time) and the plan (`PLAN.md`).
-- **Files numbered in the site's order:** each section gets its number (a folder when it has
-  several pages, `docs/03-guide/`; a file when one, `06-plan.md`), and the pages in a folder
-  too (`03-guide/04-master.md`, two digits); generated pages use the same numbers. A page
-  with pages of its own becomes a folder (`05-workers/01-journal.md`, read as 5.1).
-- **Diagrams in Mermaid**, written as plain ```` ```mermaid ```` fences so GitHub draws them too
-  (`sphinxcontrib-mermaid`, with `myst_fence_as_directive`; mermaid.js pinned).
-- CI builds the docs and **fails on warnings** (a broken reference, a missing docstring, a
-  page not in the navigation).
+- `make docs` builds one site, failing on warnings: Sphinx, MyST, Furo, autodoc with napoleon,
+  rustdoc beside it. Mermaid diagrams as plain fences.
+- **By hand, as built, not as planned:** how to use it, and the guide to how it works, updated in
+  the step that changes them. **Generated:** the reference (configuration, CLI, API, metrics) from
+  the code's own descriptions. **Design and history** from the records.
 
-## Makefile
+## Makefile, pre-commit, CI
 
-Targets with `## help` comments: `help`, `setup` (dev tools, dependencies, pre-commit hooks),
-`fmt`, `fmt-check`, `lint`, `schema` / `schema-check` (generated files), `test` (unit tests
-with coverage, per language: `test-rust`, `test-python`), `test-integration`, `docs`,
-`docs-serve`, `smoke` (package smoke test), `check` (everything CI runs), `clean`, and
-`target-size` (`check` runs it first: cleans the build directory once it holds more than a
-set size, 50 GiB here, since Cargo never deletes old artifacts).
-- **`undone-check`** (first in `check`): `scripts/undone.py` (the `project-docs` skill's
-  template) fails when the uncommitted changes remove more than 20 lines the last 10 commits
-  added and don't add them back elsewhere; CI runs it on each pushed commit
-  (`--range BEFORE..AFTER`, a full fetch), where a commit meaning it says `Undoes: ...`. It
-  catches work copied over main from an older worktree.
-
-- **Integration tests start on a quiet disk:** build the test binaries, `sync`, then start
-  the database and the tests. A rebuild leaves gigabytes unflushed, and a database's fsyncs
-  wait behind them for seconds (seen as flaky timing tests).
-
-## Pre-commit
-
-`pre-commit` runs the same checks on commit: whitespace and end-of-file fixers, TOML / YAML
-checks, merge-conflict markers, `cargo fmt --check`, `cargo clippy -D warnings`, `ruff format
---check`, `ruff check`, `mypy`. Hooks call the tools directly (`language: system`), so
-they use the project's versions.
-
-## CI (GitHub Actions)
-
-Separate jobs. The ones that run on this machine each have a make target:
-
-- `rust`: fmt, clippy, generated-file check, unit tests with coverage, doc tests;
-- `python`: ruff format and check, mypy, unit tests with coverage;
-- `integration`: integration tests, with services as service containers (same images as the
-  Makefile uses);
-- `docs`: the site, failing on warnings;
-- `package` / `wheel`: the Linux x86_64 release wheels (manylinux and musllinux) built by
-  `scripts/build-wheel.sh` and smoke-tested (`make smoke`, `make smoke-musl`); uploaded;
-- `wheel-native`: Linux aarch64 manylinux and macOS arm64, one matrix, shown as
-  `wheel-linux-aarch64` and `wheel-macos-arm64`. The same script and smoke test on native
-  runners. No local make target (this machine is x86_64, and there is no Mac). See
-  `archive/PROJECT.md`, Packaging and releases.
-- **Releases** (`.github/workflows/release.yml`; schedr's release decisions): a pushed tag runs all of
-  CI (`ci.yml` is also a `workflow_call`), then checks and attests the four wheels, publishes
-  them with Trusted Publishing, installs the published one from the index and smoke-tests
-  it, pushes the images to ghcr.io and creates the GitHub Release. `scripts/release.py`
-  checks the tag against the tree, finds the wheels and reads the notes (its tests in
-  `python/tests/unit/test_release.py`). To release `X.Y.Z`:
-  1. Write `CHANGELOG.md`'s `## X.Y.Z` section. `make upgrade-check` (also a CI job,
-     `upgrade`): the previous release fills a database, every table, and this tree migrates
-     it without losing a row and reads it back (decision 498).
-  2. A rehearsal, required when the release adds a migration file (decision 498): set `version = "X.Y.Z-rc1"` in `Cargo.toml`'s `[workspace.package]`
-     (no dot after `rc`: `SchedrVersion` reads `X.Y.Z-rc1`; the wheel is `X.Y.Zrc1`) and
-     `appVersion: "X.Y.Zrc1"` in `charts/schedr/Chart.yaml` (the chart's images default to
-     that tag; `release.py check` refuses another), run
-     `cargo update -w` so `Cargo.lock` follows (the wheels build `--locked`), `make schema`
-     (the OpenAPI document carries the version) and `make third-party` (the crates' licences),
-     commit, tag
-     `vX.Y.Zrc1`, push the tag. It goes to TestPyPI, a GitHub pre-release and images
-     tagged `X.Y.Zrc1`.
-  3. The release: `version = "X.Y.Z"`, `appVersion: "X.Y.Z"`, `cargo update -w`,
-     `make schema` and `make third-party` again, commit, tag `vX.Y.Z`, push the tag; approve the `pypi`
-     environment's deployment when GitHub asks. PyPI, the GitHub Release, the images tagged
-     `X.Y.Z` and `X.Y`.
-  A failed release after the upload can't reuse the version (PyPI refuses a file twice):
-  fix and release `X.Y.Z+1`, or another rc. A job failing after the upload is re-run alone
-  (`gh run rerun <id> --failed`): the published jobs aren't run again. On ghcr, an image's
-  very first push creates its package and is then refused (`error from registry: denied`)
-  until the package is linked to the repository (its settings show "Inherited access");
-  re-run then (it happened to both images with 0.1.0rc1, 2026-11-02). A new package is
-  private: set it public.
-- **Supply-chain pins** (see `archive/PROJECT.md`, CI supply-chain pins): every `uses:` is a
-  40-character commit SHA (a local `./` action and `docker://image@sha256:<64 hex>` are
-  allowed), with the version in a comment; `dtolnay/rust-toolchain` sets `toolchain:`;
-  maturin (hashed requirements, for the wheels and the sdist), uv (version plus the
-  tarball checksum), nextest, llvm-cov and Helm are exact versions; images CI or the
-  scripts pull are digest-pinned. `make pin-check` (in `make check`) runs the checker
-  with `uv run --no-sync` and does not sync. The `rust` job installs the dev group first.
+- Every task is a target with a `## help` comment: `help setup fmt fmt-check lint schema
+  schema-check test test-rust test-python test-integration docs docs-serve smoke check clean
+  target-size records records-check bugs bugs-check undone-check pin-check`.
+- `check` first runs `target-size` (cleans an oversized build directory) and `undone-check`
+  (uncommitted changes removing what recent commits added; CI checks each pushed commit).
+- **Pre-commit** calls the project's own tools: whitespace, TOML and YAML, fmt, clippy, ruff, mypy.
+- **CI** has separate jobs: rust, python, integration (the Makefile's service images), docs, wheels
+  with smoke tests, and the generated-file checks.
+- **Supply chain:** `uses:` by commit SHA, images by digest, downloaded tools by exact version and
+  checksum; `pin-check` enforces it.
+- **Releases** run from a pushed tag: all of CI, then attested wheels to PyPI by Trusted Publishing,
+  a smoke test of the published one, images, the GitHub release. An uploaded version is spent: fix
+  and release the next.
 
 ## Dependencies
 
-- **A new major or minor version must be at least 7 days old** (its `x.y.0`, checked in the
-  registry: crates.io API, PyPI); **a patch** on a minor that already qualifies may move once
-  it is 3 days old (time for a compromised release to be found and yanked). Ages count in UTC
-  calendar days; a yanked `x.y.0` still dates its minor.
-- **A yanked version** in the lock moves to a version that meets the rule: forward when one
-  exists, otherwise back to the newest earlier one that meets it and isn't yanked.
-- Each dependency is listed in this file's Libraries table (schedr: working rules and this machine) (need, choice, why, and
-  what wasn't chosen); schedr's older ones are in `archive/PROJECT.md`, Libraries.
-- **A change to `Cargo.lock`** (a crate added, removed or bumped) changes the binary's
-  licences: `make third-party` writes `LICENSE-THIRD-PARTY` again (`make check` and CI fail
-  until it is current).
-- **GitHub Actions and the tools they download** follow the same age rule. The pins, and
-  how to bump one (the age check, the changelog, the commit SHA), are in `archive/PROJECT.md`,
-  CI supply-chain pins.
+A new major or minor (its `x.y.0`) is at least 7 UTC calendar days old, a patch on a qualifying
+minor at least 3; a yanked `x.y.0` still dates its minor. A yanked version in the lock moves forward
+to one that qualifies, else back. Actions and downloaded tools follow the same rule. A new
+dependency gets a row in `AI_PROJECT.md`, Libraries: need, choice, why, not chosen.
 
-## Configuration and secrets
+## Configuration, secrets, messages
 
-- Configuration from one file and/or environment variables mirroring its structure, with a
-  clear precedence (flags > environment > file); unknown keys are errors naming the key and
-  where it came from.
-- **Secrets only from environment variables,** never from configuration files (a secret in
-  the file is a startup error).
+- One file and environment variables mirroring it; flags over environment over file; an unknown key
+  is an error naming it and its source.
+- Secrets only from environment variables; one in the file is a startup error.
+- Messages in lower case, names in backticks, what to do next:
+  ``unknown time zone `Mars/Base` ``. Plain, precise English; one name per thing.
 
 ## Agent tooling
 
-- **Claude Code is the main agent** and writes the code. Two colleagues work beside it, each
-  through a skill, on its own subscription (no per-token billing):
-  - **Grok** (Grok Build, xAI's terminal agent, on SuperGrok or X Premium+): step reviews,
-    bug hunting and fixing, docs, exploration.
-  - **Codex** (OpenAI's Codex CLI, on a ChatGPT plan): a second opinion on architecture,
-    reviews together with Grok, bug finding, docs, and the long whole-repository review;
-    not coding.
-
-  How they work together is in `AI_INSTRUCTIONS.md`, Working with a second agent, and in
-  each skill's `SKILL.md`.
-- **Set up once per machine,** not per repository. Each skill is a folder with its own private
-  git repository (the `project-docs` skill, `ptutak/project-docs-skill`, says where every skill
-  lives and how they are kept):
-
-  | | Grok | Codex |
-  |---|---|---|
-  | Folder | `~/.claude/skills/grok/` | `~/.claude/skills/codex/` |
-  | Repository | `git@github.com:ptutak/grok-skill.git` | `git@github.com:ptutak/codex-skill.git` |
-  | Invoked as | `/grok <task>` | `/codex <task>` |
-  | One turn | `grok-turn.sh new\|resume <session-id> <worktree> <prompt-file>` (the ID chosen by the caller) | `codex-turn.sh new <worktree> <prompt-file>` (prints the ID Codex assigns), then `resume <session-id> <worktree> <prompt-file>` |
-  | Model, effort | `GROK_MODEL` (grok-4.7), `GROK_EFFORT` (high) | `CODEX_MODEL` (gpt-6.1-sol), `CODEX_EFFORT` (high) |
-  | Watch live (no tokens) | `grok-watch [-a] [<id>]`, `-l` the sessions, `-c [DAYS] [--prune]` old ones, `-h` | `codex-watch` the same; `-l` also shows the weekly and 5-hour limits |
-  | Usage | the weekly % asked of the user, logged in `USAGE.md` | read from each turn (weekly and 5-hour %), logged in `USAGE.md` |
-  | Runs | with `--always-approve`, inside `sandbox.sh` | in its `workspace-write` sandbox (writes only in the worktree, network open), approvals off, inside `sandbox.sh` |
-
-  **`sandbox.sh`** (bubblewrap, `sudo apt install bubblewrap`) gives each turn a private view of
-  the filesystem: the system and the toolchains read-only, the worktree and the repository's
-  git data, the agent's own state; nothing else of the user's (no other project, no `~/.ssh`,
-  no Windows drive). Added after Codex listed the user's other projects with `find ..`.
-  Its own PID namespace (`--unshare-pid`): an agent sees and signals only its own processes,
-  added after a throwaway test's `kill -KILL -<pgid>` (which procps 4.0.4 reads as `kill -1`)
-  killed every process of the user; the prompts also forbid that form (`kill -s KILL --
-  -<pgid>`, or the code's own helpers).
-  Nothing the user runs later outside the sandbox is writable in it: `~/.cargo` is read-only
-  but its download cache, and the CLIs' own programs, configs, plugins, skills and memories
-  are read-only within their state folders (an agent gone wrong can't change them for later).
-  The environment is emptied but for an allowlist (the paths, the proxy, the toolchains' roots,
-  `SCHEDR_*`, `CARGO_*`, `RUSTUP_*`, `UV_*`): no token of the user's reaches an agent, which
-  sends what it reads to its provider.
-
-  On a new machine: clone each repository into its folder and run its `install.sh`. It
-  installs the CLI (`npm install -g @xai-official/grok` or `@openai/codex`), logs in (`grok
-  login`, `codex login`), links the watcher into `~/.local/bin`, and allows the turn script in
-  `~/.claude/settings.json`. Running it again is safe. Each skill keeps its review plans in
-  `reviews/` and its per-turn logs in `logs/` (ignored by git).
-- **Per repository, nothing to add:** the skills find the working rules (this file and
-  `AI_INSTRUCTIONS.md`, else `AGENTS.md` / `CLAUDE.md`) and the checks (`make check`,
-  `make docs`). A colleague's worktree is a sibling folder (`../<repo>-grok-<step>`,
-  `../<repo>-codex-<step>`), outside the repository, so nothing needs ignoring.
-- **The worktree has its own Python environment** (a pyenv virtualenv named like the
-  worktree, in its untracked `.python-version`, deleted with it): one environment shared by
-  checkouts has an editable install pointing at whichever synced last, so tests import another
-  branch's code. Never `make setup` there: git hooks are shared by all checkouts.
-- **The worktree has its own build directory,** so a colleague's first build is a full one;
-  Claude runs it (and installs the environment) before the first turn, which matters for
-  Codex, whose sandbox can't write outside the worktree. Kind clusters, ports and containers
-  are shared with the main checkout: don't run the same cluster script in both at once.
-
-## Project documents
-
-The layout, its tooling and the routines are the **`project-docs` skill**'s
-(`~/.claude/skills/project-docs/SKILL.md`; `init.sh <repo>` seeds a new project). In short, each
-question has one small file that answers it, so an agent reads little and never guesses:
-
-| File | Answers | Written |
-|---|---|---|
-| `STATUS.md` | where things stand, what waits for the user | generated from the records (next step, open questions, bugs, recent decisions and steps) and `status.toml` (in progress, waiting, rules, colleagues: rewritten at each step's or session's end) |
-| `design/<topic>.md` | how a part works **now**, an index into the decisions and the code (for the agent; the reader's docs are `docs/`) | generated whole from the decisions |
-| `decisions/D<n>.toml` | what was decided, whether it holds, the step that builds it, its anchor in `archive/PROJECT.md` | one file per decision; `DECISIONS.md` generated, one line each |
-| `questions/Q<n>.toml` | what is not decided yet, with the current proposal | one file per question; shown in `DECISIONS.md` and the topic's page |
-| `plan/<milestone>.toml` | milestones and steps in order, each with its scope, "done when" and status | edited; `PLAN.md` generated, one line per step; "next" is the first planned step |
-| `JOURNAL.md` | how the project goes on and **why**: each decision's question, options, choice, reasons and "Not chosen" | dated entries appended, never rewritten, each starting with its anchor: `<a id="D<n>"></a>` for a decision, `<a id="N<n>"></a>` for a note (an event or a correction, not a choice: `records.py note "<title>" [D<n>]`) |
-| `archive/PROJECT.md` (only in a migrated project) | the history before the journal | read only: moved to `archive/`, nothing written there but anchors; a new project has none |
-| `bugs/`, `BUGS.md` | open bugs, ranked | one TOML per bug, generated `BUGS.md` (below) |
-
-- **Generated views are indexes:** one line per item, saying where the details are; the
-  records (TOML files, anchors) hold the content. A list or a state that two files would
-  otherwise both hold is generated from one.
-- **A decision** is recorded the moment it is taken, in one change: its TOML
-  (`scripts/records.py decision "<title>"`), a dated entry in `JOURNAL.md` (the options, the
-  choice, why, "Not chosen") starting with its anchor, and its `section`. `make records` writes
-  every generated view; `make records-check` (in `make check` and CI) fails on an invalid
-  record, a gap in the numbers, a decision named anywhere but not recorded, a missing anchor, a
-  step not in the plan, an active decision's code path or symbol gone, or a stale view.
-- **Bugs:** open bugs with stable IDs (B1, B2, …, never reused), one TOML file each,
-  `bugs/B<n>.toml`: a title, a rating (severity critical/high/medium/low × probability
-  likely/possible/rare, and a kind: security, data, correctness, reliability, performance,
-  usability, tests), a one-line summary, the date found, whether it is only suspected, and the
-  details (found, symptom, repro, cause or suspect, plan) in Markdown. `bugs/README.md` holds
-  the rules and scales, `bugs/next-id` the next free number (fixed bugs' files are gone).
-  `scripts/bugs.py` validates the files and generates `BUGS.md` (the rules, the ranking with
-  security first, then the entries); `make bugs` writes it, `make bugs-check` (in `make check`
-  and CI) fails when a file is invalid or `BUGS.md` is stale, and `scripts/bugs.py new
-  "<title>"` starts a new one. A fix deletes its file in the same commit, with a test that would
-  have caught it. The rule for when bugs are fixed is in `AI_INSTRUCTIONS.md`, Bugs.
-
-## Style
-
-- Errors and messages: lower case, names in backticks, what to do next
-  (``unknown time zone `Mars/Base` ``; ``set `X` (or [section] key)``).
-- Comments and docstrings say *why* and *what*, not *how*; match the surrounding code's
-  density and naming.
-- Plain, precise English in documents; the same name for the same thing everywhere.
-
-## schedr: working rules and this machine
-
-Moved from `design/development.md` (2026-11-09), which is now generated from the decisions like the
-other design pages. The rules hold for every step; the notes are this machine's.
-
-### Rules
-
-- **Unit tests:**
-  - Every public item (Rust `pub`, `pub(crate)`, `pub(super)`; Python public names) gets one,
-    with at least 85 % coverage. Private items aren't tested directly.
-  - Python unit tests go in `python/tests/unit/schedr/.../test_<module>.py`; Rust unit tests
-    in `src/<module>/tests.rs`.
-- **Integration tests come with every step.** Anything that spawns processes or uses a real
-  server, the binary or Postgres counts as integration. They live in `crates/*/tests/`
-  (`crates/schedr/tests/roles.rs` has the `Cluster` helper: roles as processes, `start_as`,
-  `terminate`, `kill`, `cli`, `attempts`, `worker_state`; `Cluster::with_tls` and
-  `start_tls` for mTLS, certificates from `schedr_tls::testing::TestCa`; the cluster's
-  config is `[tls] mode = "mesh"` otherwise), `python/tests/integration/` and
-  `examples/`. Multi-worker tests use Postgres (`postgres_database()`), not SQLite.
-- **Never skip, ignore or xfail a test without asking first**, and say why.
-- **Bugs found on the way go to `bugs/`** (`scripts/bugs.py new`; B-numbers never reused), each
-  rated (severity, probability, kind: `bugs/README.md`, Ratings), `make bugs` after; fix them
-  when the user schedules it, removing the entry in the fixing commit. A bug that a step's
-  own design has to fix anyway (like B5 in 2.4) can be fixed in that step: say so in the
-  summary and in archive/PROJECT.md.
-- **No Airflow terms in core** (XCom etc. only inside `schedr.airflow`).
-- Secrets only come from env vars, never from the config file. A DB URL with a password in
-  the file is a startup error; tests pass it via `SCHEDR_CONFIG__DATABASE__URL`.
-- Rust MSRV is 1.99, `unsafe_code = forbid` (use rustix for fcntl, flock, signals and the
-  like). Clippy limits functions to 100 lines: split by meaning when it complains.
-- Library ages (archive/PROJECT.md, Libraries): a new major or minor (its `x.y.0`) at least 7 UTC
-  calendar days old, a patch at least 3 days; a yanked version moves forward, else back. Check with
-  `curl https://crates.io/api/v1/crates/<name>/versions` (or PyPI), and add them to the
-  Libraries table below.
-- `0001_initial.sql` (both `postgres/` and `sqlite/`) and the protocol (`PROTOCOL_VERSION`
-  0.1) are edited in place until the first release: **1.0.0, after M4B** (the user,
-  2026-10-29; PLAN.md, Release 1.0.0). From then on, migrations and additive protocol changes.
-- Match the surrounding code: comment density, naming, and the error message style (backticks
-  around names, lower case, what to do next).
-- Regenerate `schema/` with `make schema` after API or DAG JSON changes (`make check` runs
-  `schema-check`).
-- **Checks:** `SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python
-  SCHEDR_TEST_POSTGRES_URL=postgres://postgres:schedr@127.0.0.1:45243/postgres make check`
-  (the podman container `schedr-pg-check` on 127.0.0.1:45243), then `make docs`. Running
-  `cargo nextest` by hand needs the same two variables (forgetting the URL fails the Postgres
-  tests).
-- **The fault-injection harness** (D98): any master operation that writes gets a `Scenario`
-  (`crates/schedr-master/src/faults.rs`, `dispatch/tests.rs` `mod faults`) run by
-  `fail_each_write`; a multi-write bug is proven and fixed against it.
-- Commit messages read like `M4.x: <what>, <what>; <what>` and end with
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **Stress tests:** never without the user asking (only nightly). **Processes:** kill only your
-  own.
-
-### This machine
-
-- **ufw is on** (2026-10-30). This WSL runs in mirrored networking mode, where `127.0.0.1`
-  goes over `loopback0`: ufw allows in and out on it (without that rule every local
-  connection fails: the tests, `make standalone`, the test Postgres).
-
-- Logs and scratch files go in the session scratchpad, not `/tmp`.
-- **The kubectl current context is a real OpenShift cluster (`…bradford-lab`). Never apply
-  anything to it.** Use a local kind cluster only, with an explicit `--context`, and ask
-  first. The OpenShift ("bradford") manifest comes later, when the user asks.
-- Python outside `make`:
-  ```
-  cd /home/ptutak/Git/schedr
-  export UV_PROJECT_ENVIRONMENT=$(pyenv prefix) UV_PYTHON=$(pyenv prefix)/bin/python; unset VIRTUAL_ENV
-  ```
-  The Python with schedr installed is `$(pyenv prefix)/bin/python`.
-- **Rust integration tests by hand:** `export SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python`,
-  then e.g. `cargo nextest run -p schedr --test local`. The Postgres tests also need
-  `SCHEDR_TEST_POSTGRES_URL`; `make test-integration` starts Postgres
-  (`postgres:17.6-alpine`, digest-pinned) with podman and sets both. The docker snap under WSL has broken
-  port forwarding.
-- **`run_dag` by hand** with a freshly built binary: `SCHEDR_BIN=$PWD/target/debug/schedr`.
-- **Wheels:** `make smoke` and `make smoke-musl` both call `scripts/build-wheel.sh`
-  (release builds, a few minutes each: manylinux x86_64 and musllinux x86_64 in
-  digest-pinned images, podman locally, then `scripts/smoke-wheel.sh`). The script
-  installs rustup-init 1.29.1 (minimal channel only, `maturin build --locked`). Linux
-  aarch64 and macOS arm64 are CI only (one matrix, `wheel-native`, shown as
-  `wheel-linux-aarch64` and `wheel-macos-arm64`; macOS installs the same rustup-init, not
-  the runner's). CI does not use `maturin-action` (the sdist installs maturin from
-  `scripts/maturin-requirements.txt`).
-- **Every role opens the ops port** (`[ops] port`, 8090): tests set it to 0, like the other
-  ports, and read `ops on http://…` from the log.
-- **Roles need `[tls]`:** `app` mode (the default) needs `ca`, `cert`, `key`; set
-  `SCHEDR_CONFIG__TLS__MODE=mesh` to run roles by hand without certificates. Standalone never
-  uses TLS. Tests and `dags test` set `[worker] log_port = 0`.
-- **Ports:** 8000 is taken on this machine. `make docs-serve` uses `DOCS_PORT` (default 8765).
-  Tests bind port 0 and read the bound address from the logs.
-
-### Libraries
-
-A new dependency gets a row here: the need, the choice (with its version and date), why, and what
-wasn't chosen; one the user decides is also a decision. The ones chosen before 2026-11-09 are in
-`archive/PROJECT.md`, Libraries.
-
-| Need | Choice | Why | Not chosen |
-|---|---|---|---|
+- Claude Code writes the code. The colleagues `agy`, `codex` and `grok` and the `project-docs`
+  skill live in `~/.claude/skills/`, one private git repository each, set up once per machine (clone,
+  `install.sh`). Nothing is added per repository but `CLAUDE.md`.
+- A colleague works in a sibling worktree (`../<repo>-<agent>-<step>`), in a sandbox, with its own
+  Python environment and build directory, prepared before its first turn. Never `make setup`
+  there: git hooks are shared by all checkouts, as are clusters, ports and containers.

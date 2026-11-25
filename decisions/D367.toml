@@ -5,7 +5,7 @@ status = "active"
 topic = "development"
 section = "Documents and records"
 summary = '''
-`STATUS.md` (rewritten, at most 60 lines) says where things stand; `design/<topic>.md` how each part
+`STATUS.md` (generated, D376) says where things stand; `design/<topic>.md` how each part
 works now; `decisions/D<n>.toml` one file per decision, indexed by the generated `DECISIONS.md`.
 archive/PROJECT.md is the history up to D366; later decisions are in JOURNAL.md (D370). The layout lives on
 in the `project-docs` skill.
@@ -13,4 +13,4 @@ in the `project-docs` skill.
 history = "JOURNAL.md#D367"
 step = "n/a"
 code = ["scripts/records.py", "STATUS.md", "design/README.md", "JOURNAL.md"]
-checked = 2026-11-24
+checked = 2026-11-25

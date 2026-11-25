@@ -11,15 +11,10 @@ waiting = [
 ]
 
 rules = [
-    "One review per step: agy (gemini-4-neon-high, the agy skill), Codex the fallback; Grok second security reviews and bugs; always at high effort; reviews cover code only.",
-    "Before a step's commit: `python3 scripts/records.py affected`, re-read every one of those summaries, set `checked`; run `make docs` too (CI builds the docs, `make check` doesn't).",
-    "Stress tests on CI, not locally (the user, 2026-11-24): the Stress workflow after a push, filtered to what a change touches (cut scenarios 17-21 for recovery changes), full for a release; locally only a quick single scenario aimed at a feature.",
-    "Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet); released migrations and the protocol rules still hold.",
-    "Before stating how something behaves, read the code or run it, and say which.",
-    "Work from a worktree reaches main through git only; read `git diff --cached --stat` before committing (D371).",
+    "Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet): no fallbacks, redirects or old fields kept; released migrations and the protocol rules still hold.",
 ]
 
 colleagues = """
 agy reviewed M5.2k, M5.2j, the All view, DN40 and B292 (2026-11-24); Grok M5.2k's trust boundaries."""
 
-resume = "claude --resume 4e0d63dd-fd58-4f9c-9aeb-589a35746903"
+resume = "claude --resume d9e526b0-15b2-46f6-a593-f483ae56ad60"

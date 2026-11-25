@@ -14,15 +14,17 @@ decisions whose `topic` (or `also`) is this one; never edit it, edit the decisio
   before changing the topic.
 
 A decision's `summary` is therefore written to be read there: what holds now, two to four sentences, names in
-code font. Working rules and this machine's notes are in `AI_SETUP.md` and `AI_INSTRUCTIONS.md`, not here.
+code font. Working rules and this machine's notes are in `AI_PROJECT.md`, not here.
 
-The other layers (see `AI_SETUP.md`, Project documents):
+The other layers (see the `project-docs` skill):
 
 | File | Answers | Written |
 |---|---|---|
 | `STATUS.md` | where things stand, what's next | generated; its notes in `status.toml`, rewritten each session |
 | `design/<topic>.md` | how a part works now | generated from the decisions |
-| `decisions/D<n>.toml`, `DECISIONS.md` | what was decided, whether it holds, where its reasons are | one file per decision; `DECISIONS.md` generated |
+| `decisions/D<n>.toml`, `DN<n>.toml`, `DECISIONS.md` | what was decided, whether it holds, where its reasons are | one file per decision; `DECISIONS.md` generated |
+| `bugs/B<n>.toml`, `BUGS.md` | open bugs, ranked | one file per bug; `BUGS.md` generated |
+| `notes/N<n>.toml`, `NOTES.md` | the user's own notes | written only when asked; `NOTES.md` generated |
 | `archive/PROJECT.md` | how the project got here, and why, up to D366 | by topic; left as it is, with an anchor at each decision |
 | `JOURNAL.md` | each decision since, with its reasons and "Not chosen" | dated entries appended, each starting with its anchor |
 
