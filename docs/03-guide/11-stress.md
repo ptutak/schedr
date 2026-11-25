@@ -36,8 +36,8 @@ Each scenario checks these **rules** at the end. Breaking one fails the scenario
   cleanup succeeded but its end mark is missing.
 
 **Speed only fails on a gross regression.** Each scenario has generous limits (at least so many
-tasks a second, the master's round under 5 s at the 99th percentile, a task starting within
-30 s of its assignment, …). Shared CI machines vary too much for tight limits; the exact numbers
+tasks a second, the master's round under 5 s at the 99th percentile (10 s in scenario 24), a
+task starting within 30 s of its assignment, …). Shared CI machines vary too much for tight limits; the exact numbers
 are in the report.
 
 ## The scenarios
@@ -76,7 +76,7 @@ are in the report.
 | 23 | Many wait steps (`23_many_sensors`): 500 at once on one worker, its default `[watchers] slots`, 400 plain `@sensor`s awaiting a file and 100 pokes checking for it every 5 s | the worker's memory with its watcher hosts, idle and with all 500 in, per wait step, and what the hosts report; how soon each ends once the file is there; every one succeeds |
 | 23b | Plain pokes (`23b_plain_pokes`): 100 plain `def` pokes on one worker, each call blocking 1 s as a blocking client does, every 5 s (decision 489) | how soon each ends once the file is there, at most 7 s at p99 (its `every` and its call): on Python's default pool of at most 32 threads their calls would queue and overrun; every one succeeds |
 | 24 | Many triggers (`24_many_triggers`, M5.2f): idle `@trigger.poke`s filling the watcher slots (each reporting with every heartbeat) and `@trigger`s firing 100 events a second in all (each for 15 s, 60 s in the full profile; 20 a second before M5.2h2), each event a run of one task, beside scenario 1's kind of load | how long trigger messages hold the master's lock, events a second, an event to its run and to its task's start, tasks a second, each trigger's own pace and how far apart they started (the pokes are switched on first, then the firing triggers all at once), how long the master took to apply the unpauses; `SCHEDR_STRESS_POKES` and `SCHEDR_STRESS_FIRING` set the counts (0: none) |
-| 25 | Extension tasks (`25_extension_throughput`, M5.2i12): scenario 1's shape run plain first (`25_extension_throughput_plain`), then with every task an extension task, half the dummy's Python plugin (a status, a link, a metric point and a notification, a call to its service, a 0.1 s sleep), half a shell script through `schedr extension shell` doing the same through `schedr task-ctx` | tasks a second beside the plain run's (`tasks_per_s_vs_plain`), the master's extension queries (`query_<name>_p99_s`, `_total_s`), what it stored of the reports (`reports_per_s`, `statuses_stored`, `sample_rows`), the reports dropped (`dropped_<reason>`), and the extension page's reads under that load |
+| 25 | Extension tasks (`25_extension_throughput`, M5.2i12): scenario 1's shape, in the full profile at a quarter of its size (5,000 tasks a part), run plain first (`25_extension_throughput_plain`), then with every task an extension task, half the dummy's Python plugin (a status, a link, a metric point and a notification, a call to its service, a 0.1 s sleep), half a shell script through `schedr extension shell` doing the same through `schedr task-ctx` | tasks a second beside the plain run's (`tasks_per_s_vs_plain`), the master's extension queries (`query_<name>_p99_s`, `_total_s`), what it stored of the reports (`reports_per_s`, `statuses_stored`, `sample_rows`), the reports dropped (`dropped_<reason>`), and the extension page's reads under that load |
 
 Masters are reached through a small proxy that sends new connections to whichever master is
 ready, as a Kubernetes Service would; the database stall is the same proxy holding everything

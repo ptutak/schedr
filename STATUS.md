@@ -7,7 +7,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** R1.2, Release 1.2.0. Done when: 1.2.0 on PyPI and its images on ghcr.io; CI's Stress workflow's numbers for 1.2.0 on the stress page (the user, 2026-11-24: CI's stress runs after the push, no local comparison against 1.1.0)
-- **Then:** M5.3a, M5.3b, M5.3c, M5.3d, M6.1.
+- **Then:** M5.3a, M5.3b, M5.3c, M5.3d, M5.3e.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -25,7 +25,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- R1.2: 1.2.0 released 2026-11-25 (PyPI, ghcr.io, GitHub). Left: the full Stress run on CI against v1.2.0, dispatched 2026-11-25 (run 45511092157), read and its table put on the stress page (the guide's Stress tests). Then M5.3 (a to d).
+- R1.2: 1.2.0 released 2026-11-25 (PyPI, ghcr.io, GitHub). Left: the numbers of the full Stress run on CI against v1.2.0 (run 45511092157, ended 2026-11-25) put on the stress page. Scenario 24 failed there on its round p99 (5.793 s; limit now 10 s, investigated in M5.3e); scenario 25 was stopped at 150 minutes (its parts now a quarter): both to run again on CI after the push. Then M5.3 (a to e).
 
 ## Waiting for the user
 

@@ -245,6 +245,18 @@ impl Stress {
         self.measure_with(report, master, min_tasks_per_s, Some(5.0));
     }
 
+    /// [`Self::measure`] with a round p99 limit of its own, for a scenario whose load makes
+    /// rounds longer than the others' 5 s (scenario 24: 10 s, the user, 2026-11-25).
+    pub fn measure_rounds_within(
+        &self,
+        report: &mut Report,
+        master: &str,
+        min_tasks_per_s: f64,
+        round_limit_s: f64,
+    ) {
+        self.measure_with(report, master, min_tasks_per_s, Some(round_limit_s));
+    }
+
     /// [`Self::measure`] for a baseline, a part run for its rate to compare with: its round
     /// p99 recorded, not limited (B293: scenario 25's Python baseline, 64 interpreters started
     /// on a 2-CPU runner, held the master's rounds 16 s; its rate was what it was for).

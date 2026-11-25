@@ -3690,3 +3690,25 @@ extension parts are compared with. The user chose A of four: the baselines (`sle
 record their round p99 without a limit (`Stress::measure_baseline`); the main extension part
 keeps 5 s. Not chosen: slots capped to the runner (the baseline's meaning changes), a limit
 scaled by load (a formula to tune), a bigger runner.
+
+### 2026-11-25: scenario 24's round p99 limit 10 s; the upgrade check fills 1.2.0's tables
+
+The full Stress run on 1.2.0 failed scenario 24 on the round's p99 alone, 5.793 s against 5, as
+on 1.2.0rc1, this time without a stall (1.1 s of full I/O stall, under `NOISY_STALL_MS`). The
+user: the limit doubled, for scenario 24 only (`Stress::measure_rounds_within`); the others keep
+5 s. Why its rounds are that long is M5.3e's (the user).
+
+CI's upgrade check failed on every push after 1.2.0: 1.2.0 became the release upgraded from, and
+its coverage gate found the tables 1.2.0 added that nothing filled (`attempt_links`,
+`attempt_statuses`, `extension_events`, `extension_samples`, `extension_versions`). From 1.2.0
+on, the old release now runs a task of its own dummy plugin (its tag's `examples/extensions`)
+reporting a status, a link, a metric and a notification event.
+
+### 2026-11-25: scenario 25's parts at a quarter in the full profile
+
+Its six parts were scenario 1's whole load each (120,000 tasks), more than CI's 150 minutes: on
+1.2.0 it was still running after 2 h 16 min. The user chose A of four: every part at a quarter in
+the full profile (250 DAGs of 15 tasks and one of 1,250, 5,000 tasks; the same 8 workers of 8
+slots), the quick profile as it was (`Load::quarter`). `_plain` is then no longer scenario 1 at
+full size. Not chosen: a CI job per part (different machines, so the ratios mean less), only the
+slow parts smaller (the ratios compare different sizes), a longer timeout.

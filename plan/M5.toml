@@ -759,3 +759,14 @@ done_when = '''
 an extension task assigned only to workers of its queue offering its name and version (a test with workers offering 1.0, 1.0 and 1.1, and none: each task to the right ones, no give-back); the user's choice for a task nobody serves built and said in its waiting reason; the guide's extensions page saying routing needs no queue of its own; stress 25 on CI unchanged or faster
 '''
 status = "planned"
+
+[[steps]]
+id = "M5.3e"
+title = "Scenario 24's long rounds investigated"
+scope = '''
+(the user, 2026-11-25: "put scenario 24 investigation to M5.3") CI's full profile measured scenario 24's round p99 at 5.793 s on 1.2.0 (run 45511092157, 1.1 s of full I/O stall) and 5.8 s on 1.2.0rc1 (14.2 s of stall); its limit went from 5 to 10 s. Where that time goes isn't known: on 1.2.0 every part of the round measured was at most 0.82 s at p99 (`round_triggers_p99_s` and `lock_wait_round_p99_s` 0.819, `round_results_p99_s` 0.410), while `lock_wait_turn_p99_s` was 3.28 s, `started_recorded_p99_s` 8.2 s, `rest_lock_s` 88.6 and `trigger_lock_s` 28.4 of the rounds' 394 s. The round's p99 is read from buckets a square root of 2 apart, so 5.793 may be the upper edge of 4.1 to 5.8 s; it may also be a few rounds slow in several parts at once, such as while the 500 pokes are unpaused (`unpause_idle_s` 20.6 s). To find: which rounds are the slow ones and when (`SCHEDR_HIDDEN__MASTER__ROUND_TRACE`), what they wait for (the lock, Postgres, the CPU of the 2-core runner), and whether it is the master's work or the runner's load. A fix, if one is found, and the limit put back to 5 s are the user's choice then
+'''
+done_when = '''
+the slow rounds of a full scenario 24 explained by their trace (which, when, waiting for what), said in the journal; the user's choice on a fix and the limit taken
+'''
+status = "planned"

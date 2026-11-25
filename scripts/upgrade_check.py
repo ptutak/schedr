@@ -11,9 +11,10 @@ before every release, in CI on every push). The check:
 2. has that release fill its database the way users do, every run succeeding: secrets set,
    runs of the cleanup, notification, secret and run-of examples, the poke, named-event and
    run-of triggers switched on, `paid` events posted, a backfill, a wait step whose host is
-   killed for blocking (a strike); then **every table holds at least one row** (the coverage
-   gate: a table a later release adds fails the check until something here fills it), but
-   those `NOT_FILLED` names with the reason;
+   killed for blocking (a strike), from 1.2.0 on an extension task of its dummy plugin
+   (`examples/extensions` at its tag) reporting all it can; then **every table
+   holds at least one row** (the coverage gate: a table a later release adds fails the check
+   until something here fills it), but those `NOT_FILLED` names with the reason;
 3. checks this tree's `schedr db status` finds the schema behind or up to date;
 4. migrates it with this tree's `schedr db migrate` alone, and compares: **every old row is
    still there, its old columns' values the same** (but in the tables `NOT_KEPT` names, with
@@ -108,6 +109,29 @@ with Dag("upgrade_strikes"):
     blocks()
 ''',
 }
+# From 1.2.0 on: an extension task, its dummy plugin reporting a status, a link, a metric (its
+# samples are sent once a minute) and a notification event.
+EXTENSION_SINCE = (1, 2, 0)
+EXTENSION_DAGS = {
+    "upgrade_extension.py": '''"""An extension task reporting all a plugin can."""
+
+from schedr import Dag, ExtensionTask
+
+with Dag("upgrade_extension"):
+    ExtensionTask(
+        "job",
+        name="dummy",
+        version="1.0",
+        payload=[
+            {"status": ["working", 0.5]},
+            {"link": ["Job", "https://jobs.example.com/1"]},
+            {"metric": ["steps", 1, {"step": "upgrade"}]},
+            {"notify": ["job_done", "the job ended", None]},
+            {"return": {"rows": 3}},
+        ],
+    )
+''',
+}
 # The examples' secrets, as `make standalone` sets them.
 SECRETS = {
     "etl/db": "password=s3cret-db-password",
@@ -166,6 +190,33 @@ def previous_release(released: Sequence[str], current: str) -> str:
     if not older:
         raise ValueError(f"no release at or below {current} among {sorted(released)}")
     return max(older, key=lambda v: version_key(v) or (0, 0, 0))
+
+
+def has_extensions(release: str) -> bool:
+    """Whether `release` runs extensions (1.2.0 on)."""
+    key = version_key(release)
+    return key is not None and key >= EXTENSION_SINCE
+
+
+def own_dags(release: str) -> dict[str, str]:
+    """The check's own DAG files `release` can read, by name."""
+    return {**OWN_DAGS, **(EXTENSION_DAGS if has_extensions(release) else {})}
+
+
+def triggered(release: str) -> list[str]:
+    """The DAGs triggered by hand, all ending with success, that `release` has."""
+    return [*TRIGGERED, *(["upgrade_extension"] if has_extensions(release) else [])]
+
+
+def extension_env(release: str, examples: Path, python: Path) -> dict[str, str]:
+    """The worker's settings for the dummy plugin of `release`'s examples, run with `python`."""
+    if not has_extensions(release):
+        return {}
+    plugin = examples / "extensions" / "dummy" / "schedr-ext-dummy"
+    return {
+        "SCHEDR_CONFIG__EXTENSIONS__DUMMY__COMMAND": json.dumps([str(python), str(plugin)]),
+        "SCHEDR_CONFIG__EXTENSIONS__DUMMY__VERSIONS": json.dumps(["1.0"]),
+    }
 
 
 def missing_tables(counts: dict[str, int], not_filled: dict[str, str]) -> list[str]:
@@ -392,7 +443,10 @@ class Cli:
 
 
 def old_examples(release: str, into: Path) -> Path:
-    """The release's `examples/docs` and `examples/standalone.toml`, from its tag, in `into`."""
+    """The release's `examples` the check uses, from its tag, in `into`.
+
+    `docs` and `standalone.toml`; `extensions` too, in a release that has them.
+    """
     archive = subprocess.run(
         [
             "git",
@@ -402,6 +456,7 @@ def old_examples(release: str, into: Path) -> Path:
             f"v{release}",
             "examples/docs",
             "examples/standalone.toml",
+            *(["examples/extensions"] if has_extensions(release) else []),
         ],
         capture_output=True,
         check=False,
@@ -415,12 +470,15 @@ def old_examples(release: str, into: Path) -> Path:
     return into / "examples"
 
 
-def fill(cli: Cli, url: str) -> list[str]:
-    """The old release's part: every table filled; the IDs of the runs it ended with success."""
-    cli.wait_for_dags([*TRIGGERED, *AFTER_ORDERS, *TRIGGERED_NO_WAIT, *UNPAUSED])
+def fill(cli: Cli, url: str, by_hand: Sequence[str]) -> list[str]:
+    """The old release's part: every table filled; the IDs of the runs it ended with success.
+
+    `by_hand` are the DAGs to trigger (`triggered`).
+    """
+    cli.wait_for_dags([*by_hand, *AFTER_ORDERS, *TRIGGERED_NO_WAIT, *UNPAUSED])
     for dag in UNPAUSED:
         cli("dags", "unpause", dag)
-    started = {dag: cli.trigger(dag) for dag in [*TRIGGERED, *TRIGGERED_NO_WAIT]}
+    started = {dag: cli.trigger(dag) for dag in [*by_hand, *TRIGGERED_NO_WAIT]}
     cli("events", "post", "paid", "--key", "order-1", "--data", '{"amount": 5}')
     cli("runs", "backfill", "nightly", "--from", "2026-11-01T00:00", "--to", "2026-11-02T12:00")
     # Posted while `inspect_packing`'s sensor waits for it (3 s, from its start); without
@@ -432,7 +490,7 @@ def fill(cli: Cli, url: str) -> list[str]:
         cli.log,
     )
     cli("events", "post", "packed", "--key", "order-1")
-    ended = {dag: cli.wait_for_end(dag, started[dag]) for dag in TRIGGERED}
+    ended = {dag: cli.wait_for_end(dag, started[dag]) for dag in by_hand}
     started |= {dag: cli.trigger(dag) for dag in AFTER_ORDERS}
     ended |= {dag: cli.wait_for_end(dag, started[dag]) for dag in AFTER_ORDERS}
     say(f"the old release's runs: {', '.join(f'{d} {s}' for d, s in ended.items())}")
@@ -462,7 +520,7 @@ def check(binary: Path, python: Path, database: str | None, old: str, work: Path
     examples = old_examples(old, work / "old-source")
     own = work / "upgrade"
     own.mkdir()
-    for name, source in OWN_DAGS.items():
+    for name, source in own_dags(old).items():
         (own / name).write_text(source)
     url = database or f"sqlite://{work / 'schedr.db'}?mode=rwc"
     base = {
@@ -480,9 +538,15 @@ def check(binary: Path, python: Path, database: str | None, old: str, work: Path
     base["SCHEDR_SECRET_KEY"] = run([old_bin, "secrets", "new-key"], env=base).strip()
     for path, pair in SECRETS.items():
         run([old_bin, "secrets", "set", path, pair], env=base)
-    old_env = {**base, "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH": str(venv / "bin" / "python")}
+    old_python = venv / "bin" / "python"
+    old_env = {
+        **base,
+        "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH": str(old_python),
+        **extension_env(old, examples, old_python),
+    }
+    by_hand = triggered(old)
     with standalone(old_bin, old_env, work / "old.log", migrate=True) as api:
-        succeeded = fill(Cli(old_bin, api, old_env, work / "old.log"), url)
+        succeeded = fill(Cli(old_bin, api, old_env, work / "old.log"), url, by_hand)
     before = table_rows(url)
     rows = sum(len(r) for _, r in before.values())
     say(f"{old} filled all {len(before)} tables ({rows} rows)")
@@ -504,15 +568,15 @@ def check(binary: Path, python: Path, database: str | None, old: str, work: Path
     say(f"migrated: every table kept its {rows} rows, their values the same")
     new_env = {**base, "SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH": str(python)}
     with standalone(binary, new_env, work / "new.log", migrate=False) as api:
-        read_back(Cli(binary, api, new_env, work / "new.log"), succeeded)
+        read_back(Cli(binary, api, new_env, work / "new.log"), succeeded, by_hand)
     say("migrated and read back")
 
 
-def read_back(cli: Cli, succeeded: list[str]) -> None:
+def read_back(cli: Cli, succeeded: list[str], by_hand: Sequence[str]) -> None:
     """This tree's part: what the old release stored is still there and still works."""
     runs = {
         str(r.get("run_id")): str(r.get("state"))
-        for d in [*TRIGGERED, *AFTER_ORDERS]
+        for d in [*by_hand, *AFTER_ORDERS]
         for r in cli.runs(d)
     }
     gone = [run_id for run_id in succeeded if runs.get(run_id) != "success"]

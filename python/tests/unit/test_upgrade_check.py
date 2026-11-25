@@ -106,3 +106,19 @@ def test_json_and_bytes_compare_as_values() -> None:
 def test_the_lists_of_excused_tables_say_why() -> None:
     for excused in (upgrade().NOT_FILLED, upgrade().NOT_KEPT):
         assert all(reason.strip() for reason in excused.values())
+
+
+def test_the_extension_part_is_there_from_the_release_that_has_extensions() -> None:
+    check, python, examples = upgrade(), Path("/old/python"), Path("/old/examples")
+    assert "upgrade_extension" not in check.triggered("1.1.0")
+    assert "upgrade_extension.py" not in check.own_dags("1.1.0")
+    assert check.extension_env("1.1.0", examples, python) == {}
+    for release in ("1.2.0", "1.10.0"):
+        assert "upgrade_extension" in check.triggered(release)
+        assert "upgrade_extension.py" in check.own_dags(release)
+        assert check.extension_env(release, examples, python) == {
+            "SCHEDR_CONFIG__EXTENSIONS__DUMMY__COMMAND": (
+                '["/old/python", "/old/examples/extensions/dummy/schedr-ext-dummy"]'
+            ),
+            "SCHEDR_CONFIG__EXTENSIONS__DUMMY__VERSIONS": '["1.0"]',
+        }

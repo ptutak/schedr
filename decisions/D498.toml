@@ -10,3 +10,4 @@ A release whose code adds a migration file is first published as a release candi
 history = "JOURNAL.md#D498"  # <a id="D498"></a> starts its JOURNAL.md entry
 step = "R1.1"  # the plan step that builds it; "later"; "n/a" for a rule
 code = ["scripts/upgrade_check.py", "python/tests/unit/test_upgrade_check.py"]
+checked = 2026-11-25

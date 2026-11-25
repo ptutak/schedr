@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use chaos::{Proxy, follow_ready_master, pid_of, pod_death, signal};
 use check::{Report, overlapping_tries, quantile};
-use load::{Lcg, Stress, cli_many, command_dags};
+use load::{Lcg, Size, Stress, cli_many, command_dags};
 use support::postgres_database;
 
 const MINUTE: Duration = Duration::from_secs(60);
@@ -49,28 +49,49 @@ fn through_pgbouncer(url: &str) -> String {
     format!("{credentials}@{bouncer}/{database}")
 }
 
+/// Scenario 1's load: many DAGs of a few short tasks, and one wide DAG.
+#[derive(Debug, Clone, Copy)]
+struct Load {
+    dags: usize,
+    tasks_each: usize,
+    wide: usize,
+}
+
+impl Load {
+    /// Scenario 1's own: 20,000 tasks in the full profile.
+    fn whole(size: Size) -> Self {
+        Self {
+            dags: size.n(50, 1000),
+            tasks_each: size.n(10, 15),
+            wide: size.n(200, 5000),
+        }
+    }
+
+    /// Scenario 25's, for each of its six parts: in the full profile a quarter of scenario 1's
+    /// (the user, 2026-11-25: six whole ones didn't end within CI's 150 minutes).
+    fn quarter(size: Size) -> Self {
+        Self {
+            dags: size.n(50, 250),
+            tasks_each: size.n(10, 15),
+            wide: size.n(200, 1250),
+        }
+    }
+}
+
 /// Scenario 1: Throughput: many DAGs of short tasks, and one wide DAG, on a few workers. Its
 /// tasks a second.
-fn throughput(database_url: String, scenario: &'static str, pooled: bool) -> f64 {
+fn throughput(
+    database_url: String,
+    scenario: &'static str,
+    pooled: bool,
+    load: fn(Size) -> Load,
+) -> f64 {
     let mut stress = Stress::new(Some(database_url));
     let size = stress.size;
+    let load = load(size);
     let mut report = Report::new(scenario);
-    let mut dags = command_dags(
-        &stress,
-        "many",
-        size.n(50, 1000),
-        size.n(10, 15),
-        "sleep 0.1",
-        0,
-    );
-    dags.extend(command_dags(
-        &stress,
-        "wide",
-        1,
-        size.n(200, 5000),
-        "sleep 0.1",
-        0,
-    ));
+    let mut dags = command_dags(&stress, "many", load.dags, load.tasks_each, "sleep 0.1", 0);
+    dags.extend(command_dags(&stress, "wide", 1, load.wide, "sleep 0.1", 0));
     stress.start_core("master", &[]);
     stress.start_workers(size.n(2, 8), size.n(4, 8), &[]);
     let parsed = stress.wait_for_dags(dags.len(), 10 * MINUTE);
@@ -101,7 +122,7 @@ fn pooler_not_found(stress: &Stress, names: &[&str]) -> Vec<String> {
 
 #[test]
 fn stress_01_throughput() {
-    throughput(postgres_database(), "01_throughput", false);
+    throughput(postgres_database(), "01_throughput", false, Load::whole);
 }
 
 /// Scenario 1c (M5.2e, decision 509): short tasks and long ones together, the long ones in
@@ -511,6 +532,7 @@ fn stress_06_pgbouncer_throughput() {
         through_pgbouncer(&postgres_database()),
         "06_pgbouncer_throughput",
         true,
+        Load::whole,
     );
 }
 
@@ -2232,7 +2254,7 @@ fn stress_24_many_triggers() {
         report.set("pokes", pokes as f64);
         report.set("firing", firing as f64);
     }
-    stress.measure(&mut report, "master", 1.0);
+    stress.measure_rounds_within(&mut report, "master", 1.0, 10.0);
     // An event's way: found on the worker (its own wall time, `at`), received by the master, its
     // run made, its task started (one machine: one wall clock).
     let db = &stress.db;
@@ -2362,13 +2384,13 @@ fn stress_06c_pgbouncer_statements_outside_a_transaction() {
     );
 }
 
-/// Scenario 25 (M5.2i12): scenario 1's shape run six times on the same machine, each on a
-/// fresh cluster, so an extension task's cost is read apart from its work's: plain command tasks
-/// (`_plain`, scenario 1 itself); Python `@task`s sleeping as long (`_python`: an interpreter per
-/// task, no extension), and the same forked from the workers' fork servers (`_python_forked`,
-/// M5.2i13); extension tasks all the dummy's Python plugin doing what the run below does
-/// (`_extension_python`, M5.2i13: a plugin in Python beside a `@task`); extension tasks that only
-/// return (`_noop`: the extension's own floor:
+/// Scenario 25 (M5.2i12): scenario 1's shape (in the full profile at a quarter of its size,
+/// [`Load::quarter`]) run six times on the same machine, each on a fresh cluster, so an extension
+/// task's cost is read apart from its work's: plain command tasks (`_plain`, scenario 1's); Python
+/// `@task`s sleeping as long (`_python`: an interpreter per task, no extension), and the same
+/// forked from the workers' fork servers (`_python_forked`, M5.2i13); extension tasks all the
+/// dummy's Python plugin doing what the run below does (`_extension_python`, M5.2i13: a plugin in
+/// Python beside a `@task`); extension tasks that only return (`_noop`: the extension's own floor:
 /// the plugin's start, its hello, the service's connection, its end); and extension tasks doing
 /// what real plugins do (this one): half the dummy's Python plugin, half a shell script through
 /// `schedr extension shell`, each reporting a status, a link, a metric point and a notification,
@@ -2376,7 +2398,12 @@ fn stress_06c_pgbouncer_statements_outside_a_transaction() {
 /// was stored of the reports, each plugin's run, and the extension page's reads under that load.
 #[test]
 fn stress_25_extension_throughput() {
-    let plain = throughput(postgres_database(), "25_extension_throughput_plain", false);
+    let plain = throughput(
+        postgres_database(),
+        "25_extension_throughput_plain",
+        false,
+        Load::quarter,
+    );
     let python = sleeping_tasks("25_extension_throughput_python", Work::Python);
     let forked = sleeping_tasks("25_extension_throughput_python_forked", Work::PythonForked);
     let extension_python = sleeping_tasks(
@@ -2443,7 +2470,7 @@ enum Work {
     Extension,
 }
 
-/// Scenario 1's cluster and DAGs, every task `work`: the DAGs' count.
+/// Scenario 1's cluster and its DAGs at [`Load::quarter`], every task `work`: the DAGs' count.
 fn work_cluster(stress: &mut Stress, work: Work, report: &mut Report) -> usize {
     let size = stress.size;
     if !matches!(work, Work::Python | Work::PythonForked) {
@@ -2453,8 +2480,9 @@ fn work_cluster(stress: &mut Stress, work: Work, report: &mut Report) -> usize {
         text.push_str(&config);
         std::fs::write(&path, text).unwrap();
     }
-    let mut dags = work_dags(stress, "many", size.n(50, 1000), size.n(10, 15), work);
-    dags.extend(work_dags(stress, "wide", 1, size.n(200, 5000), work));
+    let load = Load::quarter(size);
+    let mut dags = work_dags(stress, "many", load.dags, load.tasks_each, work);
+    dags.extend(work_dags(stress, "wide", 1, load.wide, work));
     let python = support::python();
     let fork_env = [
         ("SCHEDR_CONFIG__INTERPRETERS__PYTHON__PATH", python.as_str()),
