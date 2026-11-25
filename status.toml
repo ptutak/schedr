@@ -4,7 +4,7 @@
 updated = 2026-11-25
 
 in_progress = [
-    "M5.3h: the Kind workflow (.github/workflows/kind.yml) pushed; next: run it by hand three times on 1.2.1's images. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).",
+    "M5.3h done: the Kind workflow passed three times on 1.2.1's images (the standby led 40, 44 and 38 s after the crash, limit 60). Next: M5.3g, its first test (what a stale journal accepted after a disconnect changes). M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).",
 ]
 
 waiting = [

@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.3h, One kind test on CI by hand, on 1.2.1's images.
+**Next:** M5.3g, Connections numbered: a worker's new one replaces its dead one.
 
 ## M0: Foundations
 
@@ -288,8 +288,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | R1.2 | Release 1.2.0 | done 2026-11-25 |  |
 | M5.3a | Hot standby masters in the chart | done 2026-11-25 | D523 |
 | R1.2.1 | Release 1.2.1 | done 2026-11-25 |  |
-| M5.3h | One kind test on CI by hand, on 1.2.1's images | **next** |  |
-| M5.3g | Connections numbered: a worker's new one replaces its dead one | planned | D525, D526 |
+| M5.3h | One kind test on CI by hand, on 1.2.1's images | done 2026-11-26 |  |
+| M5.3g | Connections numbered: a worker's new one replaces its dead one | **next** | D525, D526 |
 | M5.3f | The kind tests on CI, then chaos on kind | planned |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |
 | M5.3d | Extension tasks placed by the plugins workers offer, beside their queue | planned | D527 |

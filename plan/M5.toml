@@ -748,7 +748,8 @@ scope = '''
 done_when = '''
 `kind-standby.sh` passing on CI against 1.2.1's images three times in a row
 '''
-status = "planned"
+status = "done"
+done = 2026-11-26
 
 [[steps]]
 id = "M5.3g"
