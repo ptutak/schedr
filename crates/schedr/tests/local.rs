@@ -1521,9 +1521,12 @@ with Dag("short"):
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str("\n[secret_storage]\nmin_mask_length = 1\n");
     std::fs::write(&config, text).unwrap();
-    let (code, out, err) = local.test("short", &["--json", "--secret", "sample#key=1234"]);
+    // A secret no ID, time or number of the report can contain (`1234` was in a run's ID: a
+    // UUIDv7 starts with its time, so every run failed for about a minute).
+    let (code, out, err) = local.test("short", &["--json", "--secret", "sample#key=zq!7"]);
     assert_eq!(code, 0, "{out}\n{err}");
-    assert!(!out.contains("1234"), "{out}");
+    assert!(!out.contains("zq!7"), "{out}");
+    assert!(out.contains("the value was ****"), "{out}");
 }
 
 /// B207: the report masks a task's log and output as the API would, a secret the agent
