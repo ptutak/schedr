@@ -20,7 +20,7 @@ pub mod reload;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-pub use connect::{channel, error_text};
+pub use connect::{CONNECT_TIMEOUT, channel, channel_within, error_text};
 pub use incoming::{Conn, Incoming, Peer, Protocol, incoming};
 pub use material::{TlsError, TlsFiles};
 pub use reload::{Reload, Tls};

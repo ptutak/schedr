@@ -139,6 +139,7 @@ where
             connect: config.timings.client_connect_timeout,
             request: config.timings.client_request_timeout,
             command_wait: config.timings.client_command_wait,
+            stream_idle: config.timings.client_stream_idle,
         };
     }
     if let Err(message) = logging::init(&config.log, stdout_is_terminal) {

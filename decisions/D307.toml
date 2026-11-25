@@ -5,12 +5,12 @@ status = "active"
 topic = "cleanup"
 section = "Moving and disconnection"
 summary = '''
-A worker caps its reconnect backoff at half the lease the master gave it.
+A worker caps its reconnect backoff at half the lease the master gave it, and connecting at a quarter (decision 524).
 A restarted master gives each worker a fresh lease from its start, plus the time a
 deposed master may still lead (decision 444).
 '''
 history = "archive/PROJECT.md#D307"
 step = "B168"
 also = ["workers"]
-checked = 2026-11-23
+checked = 2026-11-25
 code = ["crates/schedr-agent/src/agent.rs::reconnect_cap"]

@@ -149,8 +149,12 @@ pub trait Transport: Sync {
 
     /// Opens `GET <path>` and reads its body as it comes (server-sent events); a transport
     /// that can't stream says so.
-    fn open(&self, path: String) -> impl Future<Output = Result<Chunks, ClientError>> + Send {
-        let _ = path;
+    fn open(
+        &self,
+        path: String,
+        body: Streamed,
+    ) -> impl Future<Output = Result<Chunks, ClientError>> + Send {
+        let _ = (path, body);
         std::future::ready(Err(ClientError::Unexpected(
             "this transport can't stream".to_owned(),
         )))
@@ -205,6 +209,18 @@ pub fn current_user() -> Option<String> {
 
 /// How long a stream may stay open before the client gives up on it (and opens another).
 pub const STREAM_TIMEOUT: Duration = Duration::from_hours(24);
+
+/// What a stream ([`Transport::open`]) brings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Streamed {
+    /// Server-sent events, with keep-alives.
+    Events,
+    /// A file, with none.
+    File,
+}
+
+/// How long a stream of events may bring nothing: several of the server's keep-alives (15 s each).
+pub const STREAM_IDLE: Duration = Duration::from_mins(1);
 
 /// Credentials the CLI sends (never validated here).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,15 +281,18 @@ pub struct Timeouts {
     pub request: Duration,
     /// The master's decision on a command (`COMMAND_WAIT`).
     pub command_wait: Duration,
+    /// The next bytes of a stream (`STREAM_IDLE`).
+    pub stream_idle: Duration,
 }
 
 impl Default for Timeouts {
-    /// [`CONNECT_TIMEOUT`], [`REQUEST_TIMEOUT`] and [`WAIT_TIMEOUT`].
+    /// [`CONNECT_TIMEOUT`], [`REQUEST_TIMEOUT`], [`WAIT_TIMEOUT`] and [`STREAM_IDLE`].
     fn default() -> Self {
         Self {
             connect: CONNECT_TIMEOUT,
             request: REQUEST_TIMEOUT,
             command_wait: WAIT_TIMEOUT,
+            stream_idle: STREAM_IDLE,
         }
     }
 }
@@ -292,7 +311,8 @@ impl HttpTransport {
     /// A transport to `server` (e.g. `http://localhost:8080`) sending `auth`.
     ///
     /// Connecting gives up after [`CONNECT_TIMEOUT`]; a request gives up after
-    /// [`REQUEST_TIMEOUT`], a stream ([`Transport::open`]) after [`STREAM_TIMEOUT`].
+    /// [`REQUEST_TIMEOUT`], a stream ([`Transport::open`]) after [`STREAM_TIMEOUT`], or
+    /// [`STREAM_IDLE`] with nothing on it.
     ///
     /// # Panics
     ///
@@ -436,7 +456,7 @@ impl Transport for HttpTransport {
         })
     }
 
-    async fn open(&self, path: String) -> Result<Chunks, ClientError> {
+    async fn open(&self, path: String, body: Streamed) -> Result<Chunks, ClientError> {
         let url = format!("{}{path}", self.server);
         let builder = self.headers(
             self.http()
@@ -445,7 +465,16 @@ impl Transport for HttpTransport {
                 .timeout(STREAM_TIMEOUT),
         );
         let connect = |e: reqwest::Error| connect_error(&self.server, e);
-        let mut response = builder.send().await.map_err(connect)?;
+        // A silent server is left at the request's limit, not the stream's (B298).
+        let mut response = tokio::time::timeout(self.timeouts.request, builder.send())
+            .await
+            .map_err(|_| {
+                connect_error(
+                    &self.server,
+                    format!("no answer within {:?}", self.timeouts.request),
+                )
+            })?
+            .map_err(connect)?;
         refuse_redirect(&self.server, &response)?;
         if !response.status().is_success() {
             return Err(ClientError::Server {
@@ -455,13 +484,24 @@ impl Transport for HttpTransport {
         }
         let (sender, chunks) = Chunks::channel();
         let server = self.server.clone();
+        // A file has no keep-alives: the server may read long before it sends more.
+        let idle = match body {
+            Streamed::Events => self.timeouts.stream_idle,
+            Streamed::File => STREAM_TIMEOUT,
+        };
         tokio::spawn(async move {
             loop {
                 // A reader gone is noticed at once, not at the next chunk: a stalled stream
                 // would otherwise stay open (its socket too) until its timeout (B138).
                 let next = tokio::select! {
                     () = sender.closed() => return,
-                    next = response.chunk() => next,
+                    next = tokio::time::timeout(idle, response.chunk()) => next,
+                };
+                let Ok(next) = next else {
+                    let silent =
+                        connect_error(&server, format!("the stream was silent for {idle:?}"));
+                    let _ = sender.send(Err(silent)).await;
+                    return;
                 };
                 let chunk = match next {
                     Ok(Some(chunk)) => Ok(chunk.to_vec()),
@@ -581,7 +621,7 @@ impl Transport for RouterTransport {
         })
     }
 
-    async fn open(&self, path: String) -> Result<Chunks, ClientError> {
+    async fn open(&self, path: String, _body: Streamed) -> Result<Chunks, ClientError> {
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
         let in_process = |reason: String| ClientError::Connect {
@@ -1262,7 +1302,10 @@ impl<T: Transport> Client<T> {
     ///
     /// [`ClientError`] if the stream can't be opened.
     pub async fn events(&self) -> Result<EventReader, ClientError> {
-        let chunks = self.transport.open("/api/v1/changes".to_owned()).await?;
+        let chunks = self
+            .transport
+            .open("/api/v1/changes".to_owned(), Streamed::Events)
+            .await?;
         Ok(EventReader::new(chunks))
     }
 
@@ -1404,12 +1447,15 @@ impl<T: Transport> Client<T> {
         try_number: u32,
     ) -> Result<Chunks, ClientError> {
         self.transport
-            .open(format!(
-                "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log.txt{}",
-                path(run_id),
-                path(task_id),
-                instance(map_index, '?')
-            ))
+            .open(
+                format!(
+                    "/api/v1/runs/{}/tasks/{}/attempts/{try_number}/log.txt{}",
+                    path(run_id),
+                    path(task_id),
+                    instance(map_index, '?')
+                ),
+                Streamed::File,
+            )
             .await
     }
 

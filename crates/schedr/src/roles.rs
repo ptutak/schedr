@@ -127,6 +127,7 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
         },
         orphan_grace: config.timings.orphan_grace,
         reconnect_first: config.timings.reconnect_backoff_first,
+        register: config.timings.register_timeout,
         reconnect_max: config.timings.reconnect_backoff_max,
         alive: config.timings.worker_alive_interval,
         deregister: config.timings.deregister_wait,
@@ -1150,6 +1151,7 @@ pub const fn client_timeouts(config: &Config) -> schedr_client::Timeouts {
         connect: config.timings.client_connect_timeout,
         request: config.timings.client_request_timeout,
         command_wait: config.timings.client_command_wait,
+        stream_idle: config.timings.client_stream_idle,
     }
 }
 
@@ -1395,6 +1397,8 @@ pub struct WorkerLinks {
     /// The largest message taken from the master (`[grpc] max_message_size`): an assignment
     /// carries another DAG's run result (Grok's review of M4.11d2).
     pub max_message_size: usize,
+    /// How long the master's address may take to answer (B296).
+    pub connect_timeout: Duration,
 }
 
 /// What a worker's log endpoint serves: its log folder, its journal, its triggers' logs.
@@ -1423,6 +1427,7 @@ pub async fn run_worker(
         log_listener,
         retention,
         max_message_size,
+        connect_timeout,
     } = links;
     let timeouts = agent.setup.timeouts;
     let endpoint = served_logs(&agent);
@@ -1488,11 +1493,12 @@ pub async fn run_worker(
     observed.ready.ready();
     agent
         .run(
-            move || {
+            move |limit| {
                 let url = master_url.clone();
                 let tls = tls.clone();
+                let limit = limit.map_or(connect_timeout, |limit| connect_timeout.min(limit));
                 async move {
-                    schedr_tls::channel(&url, tls.as_ref())
+                    schedr_tls::channel_within(&url, tls.as_ref(), limit)
                         .await
                         .map(|channel| {
                             MasterClient::new(channel).max_decoding_message_size(max_message_size)
@@ -2475,6 +2481,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
         log_listener,
         retention: log_retention(&config),
         max_message_size: usize::try_from(config.grpc.max_message_size).unwrap_or(usize::MAX),
+        connect_timeout: config.timings.master_connect_timeout,
     };
     let observed = Observed {
         metrics,

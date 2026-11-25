@@ -279,6 +279,47 @@ fn stress_17_silent_cut() {
     chaos.finish(20 * MINUTE);
 }
 
+/// How long scenario 17b's address is silent: past the kernel's SYN retries at 31 or 35 s (by its
+/// `tcp_syn_linear_timeouts`), the next ones at 63 or 67 s.
+const SILENT: Duration = Duration::from_secs(37);
+/// Until when a worker must be back once its master's address answers: not a speed, only what
+/// tells the agent's own tries (5 s each, its waits half the lease, 10 s, at most) from the
+/// kernel's retry, 26 s or more later.
+const BACK_WITHIN: Duration = Duration::from_secs(20);
+
+/// Scenario 17b: The master's address answers nothing (B296: a killed pod's, its SYNs dropped):
+/// one worker's connection is closed and new ones' SYNs are dropped past the lease, then the
+/// address answers and the worker is back, trying again by itself.
+#[test]
+fn stress_17b_silent_address() {
+    let mut chaos = Chaos::start("17b_silent_address", (6, 3), 4);
+    let active = "SELECT COUNT(*) FROM workers WHERE worker_id = 'w01' AND state = 'active'";
+    let lost = "SELECT COUNT(*) FROM attempts WHERE status = 'lost'";
+    chaos.under_way("w01");
+    chaos.links.silence("w01", true);
+    std::thread::sleep(SILENT);
+    assert_eq!(chaos.stress.db.count(active), 0, "it isn't cut off");
+    chaos.links.silence("w01", false);
+    let answered = Instant::now();
+    while chaos.stress.db.count(active) == 0 && answered.elapsed() < BACK_WITHIN {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    chaos.links.timeline.note(&format!(
+        "{:.1} s after the answer",
+        answered.elapsed().as_secs_f64()
+    ));
+    // Not a timing's name: a stalled runner doesn't excuse waiting for the kernel.
+    #[allow(clippy::cast_precision_loss)]
+    let back = chaos.stress.db.count(active) as f64;
+    chaos.report.at_least("back_by_itself", back, 1.0);
+    // Its lost attempts are recorded once their cleanups may move.
+    while chaos.stress.db.count(lost) == 0 && answered.elapsed() < PAST_THE_MOVE {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    chaos.expect_lost();
+    chaos.finish(20 * MINUTE);
+}
+
 /// Scenario 18: A one-way cut past the lease: first the master hears nothing from one worker
 /// (its messages still arrive), then another worker hears nothing from the master.
 #[test]

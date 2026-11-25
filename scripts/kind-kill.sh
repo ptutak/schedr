@@ -37,9 +37,8 @@ source "$ROOT/scripts/kind-lib.sh"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# The API, from inside the pod that serves it (the webserver, or standalone). The body is
-# judged by check.py: exit 0 holds, 1 is not yet, 2 means the failure rules broke.
-api() { k exec "$1" -c schedr -- wget -qO- -T 5 "http://127.0.0.1:8080$2"; }
+# The API's answer (`api`, kind-lib.sh), of the webserver or standalone, judged by check.py:
+# exit 0 holds, 1 is not yet, 2 means the failure rules broke.
 judge() {
     local target=$1 path=$2
     shift 2
@@ -48,7 +47,7 @@ judge() {
     JUDGE_OUT=$(api "$target" "$path" | python3 "$WORK/check.py" "$@")
     code=$?
     set -e
-    # wget's own failure (the pod is not answering yet) is "not yet".
+    # The call's own failure (the pod is not answering yet) is "not yet".
     if [ "$code" -gt 2 ]; then
         code=1
     fi

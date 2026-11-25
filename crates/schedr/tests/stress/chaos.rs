@@ -106,6 +106,10 @@ struct Link {
     held: [AtomicBool; 2],
     /// Milliseconds each chunk waits before it is passed on (a slow link).
     delay_ms: AtomicU64,
+    /// The address answers nothing: no connection is accepted, and those open are closed.
+    silent: AtomicBool,
+    /// The workers' ends of the open connections, closed when the address goes silent.
+    open: Mutex<Vec<TcpStream>>,
 }
 
 /// A TCP proxy on 127.0.0.1: forwards each new connection to the current upstream, and can be
@@ -113,6 +117,9 @@ struct Link {
 /// slowed.
 pub struct Proxy {
     pub port: u16,
+    listener: Arc<TcpListener>,
+    /// What fills the listener's queue while it is silent.
+    filling: Mutex<Vec<TcpStream>>,
     upstream: Arc<Mutex<Option<SocketAddr>>>,
     link: Arc<Link>,
     stop: Arc<AtomicBool>,
@@ -121,7 +128,7 @@ pub struct Proxy {
 
 impl Proxy {
     pub fn new(upstream: Option<SocketAddr>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = Arc::new(TcpListener::bind("127.0.0.1:0").unwrap());
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let upstream = Arc::new(Mutex::new(upstream));
@@ -129,10 +136,13 @@ impl Proxy {
         let stop = Arc::new(AtomicBool::new(false));
         let accepting = std::thread::spawn({
             let (upstream, link, stop) = (upstream.clone(), link.clone(), stop.clone());
+            let listener = listener.clone();
             move || accept(&listener, &upstream, &link, &stop)
         });
         Self {
             port,
+            listener,
+            filling: Mutex::default(),
             upstream,
             link,
             stop,
@@ -144,6 +154,30 @@ impl Proxy {
     pub fn freeze(&self, frozen: bool) {
         self.hold(Way::Up, frozen);
         self.hold(Way::Down, frozen);
+    }
+
+    /// The address answers nothing, or does again: the open connections are closed, and a new
+    /// one's SYN is dropped (the queue full, nothing accepted), as a killed pod's address drops
+    /// it (B296). Unlike a cut, whose connections are accepted and then held.
+    pub fn silence(&self, silent: bool) {
+        self.link.silent.store(silent, Ordering::SeqCst);
+        let mut filling = self.filling.lock().unwrap();
+        filling.clear();
+        if !silent {
+            rustix::net::listen(&*self.listener, 128).unwrap();
+            return;
+        }
+        // The accepting thread is past its last accept.
+        std::thread::sleep(Duration::from_millis(100));
+        for stream in self.link.open.lock().unwrap().drain(..) {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        rustix::net::listen(&*self.listener, 1).unwrap();
+        let address = self.listener.local_addr().unwrap();
+        while let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_millis(300)) {
+            filling.push(stream);
+            assert!(filling.len() < 64, "the listener's queue doesn't fill");
+        }
     }
 
     /// Holds one way, or lets it go.
@@ -178,6 +212,10 @@ fn accept(
     stop: &Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::SeqCst) {
+        if link.silent.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
         let Ok((client, _)) = listener.accept() else {
             std::thread::sleep(Duration::from_millis(20));
             continue;
@@ -197,6 +235,10 @@ fn accept(
                 return;
             };
             client.set_nonblocking(false).unwrap();
+            let mut open = link.open.lock().unwrap();
+            open.retain(|stream| stream.peer_addr().is_ok());
+            open.push(client.try_clone().unwrap());
+            drop(open);
             for (way, from, to) in [
                 (
                     Way::Up,
@@ -378,6 +420,23 @@ impl Links {
         proxy.slow(Duration::ZERO);
         self.timeline.note(&format!("heal {worker}"));
         self.end_trouble(worker);
+    }
+
+    /// `worker`'s way to the master answers nothing ([`Proxy::silence`]), or does again.
+    pub fn silence(&mut self, worker: &str, silent: bool) {
+        self.proxy(worker).silence(silent);
+        let what = if silent { "silence" } else { "answer" };
+        self.timeline.note(&format!("{what} {worker}"));
+        if silent {
+            self.troubles.push(Trouble {
+                worker: worker.to_owned(),
+                from: now_ns(),
+                to: None,
+                frozen: false,
+            });
+        } else {
+            self.end_trouble(worker);
+        }
     }
 
     /// Delays each chunk on `worker`'s link by `delay`, both ways (not a trouble: nothing is

@@ -719,10 +719,44 @@ done = 2026-11-25
 id = "M5.3a"
 title = "Hot standby masters in the chart"
 scope = '''
-(the user, 2026-11-15, after 1.1.0) the chart's master Deployment takes `master.replicas` (1 by default, as now) instead of a fixed 1; with more than one, `RollingUpdate` instead of `Recreate` (an upgrade never stops every master at once) and anti-affinity spreading them over nodes; refused, or warned, on SQLite (its volume lets one pod in). The workers already reach the master Service, which routes only to the ready master (the leader's `/readyz`); a stream reaching a standby is refused (D452). The deployment guide's Failover section says how; `scripts/kind-distributed.sh` or `kind-kill.sh` kills the leading master pod and checks that a standby takes over and a run finishes
+(the user, 2026-11-15, after 1.1.0) the chart's master Deployment takes `master.replicas` (1 by default, as now) instead of a fixed 1, `Recreate` kept (decision 523: a rolling update would wait for a standby that is never ready); with more than one, the masters migrate when leading, no migration init container, and prefer different nodes; refused outside mode distributed. The workers already reach the master Service, which routes only to the ready master (the leader's `/readyz`); a stream reaching a standby is refused (D452). The deployment guide's Failover section says how; `scripts/kind-distributed.sh` or `kind-kill.sh` kills the leading master pod and checks that a standby takes over and a run finishes
 '''
 done_when = '''
 with `master.replicas: 2` on Postgres, the leading master pod killed: the other takes the lease within the lease period, the workers reconnect through the Service, and a run under way finishes with its attempts kept; the chart's default unchanged
+'''
+status = "done"
+done = 2026-11-25
+
+[[steps]]
+id = "R1.2.1"
+title = "Release 1.2.1"
+scope = '''
+(the user, 2026-11-25: "a quick patch release, stable kubernetes deployments is what we care about"; "include M5.3a"; before it, every open bug but B38 and B39, which wait for a general layout solution, and B301, left to M5.3g by the user the same day) B296's connection limit (found by M5.3a's kind test: a worker waited out the kernel's retries to a killed master's address and was counted lost), the chart's hot standby masters (M5.3a, the chart's only), B295 (the kind scripts' `wget`). No migration and no protocol change, so no rc
+'''
+done_when = '''
+1.2.1 on PyPI and its images on ghcr.io; `scripts/kind-standby.sh` and the other kind scripts passing on its images built here; CI's Stress cut scenarios (17-21) and failover (4, 5) passing on its commit
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.3g"
+title = "A silent connection noticed before the lease"
+scope = '''
+(option B of B297's question, left for after 1.2.1 by the user, 2026-11-25) an open worker stream whose other end died silently (a node's death, packets dropped) is noticed at the lease only, on both ends: the worker's read waits for it, and the master refuses the worker's next try on a new connection ("already has a live stream") until it runs out. HTTP/2 keepalive pings on both ends are the proposal; to settle: their interval against the heartbeat, what a proxy or mesh makes of them, or a number in `Register` by which a newer registration replaces an older one's stream (the incarnation alone isn't enough: a `Register` held on its way would replace a newer one, its older journal taken as the truth). Fixes B301 (high; the user, 2026-11-25: after 1.2.1)
+'''
+done_when = '''
+a worker whose connection died silently is registered again by the same master within its lease, its tasks kept; a stress scenario shows it (a cut whose old connection never closes, the new one let through)
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.3f"
+title = "The kind tests on CI, then chaos on kind"
+scope = '''
+(the user, 2026-11-25, after B296 was found only because a kind test ran, and B295 sat unseen since 2026-11-11) a GitHub Actions workflow running the kind scripts (`kind-standby.sh`, then `kind-distributed.sh`, `kind-kill.sh`, `kind-standalone.sh`), by hand and nightly or before a release rather than on each push; first by hand on 1.2.1's released images, which needs no build, then on images of the commit, from CI's wheel. To settle when it starts: which runs when, the pins (kind, its node image, kubectl, helm), and how much slack the takeover limits need on a shared runner; whether the runner has what it takes is checked first (kind's and Docker's presence isn't verified yet). Then, as its second part, chaos on kind (the user, 2026-11-25: "the flakiness is what we invite, first - the test has to show something breaking", "what shouldn't change is the guarantees of our product so the test has to test exactly that, so probably less timing tests, more correctness tests"): a seeded schedule of faults a loopback proxy can't make, on a cluster of several nodes: a node's death (a master's, a worker's), packets dropped between a worker and the master and to Postgres, one way or both, Postgres restarted, a worker evicted or moved, DNS gone. It checks the guarantees page's statements and the stress suite's invariants only (no task run twice but as decisions 280 and 460 allow, none lost or left running, a cleanup once, no run stuck), not how fast it is. Of time there are three kinds (agreed with the user, 2026-11-25, on B296: a missing limit that broke a guarantee): how fast something is (tasks a second, a round's p99) is not checked here; a time schedr's own rules depend on is, as part of the guarantee (a fault shorter than the lease loses nothing, past it the cleanup moves once), so the schedule notes when each fault began and ended and the checks read it, with a margin; that something happens at all (a worker back, a run ended) is, with a generous limit, as "never" is told from "not yet" only by waiting. The tasks' marks go where pods can all write (a Postgres table, say), as the suite's shared file can't. A failure must be told apart from a fault: the seed, the timeline, the roles' logs and the database kept. To settle: which faults first (a node's death, dropped packets, Postgres restarted are proposed) and what each guarantee's check reads
+'''
+done_when = '''
+the kind scripts passing on CI against 1.2.1's images three times in a row, and the workflow run by hand on a commit's own images; its place (nightly or release) the user's choice; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
 '''
 status = "planned"
 

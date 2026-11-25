@@ -31,4 +31,4 @@ code = [
     "crates/schedr-master/src/core.rs::handle_results_in",
     "crates/schedr-master/src/dispatch.rs::take_back_found",
 ]
-checked = 2026-11-24
+checked = 2026-11-25

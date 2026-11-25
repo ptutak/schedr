@@ -3732,3 +3732,42 @@ differ that much. The stress page says so and gives 1.2.0's numbers (R1.2's last
 `a_test_masks_a_short_secret_when_the_configuration_says_so` failed `make check` twice: its secret
 `1234` was in a run's ID (a UUIDv7 starts with its time), a window of about a minute. The secret is
 now one no ID can contain.
+
+### <a id="D523"></a>2026-11-25: hot standby masters in the chart: `Recreate` kept, migrating when leading (decision 523)
+
+M5.3a was planned with `RollingUpdate` for more than one master. Claude first offered it with
+leader-only readiness; reading the chart, that can't work: a rollout waits for a new pod to be ready,
+which only the leader is, and each pod's migration (`db migrate --wait`) waits for the lease the old
+leader holds, whatever the schema (`migrate_leased`). The user chose C2: `master.replicas` with
+`Recreate` kept, so an upgrade stops all masters as it does one, and a standby takes over when the
+leader dies; and, for the migration, that with more than one replica the masters run `--migrate`
+and the init container is left out (a standby in its init container is a cold one). Claude's small
+choices: a preferred anti-affinity (a required one leaves a pod pending on one node); refused outside
+mode distributed (SQLite is refused there already). Known cost: a standby is never ready, so
+`helm --wait` and the Deployment's progress don't complete with more than one.
+
+Not chosen: standbys ready and the leader found by a label on its pod, rolling upgrades (a pod
+permission, an older master running on the newer schema, unchecked); a StatefulSet with `OnDelete`
+(the new standby's migration waits all the same); a refusal of `migration: initContainer` with more
+than one replica (the natural setting should work); `db migrate` skipping the lease on an up-to-date
+schema (it also applies the notifications switch under it).
+
+### <a id="D524"></a>2026-11-25: a worker leaves a master that accepts it and says nothing (decision 524)
+
+M5.3a's kind test lost both workers after the leading master was killed: each one's connection
+attempt got no answer and waited for the kernel's retries (B296). agy's review of that fix found the
+same gap elsewhere (B297 to B300), all fixed before 1.2.1 as the user asked. For B297 the user chose A,
+a limit of 10 s on opening the stream and being registered; Claude made it double after each silent
+try, as a master registers a worker behind its round (the user: keep the doubling). agy's second
+review then showed the limit's cost: the master registered a worker that had already left and refused
+its next try as live; such a caller is no longer registered, its started attempts kept known (agy
+proposed dropping them: a round in between would take them back). Also found: the limit refused a
+`Registered` that had arrived (only waits end by it now), and listening again for notifications had
+no limit. B301, an open connection dead without a word, was there before and is left to M5.3g by the
+user: letting the same incarnation replace its stream would let a `Register` held on its way replace
+a newer one, its older journal taken as the truth.
+
+The failover test kills the master with SIGKILL on its node, cordoned (a side agent's note: a forced
+delete let it give its lease up); the standby led 35 s after, both workers back at 49 s, the attempt
+kept. Stress 17b is the fault in the plain suite: an address that drops SYNs; 1 s with the fix, the
+kernel's retry without.

@@ -5,6 +5,24 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
+## Unreleased
+
+- **A worker's connection to the master has a time limit** (B296, 5 s): after a master pod was killed,
+  a worker whose connection attempt got no answer waited about two minutes for the kernel to give
+  up, was counted lost, and lost its tasks. It now tries again.
+  Each of the master's addresses gets a share of the limit, and a limit never takes more than a
+  quarter of the worker lease. A `https://` master URL with no TLS configured is refused.
+- **A worker leaves a master that accepts it and says nothing** (B297): 10 s to be registered,
+  doubling up to 80 s at each silent try; it waited without a limit before its first registration,
+  and for a lease after it. A master doesn't register a worker that has left meanwhile.
+- **A draining worker finishes the connection it is making when it has results to send** (B300).
+- **Listening for Postgres's notifications has the query limit** (B299), at first and again after a
+  loss: an address that dropped packets held the master's loop, and stopped live pages for good.
+- **`schedr ui` leaves a silent webserver's live stream** (B298) after a minute, where it stayed up
+  to a day.
+- **Hot standby masters in the chart** (decision 523): `master.replicas` above 1 in mode distributed
+  keeps masters waiting to lead when the leader dies. An upgrade still stops them all. The chart only.
+
 ## 1.2.0
 
 A faster master, and extensions: task kinds run by a plugin, in any language, beside the

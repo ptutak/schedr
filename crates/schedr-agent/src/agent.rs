@@ -121,6 +121,12 @@ const UNANSWERED_AGAIN: Duration = Duration::from_secs(1);
 /// The longest wait between attempts to reach the master.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
+/// How long opening a stream and being registered on it may take (B297).
+pub const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often [`REGISTER_TIMEOUT`] doubles at most, tries ending silent.
+const MOST_SILENT_TRIES: u32 = 3;
+
 /// How long a process left running by a previous incarnation has between SIGTERM and SIGKILL.
 pub const ORPHAN_GRACE: Duration = Duration::from_secs(10);
 
@@ -1619,6 +1625,8 @@ pub struct Agent<E> {
     heartbeat: Duration,
     /// Whether the master registered this agent in the current session.
     registered: bool,
+    /// Tries in a row that ended with no word before a registration (B297).
+    silent_tries: u32,
     /// The largest message the master accepts (from `Registered`; gRPC's default before).
     master_limit: usize,
     /// When its plugins' figures were last sent (decision 513).
@@ -1768,6 +1776,7 @@ impl<E: Executor> Agent<E> {
             done_rx,
             heartbeat: Duration::from_secs(10),
             registered: false,
+            silent_tries: 0,
             master_limit: GRPC_DEFAULT_LIMIT,
             figures_at: std::sync::Mutex::new(None),
             shutdown: None,
@@ -1842,7 +1851,7 @@ impl<E: Executor> Agent<E> {
     /// Returns once the journal's writes handed to its writer are on disk (M5.2d).
     pub async fn run<C, F>(&mut self, connect: C, shutdown: watch::Receiver<u32>)
     where
-        C: Fn() -> F,
+        C: Fn(Option<Duration>) -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
     {
         self.sessions(connect, shutdown).await;
@@ -1852,7 +1861,7 @@ impl<E: Executor> Agent<E> {
     /// [`Self::run`]'s sessions, one after another until drained.
     async fn sessions<C, F>(&mut self, connect: C, mut shutdown: watch::Receiver<u32>)
     where
-        C: Fn() -> F,
+        C: Fn(Option<Duration>) -> F,
         F: Future<Output = Result<MasterClient<Channel>, String>>,
     {
         let requested = *shutdown.borrow_and_update();
@@ -1863,16 +1872,35 @@ impl<E: Executor> Agent<E> {
         let mut backoff = timeouts.reconnect_first;
         loop {
             self.registered = false;
-            let Some(connected) = self.offline(connect()).await else {
+            // At most a quarter of the lease (told to `connect`, which shares it among the
+            // master's addresses; the timeout here covers the rest): an address that answers nothing leaves time for
+            // others within it (B296). Waited for as a session's opening is (B300): results to
+            // send keep a drain here a while.
+            let limit = self.lease.map(|lease| lease / 4);
+            let connecting = async {
+                match limit {
+                    Some(limit) => tokio::time::timeout(limit, connect(Some(limit)))
+                        .await
+                        .unwrap_or_else(|_| Err(format!("not connected within {limit:?}"))),
+                    None => connect(None).await,
+                }
+            };
+            let Some(connected) = self.waiting_for(connecting, true).await else {
                 return;
             };
             let end = match connected {
                 Ok(client) => self.session(client).await,
                 Err(error) => SessionEnd::Lost(error),
             };
+            if self.registered {
+                self.silent_tries = 0;
+            }
             match end {
                 SessionEnd::Stopped => return,
                 SessionEnd::Lost(reason) => {
+                    if !self.registered && reason == NOT_REGISTERED {
+                        self.silent_tries = (self.silent_tries + 1).min(MOST_SILENT_TRIES);
+                    }
                     tracing::warn!(reason, "master connection lost; connecting again");
                     self.hold_cleanups();
                 }
@@ -2145,6 +2173,16 @@ impl<E: Executor> Agent<E> {
     /// at the lease (decision 281, B163).
     fn silent_at(&self, opened: tokio::time::Instant) -> Option<tokio::time::Instant> {
         self.lease.map(|lease| self.heard.max(opened) + lease)
+    }
+
+    /// When a stream opened at `opened` is left for want of a registration (B297: an address
+    /// that accepts and says nothing), whatever the lease, known or not. It doubles after each
+    /// try that ended so: a master registers behind its round, and one slow for longer than the
+    /// limit would otherwise never get to answer. Only waits end by it: a `Registered` that
+    /// arrived is judged by the lease.
+    fn unregistered_at(&self, opened: tokio::time::Instant) -> Option<tokio::time::Instant> {
+        let limit = self.settings.setup.timeouts.register * (1 << self.silent_tries);
+        (!self.registered).then(|| opened + limit)
     }
 
     /// Whether a stream opened at `opened` has been silent for the lease
@@ -2591,15 +2629,21 @@ impl<E: Executor> Agent<E> {
         opened: tokio::time::Instant,
     ) -> Result<tonic::Streaming<pb::MasterMessage>, SessionEnd> {
         let give_up_at = earliest(self.cut_off_at(), self.silent_at(opened));
+        let unregistered_at = self.unregistered_at(opened);
         let opening = async {
             tokio::select! {
+                biased;
                 control = client.control(UnboundedReceiverStream::new(outbound)) => Some(control),
                 () = at(give_up_at) => None,
+                () = at(unregistered_at) => Some(Err(tonic::Status::deadline_exceeded(NOT_REGISTERED))),
             }
         };
         match self.waiting_for(opening, true).await {
             None => Err(SessionEnd::Stopped),
             Some(Some(Ok(response))) => Ok(response.into_inner()),
+            Some(Some(Err(status))) if status.message() == NOT_REGISTERED => {
+                Err(SessionEnd::Lost(NOT_REGISTERED.to_owned()))
+            }
             Some(Some(Err(status))) => Err(SessionEnd::Lost(status.to_string())),
             Some(None) => {
                 self.cut_off_if_late();
@@ -2823,6 +2867,9 @@ impl<E: Executor> Agent<E> {
                 () = at(give_up_at) => {
                     self.cut_off_if_late();
                     return SessionEnd::Lost(NO_WORD.to_owned());
+                }
+                () = at(self.unregistered_at(opened)) => {
+                    return SessionEnd::Lost(NOT_REGISTERED.to_owned());
                 }
                 () = at(self.triggers_cut_off_at()) => self.stop_triggers_cut_off(),
                 count = next_request(&mut self.shutdown) => self.shutdown_asked(count, &to_master),
@@ -6010,6 +6057,7 @@ fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
 }
 
 /// Why a session ends when the master has gone silent.
+const NOT_REGISTERED: &str = "the master didn't register this worker in time";
 const NO_WORD: &str = "no word from the master for the worker lease";
 
 /// The earlier of two moments, either of them maybe none.

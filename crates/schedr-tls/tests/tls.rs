@@ -450,3 +450,94 @@ async fn a_wildcard_certificate_doesnt_pass_for_the_worker_name() {
     let error = stream.read(&mut buffer).await.unwrap_err();
     assert!(error.to_string().contains("BadCertificate"), "{error}");
 }
+
+/// Fills the queue of the listener at `address`: until a connection isn't answered, not after a
+/// guess.
+async fn filled(address: std::net::SocketAddr) -> Vec<tokio::net::TcpStream> {
+    let mut full = Vec::new();
+    while let Ok(stream) = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::net::TcpStream::connect(address),
+    )
+    .await
+    {
+        full.push(stream.unwrap());
+        assert!(full.len() < 64, "the listener's queue doesn't fill");
+    }
+    full
+}
+
+/// A listener that drops every new connection's SYN: its queue full, nothing accepted.
+async fn unanswering() -> (tokio::net::TcpListener, Vec<tokio::net::TcpStream>) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = socket.listen(1).unwrap();
+    let address = listener.local_addr().unwrap();
+    (listener, filled(address).await)
+}
+
+/// B296: a connection nothing answers ends within its limit, plain or TLS, so the agent tries
+/// again; it waited for the kernel's retries, and the worker was counted lost.
+#[rstest::rstest]
+#[tokio::test]
+async fn a_connection_nobody_answers_ends_within_its_limit(#[values(false, true)] with_tls: bool) {
+    let dir = TempDir::new().unwrap();
+    let ca = TestCa::new("schedr CA");
+    let worker = with_tls.then(|| tls(&ca, &dir, "worker", &["schedr-worker"]));
+    let (listener, _full) = unanswering().await;
+    let scheme = if with_tls { "https" } else { "http" };
+    let url = format!("{scheme}://{}", listener.local_addr().unwrap());
+    let limit = std::time::Duration::from_millis(300);
+    let tried = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        schedr_tls::channel_within(&url, worker.as_ref(), limit),
+    )
+    .await
+    .expect("the connection was given up at its limit");
+    let error = tried.unwrap_err();
+    assert!(error.contains("300ms"), "{error}");
+}
+
+/// Its later connections are limited as its first (agy's review of B296): a plain channel's
+/// weren't.
+#[tokio::test]
+async fn a_plain_channels_next_connection_has_the_limit_too() {
+    use tower::{Service as _, ServiceExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let limit = std::time::Duration::from_millis(300);
+    let mut channel = schedr_tls::channel_within(&format!("http://{address}"), None, limit)
+        .await
+        .unwrap();
+    // Its connection closed, the address then answers nothing.
+    drop(listener.accept().await.unwrap());
+    drop(listener);
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.set_reuseaddr(true).unwrap();
+    socket.bind(address).unwrap();
+    let _listener = socket.listen(1).unwrap();
+    let _full = filled(address).await;
+    let limited = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            // The first error may be the closed connection's.
+            let request = tonic::codegen::http::Request::new(tonic::body::Body::empty());
+            let error = match channel.ready().await {
+                Ok(ready) => match ready.call(request).await {
+                    Ok(_) => continue,
+                    Err(error) => error,
+                },
+                Err(error) => error,
+            };
+            let mut cause: Option<&dyn std::error::Error> = Some(&error);
+            while let Some(why) = cause {
+                if why.to_string().contains("300ms") {
+                    return;
+                }
+                cause = why.source();
+            }
+        }
+    });
+    limited
+        .await
+        .expect("the next connection was given up at its limit");
+}

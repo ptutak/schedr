@@ -326,7 +326,7 @@ async fn world_timed(
         Agent::new(settings, fake.clone(), "i1".to_owned()).with_metrics(metrics.clone());
     let (stop, stopped) = watch::channel(0);
     let agent = tokio::spawn(async move {
-        let connect = move || {
+        let connect = move |_limit: Option<Duration>| {
             let client = client.lock().unwrap().take();
             async move { client.ok_or_else(|| "connected once".to_owned()) }
         };
@@ -6142,4 +6142,108 @@ async fn an_extension_task_whose_service_isnt_ready_is_given_back() {
     assert_eq!(rejected.detail, "extension `x`: its service is starting");
     // With the count of readies it saw (DN37: the fake's 2).
     assert_eq!(rejected.service_readies, 2);
+}
+
+/// B297: a master's address that accepts and says nothing: the opening ends at the
+/// registration's limit, with no lease known or one; it waited forever, or for a lease.
+#[rstest::rstest]
+#[tokio::test]
+async fn a_silent_masters_session_ends_before_a_registration(
+    #[values(None, Some(Duration::from_mins(1)))] lease: Option<Duration>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.setup.timeouts.register = Duration::from_millis(300);
+    agent.lease = lease;
+    let channel = Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect_lazy();
+    let ended = tokio::time::timeout(
+        Duration::from_secs(5),
+        agent.session(MasterClient::new(channel)),
+    )
+    .await
+    .expect("the session ended at the limit");
+    held.abort();
+    assert!(matches!(ended, SessionEnd::Lost(reason) if reason == NOT_REGISTERED));
+}
+
+/// A slow master gets longer at each try that ended silent (B297); what it says is judged by the
+/// lease alone (agy's review), and the limit is gone once it registered the worker.
+#[tokio::test]
+async fn the_registrations_limit_doubles_and_only_waits_end_by_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.setup.timeouts.register = Duration::from_secs(10);
+    let opened = agent.heard;
+    for (tries, seconds) in [(0, 10), (1, 20), (3, 80)] {
+        agent.silent_tries = tries;
+        let at = agent.unregistered_at(opened).unwrap();
+        assert_eq!(at - opened, Duration::from_secs(seconds));
+    }
+    agent.lease = Some(Duration::from_mins(1));
+    assert_eq!(
+        agent.silent_at(opened).unwrap() - opened,
+        Duration::from_mins(1)
+    );
+    agent.registered = true;
+    assert_eq!(agent.unregistered_at(opened), None);
+}
+
+/// B300: a drain with a result unacknowledged waits for the connection under way, as for the
+/// stream's opening; it exited at its first tick.
+#[tokio::test]
+async fn a_drain_with_a_result_to_send_waits_for_the_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.drain.grace = Duration::from_secs(30);
+    let JournalRecord::Finished(finished) = success("a1") else {
+        unreachable!()
+    };
+    agent.unacked.insert("a1".to_owned(), finished);
+    let (requests, shutdown) = watch::channel(0);
+    requests.send(1).unwrap();
+    let connected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = connected.clone();
+    let connect = move |_limit: Option<Duration>| {
+        let seen = seen.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            Err("refused".to_owned())
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), agent.run(connect, shutdown))
+        .await
+        .expect("the drain ended");
+    let connected = connected.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(connected, "the connection under way was dropped");
+}
+
+/// B296: connecting takes a quarter of the lease at most, so other tries fit in it.
+#[tokio::test(start_paused = true)]
+async fn connecting_takes_a_quarter_of_the_lease_at_most() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.lease = Some(Duration::from_secs(4));
+    let (requests, shutdown) = watch::channel(0);
+    let tries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = tries.clone();
+    let connect = move |limit: Option<Duration>| {
+        assert_eq!(limit, Some(Duration::from_secs(1)));
+        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::future::pending::<Result<MasterClient<Channel>, String>>()
+    };
+    let _ = tokio::time::timeout(Duration::from_secs(4), agent.run(connect, shutdown)).await;
+    drop(requests);
+    let tries = tries.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(tries >= 2, "{tries} tries in a lease");
 }

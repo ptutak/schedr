@@ -78,6 +78,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D524 | 2026-11-25 | user | built (B297 fixed) | workers | A worker leaves a master that accepts it and says nothing: connecting and registering have limits |
+| D523 | 2026-11-25 | user | built M5.3a | deployment | Hot standby masters in the chart: master.replicas with Recreate, migrating when leading |
 | D522 | 2026-11-24 | user | built M5.2k | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |
 | D521 | 2026-11-23 | user | built M5.2i12 | task-processes | Extensions never hold the master up: their reports are dropped first |
 | D520 | 2026-11-22 | user | built M5.2i14 | deployment | A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS |
@@ -801,6 +803,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### deployment
 
+- D523: Hot standby masters in the chart: master.replicas with Recreate, migrating when leading
 - D520: A worker's certificate names its role, and with an opt-in its ID; standalone's ports under in-memory mTLS
 - D454: Images on glibc beside Alpine; Alpine tagged -alpine
 - D441: A DAG that no longer parses after a major upgrade is held
@@ -1143,6 +1146,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### workers
 
+- D524: A worker leaves a master that accepts it and says nothing: connecting and registering have limits
 - D512: One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them
 - D507: A worker's journal writes beside its loop; a start in flight holds its assignment unreported
 - D505: Only the round moves runs forward: turns queue a worker's starts and results for it

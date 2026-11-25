@@ -17,7 +17,7 @@ use schedr_model::beat::Beat;
 use schedr_proto::convert::ParseUpload;
 use schedr_proto::pb::master_server::{Master, MasterServer};
 use schedr_proto::pb::{self, master_message, worker_message};
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -1868,6 +1868,7 @@ impl Hub {
         self,
         register: pb::Register,
         inbound: Streaming<pb::WorkerMessage>,
+        caller: oneshot::Sender<()>,
     ) -> Result<Response<ReceiverStream<Result<pb::MasterMessage, Status>>>, Status> {
         // A sign of life as it arrives, before it waits for the lock (B6: a reconnect during
         // a stall), while it waits only (B267: a refused one renews nothing); and the attempts
@@ -1896,6 +1897,13 @@ impl Hub {
                 self.arrivals.start_handled(&register.worker_id, attempt_id);
             }
             return Err(Status::unavailable(NOT_LEADING));
+        }
+        // The worker left while this waited for the lock (its registration's limit, B297): it
+        // asks again, perhaps already in line behind this, and registered here would be refused
+        // as live. What it added stays, as at a database failure: its next try reports the same
+        // journal, and nothing else protects its attempts meanwhile.
+        if caller.is_closed() {
+            return Err(Status::cancelled("the worker left before its registration"));
         }
         // A worker still live whose stream is gone (its end waits for the lock, or behind what
         // it queued for the round) is disconnected here, as that end would: else its
@@ -2374,7 +2382,8 @@ impl Master for Hub {
         // Apart from this call, which ends when the worker resets its stream (giving up on a
         // slow master): stopped half-way, the worker would stay live with no stream behind it,
         // refused from then on (B171). Finished, its stream's end disconnects it as usual.
-        tokio::spawn(self.clone().open_stream(register, inbound))
+        let (caller, _waiting) = oneshot::channel();
+        tokio::spawn(self.clone().open_stream(register, inbound, caller))
             .await
             .map_err(|e| Status::internal(format!("the registration failed: {e}")))?
     }

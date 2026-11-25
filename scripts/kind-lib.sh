@@ -29,6 +29,16 @@ k() { kubectl --context "$CONTEXT" -n "$NAMESPACE" "$@"; }
 h() { helm --kube-context "$CONTEXT" -n "$NAMESPACE" "$@"; }
 say() { printf '\n== %s\n' "$*"; }
 
+# GET path $2 from target $1 (a pod, or deploy/schedr-webserver: the Service `schedr`) on its port $3 (8080),
+# through the Kubernetes API: the images have no wget or curl all can use (B295).
+api() {
+    local at=pods/$1
+    case $1 in deploy/schedr-webserver) at=services/schedr ;; esac
+    # Not --request-timeout: it is sent on as a query field, which the API refuses.
+    timeout 10 kubectl --context "$CONTEXT" \
+        get --raw "/api/v1/namespaces/$NAMESPACE/$at:${3:-8080}/proxy$2"
+}
+
 # The pods, and the worker list when WEB is set (kind-kill.sh, after sourcing). WEB is cleared
 # above, so a value from the environment is not a worker pod.
 fail() {
@@ -37,7 +47,7 @@ fail() {
     k get pods -o wide 2>/dev/null || true
     echo "---- workers ----"
     if [ -n "${WEB:-}" ]; then
-        k exec "$WEB" -c schedr -- wget -qO- -T 5 http://127.0.0.1:8080/api/v1/workers 2>/dev/null || true
+        api "$WEB" /api/v1/workers 2>/dev/null || true
         echo
     fi
     exit 1

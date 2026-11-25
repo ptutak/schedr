@@ -90,6 +90,35 @@ pub const EVENTS_CHANNEL: &str = "schedr_events";
 #[derive(Debug)]
 pub struct CommandNotifications {
     listener: PgListener,
+    /// The connection was lost and isn't listening again yet.
+    lost: bool,
+    again: Again,
+}
+
+/// Listening again on a lost connection, within a limit counted from the first try: a caller's
+/// wait cut short (a tick) starts the connection over, never the limit (agy's review of B299: an
+/// address that drops packets was tried forever, and never said so).
+#[derive(Debug)]
+pub(crate) struct Again {
+    limit: Duration,
+    until: Option<tokio::time::Instant>,
+}
+
+impl Again {
+    pub(crate) const fn within(limit: Duration) -> Self {
+        Self { limit, until: None }
+    }
+
+    /// Listens again on `listener`, its channels kept.
+    pub(crate) async fn listen(&mut self, listener: &mut PgListener) -> Result<(), DbError> {
+        let until = *self
+            .until
+            .get_or_insert_with(|| tokio::time::Instant::now() + self.limit);
+        let outcome =
+            tokio::time::timeout_at(until, listener.listen_all(std::iter::empty::<&str>())).await;
+        self.until = None;
+        Ok(outcome.map_err(|_| DbError::QueryTimeout(self.limit))??)
+    }
 }
 
 /// What a notification announced.
@@ -113,9 +142,22 @@ impl CommandNotifications {
     ///
     /// # Errors
     ///
-    /// [`DbError::Sqlx`] if the connection fails and can't be re-established.
+    /// [`DbError::Sqlx`] if the connection fails and can't be re-established;
+    /// [`DbError::QueryTimeout`] if nothing answers within the query limit.
     pub async fn next(&mut self) -> Result<Notified, DbError> {
-        let notification = self.listener.recv().await?;
+        // Reconnected here, not inside the read that finds it lost (B85).
+        let received = if self.lost {
+            None
+        } else {
+            self.listener.try_recv().await?
+        };
+        let Some(notification) = received else {
+            self.lost = true;
+            self.again.listen(&mut self.listener).await?;
+            self.lost = false;
+            // Commands may have come meanwhile.
+            return Ok(Notified::Command);
+        };
         Ok(if notification.channel() == EVENTS_CHANNEL {
             let payload = notification.payload();
             Notified::Event {
@@ -132,10 +174,12 @@ impl CommandNotifications {
     /// event was among them.
     pub async fn skip_arrived(&mut self) -> bool {
         let mut event = false;
-        while let Ok(Ok(notification)) =
-            tokio::time::timeout(Duration::ZERO, self.listener.recv()).await
-        {
-            event |= notification.channel() == EVENTS_CHANNEL;
+        while !self.lost {
+            match tokio::time::timeout(Duration::ZERO, self.listener.try_recv()).await {
+                Ok(Ok(Some(notification))) => event |= notification.channel() == EVENTS_CHANNEL,
+                Ok(Ok(None) | Err(_)) => self.lost = true,
+                Err(_) => break,
+            }
         }
         event
     }
@@ -351,10 +395,19 @@ impl Database {
             }
             Listening::Ready(listener) => listener,
         };
-        listener
-            .listen_all([COMMANDS_CHANNEL, EVENTS_CHANNEL])
-            .await?;
-        Ok(Some(CommandNotifications { listener }))
+        self.limited(self.query_timeout(), async {
+            Ok(listener
+                .listen_all([COMMANDS_CHANNEL, EVENTS_CHANNEL])
+                .await?)
+        })
+        .await?;
+        // [`CommandNotifications::next`] listens again itself.
+        listener.eager_reconnect(false);
+        Ok(Some(CommandNotifications {
+            listener,
+            lost: false,
+            again: Again::within(self.query_timeout()),
+        }))
     }
 
     /// A connection to listen through (Postgres's `LISTEN`), once it is checked not to pass a
@@ -416,10 +469,17 @@ impl Database {
                 },
             });
         }
-        Ok(Listening::Ready(match url {
-            Some(url) => PgListener::connect(url).await?,
-            None => PgListener::connect_with(pool).await?,
-        }))
+        // Limited too (B299): a direct address that drops packets held the master's loop for the
+        // kernel's retries.
+        let listener = self
+            .limited(self.query_timeout(), async {
+                Ok(match url {
+                    Some(url) => PgListener::connect(url).await?,
+                    None => PgListener::connect_with(pool).await?,
+                })
+            })
+            .await?;
+        Ok(Listening::Ready(listener))
     }
 
     /// The oldest `limit` pending commands, oldest first: a backlog is read a round's worth at

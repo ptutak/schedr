@@ -80,6 +80,8 @@ pub struct Connecting {
 /// Everything `schedr standalone` runs, read from the configuration.
 #[derive(Clone)]
 pub struct Standalone {
+    /// How long its worker waits for its master's address (`master_connect_timeout`).
+    pub master_connect_timeout: std::time::Duration,
     /// The secret storages, made once the database is connected (`db` among them).
     pub secret_storage: crate::secret_storage::SecretPlan,
     /// Where logs, the worker's journal and the SQLite database go.
@@ -202,6 +204,7 @@ pub fn plan(config: &Config, env: &BTreeMap<String, String>) -> Result<Standalon
         logs: localhost(config.worker.log_port),
         ops: localhost(config.ops.port),
         loop_stall_timeout: config.timings.loop_stall_timeout,
+        master_connect_timeout: config.timings.master_connect_timeout,
         connecting: Connecting {
             query_timeout: config.timings.query_timeout,
             prepared_statements: config.database.prepared_statements,
@@ -438,6 +441,7 @@ pub async fn run(
         log_listener: logs,
         retention: setup.retention,
         max_message_size: setup.master.max_message_size,
+        connect_timeout: setup.master_connect_timeout,
     };
     let worker = Box::pin(run_worker(
         agent,

@@ -150,8 +150,8 @@ say "a worker stopped while its task runs: the task finishes in the drain"
 slow=$(cli runs trigger slow | awk '/^triggered run/ {print $3}')
 worker=
 for _ in $(seq 1 60); do
-    worker=$(k exec deploy/schedr-webserver -c schedr -- wget -qO- \
-        "http://127.0.0.1:8080/api/v1/runs/$slow/tasks/nap/attempts" 2>/dev/null \
+    # The CLI, not `api`: the mesh's strict mTLS refuses the Kubernetes API's proxy.
+    worker=$(cli tasks attempts "$slow" nap --json 2>/dev/null \
         | python3 -c 'import json, sys; a = json.load(sys.stdin)["attempts"]; print(a[0]["worker_id"] if a else "")' \
         2>/dev/null || true)
     [ -n "$worker" ] && break
@@ -161,8 +161,7 @@ done
 sleep 3
 k delete pod "$worker" --wait=true
 for _ in $(seq 1 60); do cli runs list slow | grep "$slow" | grep -q success && break; sleep 2; done
-attempts=$(k exec deploy/schedr-webserver -c schedr -- wget -qO- \
-    "http://127.0.0.1:8080/api/v1/runs/$slow/tasks/nap/attempts")
+attempts=$(cli tasks attempts "$slow" nap --json)
 echo "$attempts" | python3 -c '
 import json, sys
 attempts = json.load(sys.stdin)["attempts"]

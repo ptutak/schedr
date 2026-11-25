@@ -215,6 +215,7 @@ async fn a_worker_without_a_reachable_master_stops_when_asked() {
         log_listener: listen(loopback()).await.unwrap(),
         retention: log_retention(&config()),
         max_message_size: 64 << 20,
+        connect_timeout: schedr_tls::CONNECT_TIMEOUT,
     };
     let health = Health::new(Duration::from_secs(120));
     let observed = Observed {
@@ -1369,6 +1370,8 @@ fn the_hidden_settings_defaults_are_the_constants_they_replaced() {
 fn the_hidden_settings_reach_the_roles() {
     let vars = [
         ("SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND", "11"),
+        ("SCHEDR_HIDDEN__CLIENT__STREAM_IDLE", "91s"),
+        ("SCHEDR_HIDDEN__WORKER__REGISTER_TIMEOUT", "92s"),
         ("SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND", "12"),
         ("SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND", "13"),
         ("SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND", "14"),
@@ -1494,6 +1497,7 @@ fn the_hidden_settings_reach_the_roles() {
             connect: secs(38),
             request: secs(39),
             command_wait: secs(40),
+            stream_idle: secs(91),
         }
     );
     assert_eq!(api.command_wait, secs(40));
@@ -1516,6 +1520,7 @@ fn the_hidden_settings_reach_the_roles() {
         [50, 51, 52]
     );
     assert_eq!(master.samples.events_kept, 53);
+    assert_eq!(w.register, secs(92));
 }
 
 /// The review of M5.1q: a shutdown ends the wait for the database even while a try hangs

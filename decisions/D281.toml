@@ -5,11 +5,11 @@ status = "active"
 topic = "workers"
 section = "Identity and connection"
 summary = '''
-The agent closes a stream silent for the worker lease and ignores messages arriving after it. Input fetches and first registration obey the same limit; the master takes an unstarted
+The agent closes a stream silent for the worker lease and ignores messages arriving after it. Input fetches obey the same limit, a registration a shorter one (decision 524); the master takes an unstarted
 assignment back once the worker's messages show it never started it (decision 460).
 '''
 history = "archive/PROJECT.md#D281"
 step = "M4.8z"
 also = ["protocol", "assignment"]
 code = ["crates/schedr-agent/src/agent.rs::silent_at", "crates/schedr-agent/src/agent.rs::cut_off_if_late"]
-checked = 2026-11-23
+checked = 2026-11-25

@@ -38,4 +38,4 @@ code = [
   "python/schedr_extension/_service.py",
   "crates/schedr/src/shell_plugin.rs",
 ]
-checked = 2026-11-24
+checked = 2026-11-25

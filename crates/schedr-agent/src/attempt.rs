@@ -407,6 +407,8 @@ pub struct WorkerTimeouts {
     pub reconnect_first: Duration,
     /// The longest one (`reconnect_backoff_max`).
     pub reconnect_max: Duration,
+    /// How long opening a stream and being registered on it may take (`register_timeout`).
+    pub register: Duration,
     /// How often the event loop turns at least, however quiet (`alive_interval`).
     pub alive: Duration,
     /// How long deregistering may take (`deregister_wait`).
@@ -485,6 +487,7 @@ impl Default for WorkerTimeouts {
             orphan_grace: crate::agent::ORPHAN_GRACE,
             reconnect_first: crate::agent::FIRST_BACKOFF,
             reconnect_max: crate::agent::MAX_BACKOFF,
+            register: crate::agent::REGISTER_TIMEOUT,
             alive: crate::agent::ALIVE_INTERVAL,
             deregister: crate::agent::DEREGISTER_WAIT,
             drain_tick: crate::agent::DRAIN_TICK,

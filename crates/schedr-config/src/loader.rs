@@ -552,6 +552,7 @@ fn hidden_limits(env: &BTreeMap<String, String>) -> Result<HiddenLimits, ConfigE
 }
 
 /// The timing a hidden variable's `<SECTION>__<NAME>` names.
+#[allow(clippy::too_many_lines)] // a line a timing
 fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::time::Duration> {
     let timing = match key {
         "MASTER__TICK_INTERVAL" => &mut timings.tick_interval,
@@ -644,6 +645,9 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "MASTER__SLOW_EQUALS_FLOOR" => &mut timings.slow_equals_floor,
         "MASTER__CODE_RETRY_DELAY" => &mut timings.code_retry_delay,
         "MASTER__NODE_ROW_KEPT" => &mut timings.node_row_kept,
+        "WORKER__REGISTER_TIMEOUT" => &mut timings.register_timeout,
+        "CLIENT__STREAM_IDLE" => &mut timings.client_stream_idle,
+        "WORKER__MASTER_CONNECT_TIMEOUT" => &mut timings.master_connect_timeout,
         "CLIENT__CONNECT_TIMEOUT" => &mut timings.client_connect_timeout,
         "CLIENT__REQUEST_TIMEOUT" => &mut timings.client_request_timeout,
         "CLIENT__COMMAND_WAIT" => &mut timings.client_command_wait,

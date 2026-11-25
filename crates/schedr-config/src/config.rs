@@ -269,6 +269,12 @@ pub struct Timings {
     pub node_row_kept: Duration,
     /// How long the CLI and `schedr ui` wait to connect to a webserver. (`CLIENT__CONNECT_TIMEOUT`)
     pub client_connect_timeout: Duration,
+    /// How long a worker waits for a stream to open and the master to register it. (`WORKER__REGISTER_TIMEOUT`)
+    pub register_timeout: Duration,
+    /// How long `schedr ui` waits for the next bytes of a webserver's live stream. (`CLIENT__STREAM_IDLE`)
+    pub client_stream_idle: Duration,
+    /// How long a worker waits for the master's address to answer before it tries again. (`WORKER__MASTER_CONNECT_TIMEOUT`)
+    pub master_connect_timeout: Duration,
     /// How long one request of the CLI or `schedr ui` to a webserver may take. (`CLIENT__REQUEST_TIMEOUT`)
     pub client_request_timeout: Duration,
     /// How long the CLI and `schedr ui` wait for the master's decision on a command. (`CLIENT__COMMAND_WAIT`)
@@ -374,6 +380,9 @@ impl Default for Timings {
             code_retry_delay: Duration::from_secs(35),
             node_row_kept: Duration::from_hours(1),
             client_connect_timeout: Duration::from_secs(5),
+            register_timeout: Duration::from_secs(10),
+            client_stream_idle: Duration::from_mins(1),
+            master_connect_timeout: Duration::from_secs(5),
             client_request_timeout: Duration::from_secs(30),
             client_command_wait: Duration::from_secs(30),
             dags_test_run_timeout: Duration::from_hours(1),

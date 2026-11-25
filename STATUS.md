@@ -6,31 +6,32 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-25)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.3a, Hot standby masters in the chart. Done when: with `master.replicas: 2` on Postgres, the leading master pod killed: the other takes the lease within the lease period, the workers reconnect through the Service, and a run under way finishes with its attempts kept; the chart's default unchanged
-- **Then:** M5.3b, M5.3c, M5.3d, M5.3e, M6.1.
+- **Next step:** R1.2.1, Release 1.2.1. Done when: 1.2.1 on PyPI and its images on ghcr.io; `scripts/kind-standby.sh` and the other kind scripts passing on its images built here; CI's Stress cut scenarios (17-21) and failover (4, 5) passing on its commit
+- **Then:** M5.3g, M5.3f, M5.3b, M5.3c, M5.3d.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B301 (high/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- D524 (2026-11-25): a worker leaves a master that accepts it and says nothing
+- D523 (2026-11-25): hot standby masters in the chart: `Recreate` kept, migrating when leading
 - DN40 (2026-11-24): the Extensions page, extension then version then deployment (corrects D513)
 - DN39 (2026-11-24): M5.2j: runs and DAGs in numbered pages; several deployments page each one (adds to D517)
 - D522 (2026-11-24): a trigger's own cancel grace
-- DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
-- DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
 - R1.2 (2026-11-25): Release 1.2.0
+- M5.3a (2026-11-25): Hot standby masters in the chart
 - M5.2k (2026-11-24): The bugs found and left before 1.2.0 fixed
-- M5.2j (2026-11-24): Runs and DAGs in numbered pages (decision 517)
 
 ## In progress
 
-- R1.2 done: 1.2.0's numbers on the stress page. Next: M5.3 (a to e); M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
+- R1.2.1: M5.3a and B295-B300 are in; left: `make upgrade-check`, the version commit and the tag (each on the user's word), then stress on CI's numbers. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
 
 ## Waiting for the user
 
-- Reading AI_INSTRUCTIONS.md, AI_SETUP.md, AI_PROJECT.md and the stress page's new section, then the push (the four skills' commits with it).
+- The version commit and the tag of 1.2.1.
 - Scenario 1's and 6's round limit: leave at 5 s or raise to 6.
+- A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror, branch perf/75-tasks kept or not, lazy imports: proposed, not planned.
 
 ## Rules in force
 
@@ -38,7 +39,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Colleagues
 
-agy reviewed M5.2k, M5.2j, the All view, DN40 and B292 (2026-11-24); Grok M5.2k's trust boundaries.
+agy reviewed M5.3a, B296 and the fixes after it (2026-11-25: 8, 9 and 7 findings, all confirmed).
 
 Resume this session with:
 

@@ -617,7 +617,10 @@ async fn a_stalled_stream_dropped_by_its_reader_is_closed_at_once() {
         tokio::time::timeout(Duration::from_secs(2), socket.read(&mut rest)).await
     });
     let transport = HttpTransport::new(&format!("http://{address}"), Auth::None);
-    let mut chunks = transport.open("/api/v1/changes".to_owned()).await.unwrap();
+    let mut chunks = transport
+        .open("/api/v1/changes".to_owned(), Streamed::Events)
+        .await
+        .unwrap();
     assert_eq!(chunks.next().await.unwrap().unwrap(), b"hello");
     drop(chunks);
     let closed = server.await.unwrap();
@@ -638,7 +641,10 @@ async fn a_stalled_in_process_stream_dropped_by_its_reader_is_closed_at_once() {
         }),
     );
     let transport = RouterTransport::new(app);
-    let mut chunks = transport.open("/api/v1/changes".to_owned()).await.unwrap();
+    let mut chunks = transport
+        .open("/api/v1/changes".to_owned(), Streamed::Events)
+        .await
+        .unwrap();
     feed.send(Ok(Event::default().event("run").data("{}")))
         .await
         .unwrap();
@@ -687,4 +693,68 @@ async fn an_extensions_reads_carry_their_version_and_worker() {
             "/api/v1/extensions/d%20x/metrics?range=1h&worker=w%201&version=1.0",
         ]
     );
+}
+
+/// B298: a server that takes the connection and says nothing, before the headers or after some
+/// of the stream, is left at the limit; the stream's own was 24 h.
+#[rstest::rstest]
+#[tokio::test]
+async fn a_silent_servers_stream_is_left(#[values(false, true)] answers_first: bool) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        if answers_first {
+            let answer = b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n";
+            socket.write_all(answer).await.unwrap();
+        }
+        std::future::pending::<()>().await;
+    });
+    let mut transport = HttpTransport::new(&format!("http://{address}"), Auth::None);
+    transport.timeouts.request = Duration::from_millis(300);
+    transport.timeouts.stream_idle = Duration::from_millis(300);
+    let error = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut chunks = match transport
+            .open("/api/v1/changes".to_owned(), Streamed::Events)
+            .await
+        {
+            Ok(chunks) => chunks,
+            Err(error) => return error,
+        };
+        assert_eq!(chunks.next().await.unwrap().unwrap(), b"hello");
+        chunks.next().await.unwrap().unwrap_err()
+    })
+    .await
+    .expect("the stream was given up at its limit");
+    server.abort();
+    assert!(error.to_string().contains("300ms"), "{error}");
+}
+
+/// A file's stream isn't left for a pause: it has no keep-alives (agy's review of B298).
+#[tokio::test]
+async fn a_pause_in_a_files_stream_is_waited_out() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = socket.read(&mut request).await.unwrap();
+        let head = b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n";
+        socket.write_all(head).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        socket.write_all(b"5\r\nagain\r\n0\r\n\r\n").await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let mut transport = HttpTransport::new(&format!("http://{address}"), Auth::None);
+    transport.timeouts.stream_idle = Duration::from_millis(200);
+    let mut chunks = transport
+        .open("/log.txt".to_owned(), Streamed::File)
+        .await
+        .unwrap();
+    assert_eq!(chunks.next().await.unwrap().unwrap(), b"hello");
+    assert_eq!(chunks.next().await.unwrap().unwrap(), b"again");
 }

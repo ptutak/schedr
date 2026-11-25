@@ -101,7 +101,8 @@ h upgrade schedr "$ROOT/charts/schedr" "${chart_values[@]}" \
     --set database.existingSecret=schedr-db --wait --timeout 5m
 k rollout restart statefulset/schedr
 run_a_dag
-k exec schedr-0 -c schedr -- sh -c 'wget -qO- http://127.0.0.1:8090/metrics | grep "^schedr_master_leading"'
+metrics=$(api schedr-0 /metrics 8090)
+grep "^schedr_master_leading" <<<"$metrics"
 
 # A DAG of its own ID: what each phase below delivers.
 a_dag() {

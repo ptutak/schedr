@@ -61,7 +61,11 @@ impl Transport for Streams {
         Ok(ApiResponse { status, body })
     }
 
-    async fn open(&self, _path: String) -> Result<Chunks, ClientError> {
+    async fn open(
+        &self,
+        _path: String,
+        _body: schedr_client::Streamed,
+    ) -> Result<Chunks, ClientError> {
         tokio::task::yield_now().await;
         self.streams
             .lock()

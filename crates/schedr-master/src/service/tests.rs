@@ -809,6 +809,32 @@ async fn a_master_that_isnt_leading_refuses_a_stream_at_once() {
 }
 
 #[tokio::test]
+async fn a_worker_that_left_while_a_round_held_its_registration_isnt_registered() {
+    // agy's review of B297: registered all the same, it was live with no one there, and its next
+    // try, in line right behind, was refused ("already has a live stream").
+    let (hub, _db, mut client) = connected().await;
+    let round = hub.core_for("a slow round").await;
+    let (left, outbound) = mpsc::channel(16);
+    left.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut leaving = client.clone();
+    let first = tokio::spawn(async move { leaving.control(ReceiverStream::new(outbound)).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    first.abort();
+    drop(left);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let again = tokio::spawn(async move { client.control(ReceiverStream::new(outbound)).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(round);
+    let mut stream = again.await.unwrap().unwrap().into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+}
+
+#[tokio::test]
 async fn a_worker_that_gives_up_during_its_registration_can_register_again() {
     // B171: a worker giving up resets its stream, which drops the server's call. Dropped inside
     // the registration, the worker stayed live with no stream behind it, nothing to end it, and

@@ -162,6 +162,8 @@ accepted, so an old deployment starts, and have no effect.
 | `SCHEDR_HIDDEN__WORKER__ORPHAN_POLL` | 50 ms | How often an orphan found at startup is checked while it stops. |
 | `SCHEDR_HIDDEN__WORKER__ORPHAN_KILL_WAIT` | 5 s | How long an orphan may take to go after SIGKILL. |
 | `SCHEDR_HIDDEN__WORKER__ORPHAN_GRACE` | 10 s | Time an orphan found at startup gets from SIGTERM to SIGKILL. |
+| `SCHEDR_HIDDEN__WORKER__MASTER_CONNECT_TIMEOUT` | 5 s | How long a worker waits for the master's address to answer before it tries again; a black-holed address (a master pod just killed) fails after it. |
+| `SCHEDR_HIDDEN__WORKER__REGISTER_TIMEOUT` | 10 s | How long a worker waits for a stream to open and the master to register it before it tries again; an address that accepts and says nothing fails after it. Doubled after each such try, up to 8 times it. |
 | `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_FIRST` | 200 ms | First wait after the master connection drops; it doubles with jitter up to the maximum. |
 | `SCHEDR_HIDDEN__WORKER__RECONNECT_BACKOFF_MAX` | 30 s | Longest wait between tries to reach the master; once the worker knows its lease, each wait is also capped at half that lease. |
 | `SCHEDR_HIDDEN__WORKER__ALIVE_INTERVAL` | 5 s | How often the agent's loop turns at least, even when quiet; it must stay shorter than the loop stall timeout, or a quiet agent looks stuck. |
@@ -184,6 +186,7 @@ The CLI's and `schedr ui`'s requests to a webserver.
 |---|---|---|
 | `SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT` | 5 s | How long connecting to a webserver may take; a black-holed address fails after it. |
 | `SCHEDR_HIDDEN__CLIENT__REQUEST_TIMEOUT` | 30 s | How long one request may take, from connecting to the end of its answer. Raise it for a slow link or a large list; a hung webserver holds a command, or a UI page, this long. A stream (a page's live part, a log tail) has its own limit. |
+| `SCHEDR_HIDDEN__CLIENT__STREAM_IDLE` | 60 s | How long `schedr ui` waits for the next bytes of a webserver's live stream before it opens it again; keep it well over `WEBSERVER__EVENTS_KEEP_ALIVE`. |
 | `SCHEDR_HIDDEN__CLIENT__COMMAND_WAIT` | 30 s | How long the CLI waits for a command's decision before reporting it as still pending. The master can decide later. UI actions poll until a decision; this does not limit that polling. |
 | `SCHEDR_HIDDEN__DAGS__TEST_RUN_TIMEOUT` | 1 h | How long `schedr dags test` waits for its run; a task hanging past its own timeout is stopped before. |
 

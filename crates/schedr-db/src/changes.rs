@@ -11,7 +11,7 @@ use std::time::Duration;
 use schedr_model::DagId;
 use sqlx::postgres::PgListener;
 
-use crate::commands::Listening;
+use crate::commands::{Again, Listening};
 use crate::database::{Database, DbError, Pool};
 use crate::query::{on_pool, sql};
 
@@ -78,7 +78,11 @@ pub struct Changes {
 #[derive(Debug)]
 enum Source {
     /// A listening connection; `lost`: it was lost and isn't listening again yet.
-    Listen { listener: PgListener, lost: bool },
+    Listen {
+        listener: PgListener,
+        lost: bool,
+        again: Again,
+    },
     Poll {
         db: Database,
         after: i64,
@@ -133,11 +137,15 @@ impl Database {
                 // it lost: a read cut short there (the drain's zero timeout, a caller's) would
                 // drop the loss (B85).
                 listener.eager_reconnect(false);
-                listener.listen(CHANGES_CHANNEL).await?;
+                self.limited(self.query_timeout(), async {
+                    Ok(listener.listen(CHANGES_CHANNEL).await?)
+                })
+                .await?;
                 Ok(Some(Changes {
                     source: Source::Listen {
                         listener,
                         lost: false,
+                        again: Again::within(self.query_timeout()),
                     },
                 }))
             }
@@ -251,7 +259,11 @@ impl Changes {
     /// [`DbError`] if the database fails (polling) or the connection can't be re-established.
     pub async fn next(&mut self) -> Result<Vec<Change>, DbError> {
         match &mut self.source {
-            Source::Listen { listener, lost } => {
+            Source::Listen {
+                listener,
+                lost,
+                again,
+            } => {
                 let mut changes = BTreeSet::new();
                 if !*lost {
                     match listener.try_recv().await? {
@@ -270,7 +282,7 @@ impl Changes {
                 }
                 // Listening again before the loss is reported, so what changes after the
                 // report is heard; a call cut short here reports it the next time.
-                listener.listen_all(std::iter::empty::<&str>()).await?;
+                again.listen(listener).await?;
                 *lost = false;
                 changes.insert(Change::Missed);
                 Ok(changes.into_iter().collect())

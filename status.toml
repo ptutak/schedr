@@ -4,12 +4,13 @@
 updated = 2026-11-25
 
 in_progress = [
-    "R1.2 done: 1.2.0's numbers on the stress page. Next: M5.3 (a to e); M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).",
+    "R1.2.1: M5.3a and B295-B300 are in; left: `make upgrade-check`, the version commit and the tag (each on the user's word), then stress on CI's numbers. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).",
 ]
 
 waiting = [
-    "Reading AI_INSTRUCTIONS.md, AI_SETUP.md, AI_PROJECT.md and the stress page's new section, then the push (the four skills' commits with it).",
+    "The version commit and the tag of 1.2.1.",
     "Scenario 1's and 6's round limit: leave at 5 s or raise to 6.",
+    "A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror, branch perf/75-tasks kept or not, lazy imports: proposed, not planned.",
 ]
 
 rules = [
@@ -17,6 +18,6 @@ rules = [
 ]
 
 colleagues = """
-agy reviewed M5.2k, M5.2j, the All view, DN40 and B292 (2026-11-24); Grok M5.2k's trust boundaries."""
+agy reviewed M5.3a, B296 and the fixes after it (2026-11-25: 8, 9 and 7 findings, all confirmed)."""
 
 resume = "claude --resume d9e526b0-15b2-46f6-a593-f483ae56ad60"

@@ -1,0 +1,17 @@
+title = "Hot standby masters in the chart: master.replicas with Recreate, migrating when leading"
+date = 2026-11-25
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "deployment"
+section = "Upgrades and compatibility"
+summary = '''
+The chart's masters are `master.replicas` (1 by default), the Deployment still `Recreate`: an upgrade
+stops every master, as with one. With more, each waits as a standby and migrates once it leads
+(`master --migrate`), with no migration init container, which would wait for the leader's lease
+whatever the schema; they prefer different nodes. A standby isn't ready, so the Service reaches the
+leader alone, and `helm --wait` would wait for it. Refused outside mode distributed.
+'''
+history = "JOURNAL.md#D523"  # <a id="D523"></a> starts its JOURNAL.md entry
+step = "M5.3a"
+code = ["charts/schedr/templates/master.yaml", "charts/schedr/values.yaml"]
+checked = 2026-11-25

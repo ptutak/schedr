@@ -1919,6 +1919,54 @@ async fn straight_to_postgres_the_master_listens_unless_told_not_to() {
     assert!(off.command_notifications().await.unwrap().is_none());
 }
 
+/// B299: an address for listening that goes silent after the check's two connections ends at the
+/// query limit; it held the master's loop for as long as the network did.
+#[tokio::test]
+async fn a_listening_connection_nobody_answers_ends_at_the_query_limit() {
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    drop(db);
+    let (front, rest) = url.rsplit_once('@').unwrap();
+    let (server, name) = rest.split_once('/').unwrap();
+    let server = server.to_owned();
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let through = format!("{front}@{}/{name}", proxy.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut silent = Vec::new();
+        for n in 1..=100 {
+            let (mut client, _) = proxy.accept().await.unwrap();
+            if n > 2 {
+                silent.push(client);
+                continue;
+            }
+            let server = server.clone();
+            tokio::spawn(async move {
+                let mut upstream = tokio::net::TcpStream::connect(server).await.unwrap();
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            });
+        }
+    });
+    let limit = std::time::Duration::from_secs(2);
+    let db = Database::connect_with_timeout(&url, limit)
+        .await
+        .unwrap()
+        .with_notifications(true, Some(through));
+    let listened = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        db.command_notifications(),
+    )
+    .await
+    .expect("given up at the query limit");
+    let Err(error) = listened else {
+        panic!("listened through a silent address");
+    };
+    assert!(
+        matches!(error, schedr_db::DbError::QueryTimeout(of) if of == limit),
+        "{error}"
+    );
+}
+
 #[tokio::test]
 async fn a_wide_runs_instances_are_all_created_on_postgres() {
     let (db, version) = with_dag().await;
@@ -3865,4 +3913,76 @@ async fn a_flush_of_reports_keeps_only_its_workers_attempts_on_postgres() {
     .await
     .unwrap();
     assert_eq!(db.extension_versions().await.unwrap().len(), 1);
+}
+
+/// B299: a listening connection lost, its address silent from then on, is an error at the query
+/// limit, though the waits are cut short as a master's ticks do; it was tried forever.
+#[rstest::rstest]
+#[tokio::test]
+async fn listening_again_at_a_silent_address_ends_at_the_query_limit(
+    #[values(false, true)] changes: bool,
+) {
+    let url = fresh_url().await;
+    let db = Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let (front, rest) = url.rsplit_once('@').unwrap();
+    let (server, name) = rest.split_once('/').unwrap();
+    let server = server.to_owned();
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let through = format!("{front}@{}/{name}", proxy.local_addr().unwrap());
+    let (cut, _) = tokio::sync::watch::channel(false);
+    let cuts = cut.clone();
+    tokio::spawn(async move {
+        let mut silent = Vec::new();
+        loop {
+            let (mut client, _) = proxy.accept().await.unwrap();
+            if *cuts.borrow() {
+                silent.push(client);
+                continue;
+            }
+            let (server, mut cut) = (server.clone(), cuts.subscribe());
+            tokio::spawn(async move {
+                let mut upstream = tokio::net::TcpStream::connect(server).await.unwrap();
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {}
+                    _ = cut.wait_for(|cut| *cut) => {}
+                }
+            });
+        }
+    });
+    let limit = std::time::Duration::from_secs(2);
+    let db = Database::connect_with_timeout(&url, limit)
+        .await
+        .unwrap()
+        .with_notifications(true, Some(through));
+    let tick = std::time::Duration::from_millis(300);
+    let failed = async {
+        if changes {
+            let mut followed = db
+                .changes_reading(std::time::Duration::from_secs(1), 10)
+                .await
+                .unwrap()
+                .unwrap();
+            cut.send_replace(true);
+            loop {
+                if let Ok(Err(error)) = tokio::time::timeout(tick, followed.next()).await {
+                    return error;
+                }
+            }
+        }
+        let mut commands = db.command_notifications().await.unwrap().unwrap();
+        cut.send_replace(true);
+        loop {
+            if let Ok(Err(error)) = tokio::time::timeout(tick, commands.next()).await {
+                return error;
+            }
+        }
+    };
+    let error = tokio::time::timeout(std::time::Duration::from_secs(20), failed)
+        .await
+        .expect("an error at the query limit");
+    assert!(
+        matches!(error, DbError::QueryTimeout(of) if of == limit),
+        "{error}"
+    );
 }
