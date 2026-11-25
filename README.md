@@ -142,8 +142,8 @@ Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each ca
 the package: standalone and workers, the base for your own image), `ghcr.io/ptutak/schedr-slim`
 (the same without the task libraries and connection clients) and
 `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), on Debian
-(glibc), tagged with the version (`1.2.0`) and its series (`1.2`); the same on Alpine add
-`-alpine` (`1.2.0-alpine`). There is no `latest`: a deployment names the version it runs.
+(glibc), tagged with the version (`1.2.1`) and its series (`1.2`); the same on Alpine add
+`-alpine` (`1.2.1-alpine`). There is no `latest`: a deployment names the version it runs.
 
 ## Trying it
 

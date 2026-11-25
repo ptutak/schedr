@@ -5,7 +5,13 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
-## Unreleased
+## 1.2.1
+
+Connections with a limit: a worker, the master and the web UI no longer wait without end for an
+address that answers nothing (a pod just killed), and a worker no longer loses its tasks to it. The
+Helm chart can run hot standby masters. No migration and no protocol change: the master first, as always.
+One case stays open (B301): a worker whose connection ended without the master hearing of it is
+refused until its lease runs out.
 
 - **A worker's connection to the master has a time limit** (B296, 5 s): after a master pod was killed,
   a worker whose connection attempt got no answer waited about two minutes for the kernel to give

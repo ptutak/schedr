@@ -25,11 +25,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## In progress
 
-- R1.2.1: M5.3a and B295-B300 are in; left: `make upgrade-check`, the version commit and the tag (each on the user's word), then stress on CI's numbers. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
+- R1.2.1: M5.3a and B295-B300 are in; the version commit 1.2.1 pushed; left: its tag v1.2.1 once CI and make check pass and the user says so. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
 
 ## Waiting for the user
 
-- The version commit and the tag of 1.2.1.
+- The tag of 1.2.1.
 - Scenario 1's and 6's round limit: leave at 5 s or raise to 6.
 - A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror, branch perf/75-tasks kept or not, lazy imports: proposed, not planned.
 
