@@ -78,6 +78,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D529 | 2026-11-26 | user | planned (M5.3d) | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
+| D528 | 2026-11-26 | user | planned (M5.3b) | cleanup | A cleanup let through is still moved after its worker is lost: at least once |
 | D527 | 2026-11-25 | user | planned (M5.3d) | assignment | An extension task no live worker offers waits with its reason, then ends unschedulable |
 | D526 | 2026-11-25 | user | planned (M5.3g) | workers | A worker leaves a connection whose heartbeats go unanswered, well before the lease |
 | D525 | 2026-11-25 | user | planned (M5.3g) | protocol | Connections are numbered: Register carries which connection of its process it is |
@@ -619,6 +621,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### assignment
 
+- D529: An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing
 - D527: An extension task no live worker offers waits with its reason, then ends unschedulable
 - D509: A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster
 - D506: The round's slow parts on due flags; what is read before the lock is only what the round alone writes
@@ -659,6 +662,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### cleanup
 
+- D528: A cleanup let through is still moved after its worker is lost: at least once
 - D504: A movable cleanup's try waits at a barrier for the master's word, asked only once it waits
 - D346: Running cleanup continues past the drain deadline
 - D309: A late cleanup failure turns a successful run yellow

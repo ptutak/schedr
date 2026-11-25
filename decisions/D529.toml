@@ -1,0 +1,14 @@
+title = "An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing"
+date = 2026-11-26
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+summary = '''
+Decision 527's while is 10 minutes, a hidden timing (`SCHEDR_HIDDEN__MASTER__*`, its name settled in
+M5.3d): long enough for a rolling upgrade of the plugin's workers, short enough for a typo. Not chosen:
+a public key; the existing unschedulable rule's time.
+'''
+history = "JOURNAL.md#D529"
+step = "M5.3d"
+code = []

@@ -3826,3 +3826,12 @@ ends R1.2.1. 1.3.0's steps got their decisions the same evening: `schedr-ctx` on
 start or less, `schedr task-ctx` kept, both on one code; the chaos on kind with all sixteen faults the
 user asked for, the first four built first, nightly in the Stress workflow, and its record complete
 enough to read a failure without running it again (the seed alone won't replicate one).
+
+### <a id="D528"></a><a id="D529"></a>2026-11-26: decisions ahead of 1.3.0 (decisions 528 and 529)
+
+The user asked Claude to go on alone until 1.3.0 ("continue until 1.3.0") and answered the decisions
+Claude could foresee, each its recommendation: each finished step pushed after its review and checks,
+the 1.3.0 version commit and tag asked for; M5.3b keeps a let-through cleanup moved, at least once (D528);
+M5.3d's wait is 10 minutes, hidden (D529); if M5.3g's first test shows a stale `Register` doing lasting
+damage today, it is logged and fixed within M5.3g. Scenarios 1 and 6 also got a round limit of 7 s
+(the user): 5 s lay between the histogram's steps 4.10 and 5.79, and CI's runs read either.

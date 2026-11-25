@@ -85,6 +85,7 @@ fn throughput(
     scenario: &'static str,
     pooled: bool,
     load: fn(Size) -> Load,
+    round_limit_s: f64,
 ) -> f64 {
     let mut stress = Stress::new(Some(database_url));
     let size = stress.size;
@@ -98,7 +99,7 @@ fn throughput(
     report.set("parse_all_s", parsed.as_secs_f64());
     stress.trigger(&dags, 1);
     stress.wait_for_runs(dags.len(), size.time(20 * MINUTE, 90 * MINUTE), |_| {});
-    stress.measure(&mut report, "master", 1.0);
+    stress.measure_rounds_within(&mut report, "master", 1.0, round_limit_s);
     if pooled {
         report.broken(pooler_not_found(&stress, &["master"]));
     }
@@ -122,7 +123,15 @@ fn pooler_not_found(stress: &Stress, names: &[&str]) -> Vec<String> {
 
 #[test]
 fn stress_01_throughput() {
-    throughput(postgres_database(), "01_throughput", false, Load::whole);
+    // Its round's p99 up to 7 s (the user, 2026-11-26): 5 s lay between the histogram's steps
+    // 4.10 and 5.79, and CI's runs read either.
+    throughput(
+        postgres_database(),
+        "01_throughput",
+        false,
+        Load::whole,
+        7.0,
+    );
 }
 
 /// Scenario 1c (M5.2e, decision 509): short tasks and long ones together, the long ones in
@@ -533,6 +542,7 @@ fn stress_06_pgbouncer_throughput() {
         "06_pgbouncer_throughput",
         true,
         Load::whole,
+        7.0, // As scenario 1's.
     );
 }
 
@@ -2403,6 +2413,7 @@ fn stress_25_extension_throughput() {
         "25_extension_throughput_plain",
         false,
         Load::quarter,
+        5.0,
     );
     let python = sleeping_tasks("25_extension_throughput_python", Work::Python);
     let forked = sleeping_tasks("25_extension_throughput_python_forked", Work::PythonForked);

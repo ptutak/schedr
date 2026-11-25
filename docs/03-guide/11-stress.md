@@ -36,7 +36,7 @@ Each scenario checks these **rules** at the end. Breaking one fails the scenario
   cleanup succeeded but its end mark is missing.
 
 **Speed only fails on a gross regression.** Each scenario has generous limits (at least so many
-tasks a second, the master's round under 5 s at the 99th percentile (10 s in scenario 24), a
+tasks a second, the master's round under 5 s at the 99th percentile (7 s in scenarios 1 and 6, 10 s in scenario 24), a
 task starting within 30 s of its assignment, …). Shared CI machines vary too much for tight limits; the exact numbers
 are in the report.
 

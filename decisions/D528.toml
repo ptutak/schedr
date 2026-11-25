@@ -1,0 +1,16 @@
+title = "A cleanup let through is still moved after its worker is lost: at least once"
+date = 2026-11-26
+by = "user"
+status = "active"
+topic = "cleanup"
+section = "Moving and disconnection"
+summary = '''
+A `cleanup_anywhere` cleanup the master answered `go` for (decision 504) is still moved once its worker is
+lost, after the lease and the move wait: it runs at least once, and two may overlap when the first
+worker was frozen, not dead. Open in decision 504, settled for M5.3b. Not chosen: never moved after a
+`go` (at most once: a `go` that never arrived, or a worker dying at the start, leaves it unrun); moved,
+with the worker reporting the start past its barrier (a protocol message).
+'''
+history = "JOURNAL.md#D528"
+step = "M5.3b"
+code = []
