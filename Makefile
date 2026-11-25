@@ -588,6 +588,10 @@ STRESS_STATEMENTS ?=
 # `STRESS_RELEASE=1`: the roles run the release build, not the unoptimized test profile's.
 STRESS_RELEASE ?=
 STRESS_CARGO = $(if $(STRESS_RELEASE),--cargo-profile release)
+# `STRESS_TMPFS=1`: Postgres's data and the roles' folders (the workers' journals and logs) in
+# memory, to tell a slow disk from a slow machine; never for numbers to keep.
+STRESS_TMPFS ?=
+comma := ,
 
 stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
 	@set -e; \
@@ -597,7 +601,8 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	$(CONTAINER) network create $$net >/dev/null; \
 	trap '$(CONTAINER) rm -f '$$pg' '$$bouncer' >/dev/null; $(CONTAINER) network rm '$$net' >/dev/null' EXIT; \
 	$(CONTAINER) run -d --rm --name $$pg --network $$net -e POSTGRES_PASSWORD=schedr \
-		-p 127.0.0.1::5432 $(POSTGRES_IMAGE) -c max_connections=500 \
+		-p 127.0.0.1::5432 $(if $(STRESS_TMPFS),--tmpfs /var/lib/postgresql/data:rw$(comma)size=2g) \
+		$(POSTGRES_IMAGE) -c max_connections=500 \
 		$(if $(STRESS_STATEMENTS),-c shared_preload_libraries=pg_stat_statements \
 			-c pg_stat_statements.max=10000) >/dev/null; \
 	$(CONTAINER) run -d --rm --name $$bouncer --network $$net -e DB_HOST=$$pg \
@@ -613,6 +618,7 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	export SCHEDR_TEST_PYTHON=$$(uv run python -c 'import sys; print(sys.executable)'); \
 	export SCHEDR_STRESS_PROFILE=$(STRESS_PROFILE); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
+	$(if $(STRESS_TMPFS),TMPDIR=$$(mktemp -d /dev/shm/schedr-stress.XXXXXX); export TMPDIR;) \
 	rc=0; cargo nextest run -p schedr --test stress $(STRESS_CARGO) --test-threads 1 --no-fail-fast \
 		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)') || rc=$$?; \
 	$(if $(STRESS_STATEMENTS),mkdir -p target/stress; \
