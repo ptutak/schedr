@@ -4,10 +4,12 @@
 updated = 2026-11-25
 
 in_progress = [
-    "R1.2: 1.2.0 released 2026-11-25 (PyPI, ghcr.io, GitHub). Left: the numbers of the full Stress run on CI against v1.2.0 (run 45511092157, ended 2026-11-25) put on the stress page. Scenario 24 failed there on its round p99 (5.793 s; limit now 10 s, investigated in M5.3e); scenario 25 was stopped at 150 minutes (its parts now a quarter): both to run again on CI after the push. Then M5.3 (a to e).",
+    "R1.2 done: 1.2.0's numbers on the stress page. Next: M5.3 (a to e); M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).",
 ]
 
 waiting = [
+    "Reading AI_INSTRUCTIONS.md, AI_SETUP.md, AI_PROJECT.md and the stress page's new section, then the push (the four skills' commits with it).",
+    "Scenario 1's and 6's round limit: leave at 5 s or raise to 6.",
 ]
 
 rules = [

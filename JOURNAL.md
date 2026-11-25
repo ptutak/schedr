@@ -3712,3 +3712,23 @@ the full profile (250 DAGs of 15 tasks and one of 1,250, 5,000 tasks; the same 8
 slots), the quick profile as it was (`Load::quarter`). `_plain` is then no longer scenario 1 at
 full size. Not chosen: a CI job per part (different machines, so the ratios mean less), only the
 slow parts smaller (the ratios compare different sizes), a longer timeout.
+
+### 2026-11-25: CI's Stress workflow, at most 10 scenarios at once; 1.2.0's numbers; what a run can show
+
+The Stress workflow runs at most 10 scenarios at once, the longest first, one run at a time (the
+user): CI's own jobs keep runners, a full run took 70 minutes. Not chosen: one scenario at a time
+(about 10 hours; each has a runner of its own, so the numbers gain nothing), fixed groups (a group
+waits for its slowest).
+
+The full run on `7b429d78` (1.2.0's product code) failed 1 and 6 on the round's p99 (5.79 s, limit
+5; 4.10 s on 1.2.0: adjacent histogram steps) and 21 on its cleanup check, which was wrong
+(fixed: a try stopped after 39 ms, never seen by the harness, was given its cleanup's end). 24 and
+25 passed. Scenario 1 looked slower than in 1.2.0's and earlier runs (40.3 against 49.0, and 75.0
+alone in the quick profile against 112.2), and slower on the laptop (54.7 and 50.3 against 75.8 on
+20 November). Nothing in the code: the commit of the 75.8 (`63f7f09b`) gave 62.9 and 38.1 here
+today, and one CI run's rerun gave 106.0 for its 75.0. Closed by the user: runs of the same code
+differ that much. The stress page says so and gives 1.2.0's numbers (R1.2's last part).
+
+`a_test_masks_a_short_secret_when_the_configuration_says_so` failed `make check` twice: its secret
+`1234` was in a run's ID (a UUIDv7 starts with its time), a window of about a minute. The secret is
+now one no ID can contain.

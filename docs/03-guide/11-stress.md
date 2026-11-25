@@ -644,3 +644,56 @@ reach the master in 13 to 26 ms, a notification or not; a Python plugin's run (r
 service call and a 0.1 s sleep) takes 0.42 s, a shell plugin's 0.25 s, about 30 ms a
 `schedr task-ctx` call, which is nearly all the 115 MB binary's start (an idea logged for it:
 a small `schedr-ctx`, M5.3c).
+
+## After M5.2: 1.2.0 on CI (2026-11-25)
+
+The first release measured on CI only: the Stress workflow, the **full** profile, on GitHub's
+standard runners, each scenario alone on a runner of its own (run 45511092157, `v1.2.0`). Scenarios
+24 and 25 are from `main` after it (run 45611367793, `7b429d78`), the same product code: 24 failed
+on 1.2.0's run only by its round limit, since raised to 10 s, and 25 was stopped there at CI's 150
+minutes, since run at a quarter of its size. The numbers don't compare with the tables above, which
+are the quick profile on a laptop.
+
+| Scenario | Tasks | Tasks a second | A run, p50 / p99 | A round, p99 |
+|---|---|---|---|---|
+| 1 throughput | 21,001 | 49.0 | 160 / 336 s | 4.10 s |
+| 1c mixed lengths | 2,640 | 38.7 | 33 / 51 s | 1.45 s |
+| 3 worker churn | 660 | 10.7 | 22 / 58 s | 0.72 s |
+| 4 master failover | 660 | 17.4 | 29 / 37 s | 0.09 s |
+| 5 database stall | 660 | 17.9 | 27 / 37 s | 0.36 s |
+| 6 through PgBouncer | 21,001 | 42.3 | 189 / 422 s | 4.10 s |
+| 6 PgBouncer failover | 660 | 16.7 | 30 / 39 s | 0.26 s |
+| 7 rolling restart | 540 | 10.3 | 41 / 51 s | 0.36 s |
+| 9 standalone on SQLite | 1,100 | 50.5 | 12 / 19 s | 0.26 s |
+| 9b, 32 slots | 1,100 | 84.8 | 7 / 8 s | 0.72 s |
+| 10 soak | 20,820 | 5.8 | 2.9 / 4.5 s | 0.06 s |
+| 11 heavy output | 510 | 9.3 | 28 / 51 s | 1.45 s |
+| 12 memory watchdog | 200 | 7.7 | 12 / 24 s | 0.13 s |
+| 13 Python, spawned | 3,200 | 11.2 | 251 / 278 s | 1.45 s |
+| 13 Python, forked | 3,200 | 87.9 | 30 / 32 s | 0.72 s |
+| 16 concurrency limits | 3,200 | 11.6 | 256 / 275 s | 2.05 s |
+| 24 many triggers (`main`) | 11,500 | 32.5 | 257 / 300 s | 5.79 s |
+| 25 extension tasks reporting (`main`) | 5,000 | 13.5 | 172 / 370 s | 0.72 s |
+| 25 its command tasks (`main`) | 5,251 | 76.8 | 36 / 49 s | 2.05 s |
+
+Scenario 1's and 6's 21,001 tasks keep every slot full for minutes; the quick profile's 2,501 give
+far higher rates (below).
+
+| Cut and chaos scenarios | Lost attempts | Tries run twice |
+|---|---|---|
+| 17 silent cut | 3 | 0 |
+| 18 one-way cut | 7 | 0 |
+| 19 slow link | 0 | 0 |
+| 20 frozen worker | 3 | 0 |
+| 21 random chaos | 135 | 0 |
+| 21b random chaos, extension tasks | 159 | 1, as decision 280 allows |
+
+**Between runs, the runner decides.** Scenario 1 in the quick profile (2,501 tasks), alone, on CI
+gave 112.2, 72.6 and 86.3 tasks a second on `3dc2936b` (24 November) and 75.0, 69.7, 74.5 and 106.0
+on `7b429d78`: the 75.0 and the 106.0 are one run and its rerun. The full profile on 1.2.0's code
+gave 49.0, then 40.3. So one run against another can't show a change of a third; compare medians of
+several, of the same profile. A round's p99 is read from buckets a square root of 2 apart (2.05,
+2.90, 4.10, 5.79, 8.19 s): one step is the smallest change it shows. On `main`'s run scenarios 1 and
+6 read 5.79 s and failed their limit of 5 s, with the product code of 1.2.0, where they read 4.10 s.
+Scenario 21 failed there too, its check mistaken: a try stopped after 39 ms, between two of the
+harness's looks, was given the end of its cleanup, and has its worker's own time since.

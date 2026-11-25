@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-25)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** R1.2, Release 1.2.0. Done when: 1.2.0 on PyPI and its images on ghcr.io; CI's Stress workflow's numbers for 1.2.0 on the stress page (the user, 2026-11-24: CI's stress runs after the push, no local comparison against 1.1.0)
-- **Then:** M5.3a, M5.3b, M5.3c, M5.3d, M5.3e.
+- **Next step:** M5.3a, Hot standby masters in the chart. Done when: with `master.replicas: 2` on Postgres, the leading master pod killed: the other takes the lease within the lease period, the workers reconnect through the Service, and a run under way finishes with its attempts kept; the chart's default unchanged
+- **Then:** M5.3b, M5.3c, M5.3d, M5.3e, M6.1.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -19,17 +19,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D522 (2026-11-24): a trigger's own cancel grace
 - DN38 (2026-11-23): A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it (adds to D280)
 - DN37 (2026-11-23): A worker able again (its extension's service ready, or new code) gives the tasks its refusals made unschedulable another chance (adds to D518)
+- R1.2 (2026-11-25): Release 1.2.0
 - M5.2k (2026-11-24): The bugs found and left before 1.2.0 fixed
 - M5.2j (2026-11-24): Runs and DAGs in numbered pages (decision 517)
-- M5.2cB4 (2026-11-24): The path from a task's result to its slot's next assignment
 
 ## In progress
 
-- R1.2: 1.2.0 released 2026-11-25 (PyPI, ghcr.io, GitHub). Left: the numbers of the full Stress run on CI against v1.2.0 (run 45511092157, ended 2026-11-25) put on the stress page. Scenario 24 failed there on its round p99 (5.793 s; limit now 10 s, investigated in M5.3e); scenario 25 was stopped at 150 minutes (its parts now a quarter): both to run again on CI after the push. Then M5.3 (a to e).
+- R1.2 done: 1.2.0's numbers on the stress page. Next: M5.3 (a to e); M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
 
 ## Waiting for the user
 
-Nothing.
+- Reading AI_INSTRUCTIONS.md, AI_SETUP.md, AI_PROJECT.md and the stress page's new section, then the push (the four skills' commits with it).
+- Scenario 1's and 6's round limit: leave at 5 s or raise to 6.
 
 ## Rules in force
 

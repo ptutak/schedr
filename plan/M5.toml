@@ -712,9 +712,8 @@ scope = '''
 done_when = '''
 1.2.0 on PyPI and its images on ghcr.io; CI's Stress workflow's numbers for 1.2.0 on the stress page (the user, 2026-11-24: CI's stress runs after the push, no local comparison against 1.1.0)
 '''
-status = "planned"
-# Released 2026-11-25 (1.2.0rc1, rc2 for B292's change to migration 0003, then 1.2.0: PyPI,
-# ghcr.io, the GitHub release). Left: CI's Stress workflow's numbers for 1.2.0 on the stress page.
+status = "done"
+done = 2026-11-25
 
 [[steps]]
 id = "M5.3a"

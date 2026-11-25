@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** R1.2, Release 1.2.0.
+**Next:** M5.3a, Hot standby masters in the chart.
 
 ## M0: Foundations
 
@@ -285,8 +285,8 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | M5.2i3 | Idea, to discuss: `@async_extension`, a long-lived controller serving an extension's tasks | dropped | D512 |
 | M5.2j | Runs and DAGs in numbered pages (decision 517) | done 2026-11-24 | D517 |
 | M5.2k | The bugs found and left before 1.2.0 fixed | done 2026-11-24 | D522 |
-| R1.2 | Release 1.2.0 | **next** |  |
-| M5.3a | Hot standby masters in the chart | planned |  |
+| R1.2 | Release 1.2.0 | done 2026-11-25 |  |
+| M5.3a | Hot standby masters in the chart | **next** |  |
 | M5.3b | A started cleanup's move, after its worker is lost | planned |  |
 | M5.3c | A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster | planned |  |
 | M5.3d | Extension tasks placed by the plugins workers offer, beside their queue | planned |  |
