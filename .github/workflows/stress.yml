@@ -18,6 +18,12 @@ on:
         default: ""
         type: string
 
+# One run at a time: the cap below is per run. A run waits for the one before it, never cancels
+# it; GitHub keeps one waiting, so a third started meanwhile replaces the second.
+concurrency:
+  group: stress
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: read
@@ -61,6 +67,17 @@ jobs:
               names += re.findall(r"#\[test\]\s*\nfn (stress_\w+)\(", path.read_text())
           wanted = os.environ.get("FILTER", "")
           names = sorted(n for n in names if not wanted or re.search(wanted, n))
+          # The longest first (29 minutes and more in v1.2.0's full run), so that under the cap
+          # none starts near the end and makes the run longer; the others as they are named.
+          longest = [
+              "stress_25_extension_throughput",
+              "stress_10_soak",
+              "stress_15_change_signals",
+              "stress_21b_random_chaos_extensions",
+              "stress_15c_change_signals_python",
+              "stress_21_random_chaos",
+          ]
+          names.sort(key=lambda n: longest.index(n) if n in longest else len(longest))
           print("scenarios=" + json.dumps(names))
           PY
 
@@ -71,6 +88,9 @@ jobs:
     timeout-minutes: 150
     strategy:
       fail-fast: false
+      # Room for CI's own jobs beside a full run (the user, 2026-11-25): without
+      # a limit about 20 scenarios started at once and the others waited for a runner.
+      max-parallel: 10
       matrix:
         scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
     name: ${{ matrix.scenario }}
