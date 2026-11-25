@@ -3820,3 +3820,9 @@ elsewhere (B297 to B300), with the chart's hot standby masters. On its code: `ma
 on images built here (version 1.2.0's name, the same Rust code). Scenario 1 quick with everything in
 memory (`STRESS_TMPFS`) gave 67.9 and 69.7 tasks a second against 63.4 and 59.2 on disk, in turn: the
 disk isn't what limits it.
+
+The four kind scripts then passed on 1.2.1's released images (`ghcr.io/ptutak/schedr:1.2.1`), which
+ends R1.2.1. 1.3.0's steps got their decisions the same evening: `schedr-ctx` only at half of `schedr`'s
+start or less, `schedr task-ctx` kept, both on one code; the chaos on kind with all sixteen faults the
+user asked for, the first four built first, nightly in the Stress workflow, and its record complete
+enough to read a failure without running it again (the seed alone won't replicate one).

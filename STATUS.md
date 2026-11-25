@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-25)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** R1.2.1, Release 1.2.1. Done when: 1.2.1 on PyPI and its images on ghcr.io; `scripts/kind-standby.sh` and the other kind scripts passing on its images built here; CI's Stress cut scenarios (17-21) and failover (4, 5) passing on its commit
-- **Then:** M5.3h, M5.3g, M5.3f, M5.3b, M5.3d.
+- **Next step:** M5.3h, One kind test on CI by hand, on 1.2.1's images. Done when: `kind-standby.sh` passing on CI against 1.2.1's images three times in a row
+- **Then:** M5.3g, M5.3f, M5.3b, M5.3d, M5.3c.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 3; first: B301 (high/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -19,18 +19,18 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D525 (2026-11-25): connections are numbered in `Register`
 - D524 (2026-11-25): a worker leaves a master that accepts it and says nothing
 - D523 (2026-11-25): hot standby masters in the chart: `Recreate` kept, migrating when leading
+- R1.2.1 (2026-11-25): Release 1.2.1
 - R1.2 (2026-11-25): Release 1.2.0
 - M5.3a (2026-11-25): Hot standby masters in the chart
-- M5.2k (2026-11-24): The bugs found and left before 1.2.0 fixed
 
 ## In progress
 
-- 1.2.1 is out (2026-11-25: PyPI, images, GitHub). Left of R1.2.1: the kind scripts on its released images. Next: 1.3.0, from M5.3h. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
+- M5.3h: the Kind workflow (.github/workflows/kind.yml) pushed; next: run it by hand three times on 1.2.1's images. M5.3e also has scenario 1's and 6's round limit (5 s is between two histogram steps, 4.10 and 5.79).
 
 ## Waiting for the user
 
 - Scenario 1's and 6's round limit: leave at 5 s or raise to 6.
-- A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror, branches perf/75-tasks and backup/m5.3a kept or not: proposed, not planned.
+- A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror: proposed, not planned.
 
 ## Rules in force
 

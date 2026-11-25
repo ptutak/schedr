@@ -7,7 +7,8 @@
 #
 # The context is always kind-schedr-standby; any other CLUSTER is refused. The cluster is created
 # when missing and deleted at the end by the run that created it (KEEP=1 keeps it). Not part of
-# `make check` or CI. Shared pieces live in scripts/kind-lib.sh.
+# `make check`; on CI by hand, the Kind workflow, on a release's images. Shared pieces live in
+# scripts/kind-lib.sh.
 #
 # Usage: scripts/kind-standby.sh     (the images `make image` and `make server-image` built)
 #   IMAGE, SERVER_IMAGE  as the container tool names them, e.g. a release's:

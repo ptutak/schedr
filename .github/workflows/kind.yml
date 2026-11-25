@@ -1,0 +1,72 @@
+name: Kind
+
+# The kind scripts on a runner, by hand (M5.3h): a kind cluster of the runner's own and a release's
+# images, so nothing is built. For now scripts/kind-standby.sh alone: a leading master crashes, its
+# standby takes over, no task or worker is lost. The other scripts and a commit's own images: M5.3f.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The release whose images run (a tag of ghcr.io/ptutak/schedr, with no v)"
+        required: true
+        default: "1.2.1"
+        type: string
+
+# One at a time: a later one waits.
+concurrency:
+  group: kind
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  standby:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+      # Ours, not whatever the runner's image has: kind's release names its node image by digest
+      # (kindest/node v1.37.0), and kubectl is of the same minor.
+      - name: kind and kubectl
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/bin/kind" \
+            https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/bin/kubectl" \
+            https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl
+          sha256sum --check --strict <<SUMS
+          aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/bin/kind
+          c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4  $RUNNER_TEMP/bin/kubectl
+          SUMS
+          chmod +x "$RUNNER_TEMP/bin/kind" "$RUNNER_TEMP/bin/kubectl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: The release's images
+        # The version through the environment, never pasted into the script.
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?(-alpine)?$ ]] || {
+            echo "not a release's version: $VERSION"; exit 1; }
+          for image in schedr schedr-server; do
+            docker pull -q "ghcr.io/ptutak/$image:$VERSION"
+          done
+          echo "IMAGE=ghcr.io/ptutak/schedr:$VERSION" >> "$GITHUB_ENV"
+          echo "SERVER_IMAGE=ghcr.io/ptutak/schedr-server:$VERSION" >> "$GITHUB_ENV"
+      - name: scripts/kind-standby.sh
+        # KEEP: the cluster stays for the logs below, gone with the runner.
+        run: CONTAINER=docker KEEP=1 scripts/kind-standby.sh
+      - name: What the cluster looked like
+        if: failure()
+        run: |
+          mkdir -p target/kind-logs
+          kind export logs --name schedr-standby target/kind-logs || true
+          kubectl --context kind-schedr-standby -n schedr get pods,events -o wide || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: kind-logs
+          path: target/kind-logs
