@@ -1,0 +1,18 @@
+title = "A worker leaves a connection whose heartbeats go unanswered, well before the lease"
+date = 2026-11-25
+by = "user"
+status = "active"
+topic = "workers"
+section = "Identity and connection"
+summary = '''
+A worker whose heartbeats go unanswered for 25 s (a hidden timing, at most half the lease) ends that
+connection and opens its next, which replaces the old one at the master (decision 525). It ends a
+connection, never a task: the last word heard, the lease and the cutoff stay as they are. What already
+waits on the connection is read before it is judged (a frozen worker waking). The master needs no
+check of its own. Not chosen: HTTP/2 keepalive on both ends (a second ping, answered while schedr's own
+loop is stuck); leaving it at the lease until the chaos on kind.
+'''
+history = "JOURNAL.md#D526"
+step = "M5.3g"
+also = ["protocol"]
+code = []

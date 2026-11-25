@@ -1,0 +1,22 @@
+title = "Connections are numbered: Register carries which connection of its process it is"
+date = 2026-11-25
+by = "user"
+status = "active"
+topic = "protocol"
+section = "Registration and messages"
+summary = '''
+Each worker process numbers its connections (1, 2, ... in memory, every try) in `Register`. Within one
+incarnation the master keeps the highest it has registered: a higher number replaces the old stream
+(closed, its queued messages dropped as a replaced one's), a lower or equal one is refused, live or not,
+and changes nothing. A new master learns it from the first it sees: nothing is stored. No exception
+for a worker that sends no number (1.2.x reads as 0): registered once, its next `Register` is equal and
+refused, so workers are upgraded with the master (the user). Another incarnation is refused while a
+stream is live, as before. The full order: lease epoch, incarnation, connection, sequence. An additive protocol field
+(2.3). Not chosen: HTTP/2 keepalive instead (the other end: decision 526); judging the old stream by its silence when the same
+process asks again; the incarnation alone replacing (a `Register` held on its way would win, its older
+journal taken as the truth); the number stored with the worker; 0 keeping the live-stream refusal; protocol 3.0.
+'''
+history = "JOURNAL.md#D525"
+step = "M5.3g"
+also = ["workers"]
+code = []

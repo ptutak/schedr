@@ -1,0 +1,16 @@
+title = "An extension task no live worker offers waits with its reason, then ends unschedulable"
+date = 2026-11-25
+by = "user"
+status = "active"
+topic = "assignment"
+section = "Placement and ordering"
+summary = '''
+An extension task is given only to workers of its queue that offer its extension's name and version. One
+that no live worker offers waits, its waiting reason naming the queue and the version, and ends
+`unschedulable` after a while: a rolling upgrade's gap is survived, a typo fails in the end. Not chosen:
+waiting without end; failing at once; queues generated from `name@version` (a queue says where, the
+plugin who can).
+'''
+history = "JOURNAL.md#D527"
+step = "M5.3d"
+code = []

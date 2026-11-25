@@ -38,12 +38,13 @@ with Dag(
 
 ## Status
 
-**1.2.0 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
+**1.2.1 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
 stable one, brought M1 to M4B of `PLAN.md`: standalone and distributed, the fork server, the
 web UI and the native API. 1.1.0 added M5.1: a faster master (34-67 % more tasks a second in
 the stress suite than 1.0.0) and metrics in the web UI. 1.2.0 adds M5.2: a faster master again
 (107-112 tasks a second in the stress suite's throughput scenario on CI's runner) and
-extensions, task kinds run by a plugin in any language, with a Kubernetes plugin. Within 1.x the database schema changes
+extensions, task kinds run by a plugin in any language, with a Kubernetes plugin; 1.2.1 gives every connection between
+its processes a time limit, and the chart hot standby masters. Within 1.x the database schema changes
 only through new migrations (`schedr db migrate`), and the protocol between schedr's processes
 (2.x) only additively, so the master is upgraded first; DAG JSON, the REST API and the
 configuration keep accepting what they accept now. Upgrading from the 0.1.0 preview needs a

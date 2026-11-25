@@ -78,6 +78,9 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D527 | 2026-11-25 | user | planned (M5.3d) | assignment | An extension task no live worker offers waits with its reason, then ends unschedulable |
+| D526 | 2026-11-25 | user | planned (M5.3g) | workers | A worker leaves a connection whose heartbeats go unanswered, well before the lease |
+| D525 | 2026-11-25 | user | planned (M5.3g) | protocol | Connections are numbered: Register carries which connection of its process it is |
 | D524 | 2026-11-25 | user | built (B297 fixed) | workers | A worker leaves a master that accepts it and says nothing: connecting and registering have limits |
 | D523 | 2026-11-25 | user | built M5.3a | deployment | Hot standby masters in the chart: master.replicas with Recreate, migrating when leading |
 | D522 | 2026-11-24 | user | built M5.2k | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |
@@ -616,6 +619,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### assignment
 
+- D527: An extension task no live worker offers waits with its reason, then ends unschedulable
 - D509: A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster
 - D506: The round's slow parts on due flags; what is read before the lock is only what the round alone writes
 - D502: One probe a round; a read skipped on it after a write wakes the next round
@@ -906,6 +910,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### protocol
 
+- D525: Connections are numbered: Register carries which connection of its process it is
 - D460: Both sides number their messages and echo the other's; an assignment is taken back only once its worker's messages show it never started
 - D258: The master acknowledges each worker heartbeat
 - D62: Parse results stream one file per message
@@ -1146,6 +1151,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### workers
 
+- D526: A worker leaves a connection whose heartbeats go unanswered, well before the lease
 - D524: A worker leaves a master that accepts it and says nothing: connecting and registering have limits
 - D512: One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them
 - D507: A worker's journal writes beside its loop; a start in flight holds its assignment unreported

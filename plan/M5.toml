@@ -739,13 +739,24 @@ done_when = '''
 status = "planned"
 
 [[steps]]
-id = "M5.3g"
-title = "A silent connection noticed before the lease"
+id = "M5.3h"
+title = "One kind test on CI by hand, on 1.2.1's images"
 scope = '''
-(option B of B297's question, left for after 1.2.1 by the user, 2026-11-25) an open worker stream whose other end died silently (a node's death, packets dropped) is noticed at the lease only, on both ends: the worker's read waits for it, and the master refuses the worker's next try on a new connection ("already has a live stream") until it runs out. HTTP/2 keepalive pings on both ends are the proposal; to settle: their interval against the heartbeat, what a proxy or mesh makes of them, or a number in `Register` by which a newer registration replaces an older one's stream (the incarnation alone isn't enough: a `Register` held on its way would replace a newer one, its older journal taken as the truth). Fixes B301 (high; the user, 2026-11-25: after 1.2.1)
+(the user, 2026-11-25: "we'll test latest patch release with it"; M5.3f's first part, before M5.3g so that has kind on CI to be tested by) a hand-run workflow with `kind-standby.sh` on 1.2.1's released images, no build: whether the runner has what it takes, the pins (kind, its node image, kubectl, helm), the slack the takeover limit needs
 '''
 done_when = '''
-a worker whose connection died silently is registered again by the same master within its lease, its tasks kept; a stress scenario shows it (a cut whose old connection never closes, the new one let through)
+`kind-standby.sh` passing on CI against 1.2.1's images three times in a row
+'''
+status = "planned"
+
+[[steps]]
+id = "M5.3g"
+title = "Connections numbered: a worker's new one replaces its dead one"
+scope = '''
+(option B of B297's question, left for after 1.2.1 by the user, 2026-11-25) an open worker stream whose other end died silently (a node's death, packets dropped) is noticed at the lease only, on both ends: the worker's read waits for it, and the master refuses the worker's next try on a new connection ("already has a live stream") until it runs out. decided (D525): connections numbered in `Register`. First a test of what a stale journal, accepted after a disconnect, changes today; then the failing test of B301 (a stream that never closes, the new connection let through), the field, stress 18 and 21 and a scenario of its own. A worker with no number gets no exception: the refusal's message, the release notes, the README's and the guide's lines on 2.x say to upgrade the workers with the master. Second part (D526): a worker leaves a connection whose heartbeats go unanswered for 25 s (hidden, at most half the lease) and opens its next; checked against a stalled master, a paused one and a frozen worker, with the master-stall scenarios. Fixes B301 (high; the user, 2026-11-25: after 1.2.1)
+'''
+done_when = '''
+a worker whose old connection never closed at the master is registered again by it at once, its tasks kept, and a `Register` held on its way and arriving late changes nothing, live or not; a worker whose link died both ways is registered again within its lease, its tasks kept; stress scenarios show each
 '''
 status = "planned"
 
@@ -753,10 +764,10 @@ status = "planned"
 id = "M5.3f"
 title = "The kind tests on CI, then chaos on kind"
 scope = '''
-(the user, 2026-11-25, after B296 was found only because a kind test ran, and B295 sat unseen since 2026-11-11) a GitHub Actions workflow running the kind scripts (`kind-standby.sh`, then `kind-distributed.sh`, `kind-kill.sh`, `kind-standalone.sh`), by hand and nightly or before a release rather than on each push; first by hand on 1.2.1's released images, which needs no build, then on images of the commit, from CI's wheel. To settle when it starts: which runs when, the pins (kind, its node image, kubectl, helm), and how much slack the takeover limits need on a shared runner; whether the runner has what it takes is checked first (kind's and Docker's presence isn't verified yet). Then, as its second part, chaos on kind (the user, 2026-11-25: "the flakiness is what we invite, first - the test has to show something breaking", "what shouldn't change is the guarantees of our product so the test has to test exactly that, so probably less timing tests, more correctness tests"): a seeded schedule of faults a loopback proxy can't make, on a cluster of several nodes: a node's death (a master's, a worker's), packets dropped between a worker and the master and to Postgres, one way or both, Postgres restarted, a worker evicted or moved, DNS gone. It checks the guarantees page's statements and the stress suite's invariants only (no task run twice but as decisions 280 and 460 allow, none lost or left running, a cleanup once, no run stuck), not how fast it is. Of time there are three kinds (agreed with the user, 2026-11-25, on B296: a missing limit that broke a guarantee): how fast something is (tasks a second, a round's p99) is not checked here; a time schedr's own rules depend on is, as part of the guarantee (a fault shorter than the lease loses nothing, past it the cleanup moves once), so the schedule notes when each fault began and ended and the checks read it, with a margin; that something happens at all (a worker back, a run ended) is, with a generous limit, as "never" is told from "not yet" only by waiting. The tasks' marks go where pods can all write (a Postgres table, say), as the suite's shared file can't. A failure must be told apart from a fault: the seed, the timeline, the roles' logs and the database kept. To settle: which faults first (a node's death, dropped packets, Postgres restarted are proposed) and what each guarantee's check reads
+(the user, 2026-11-25, after B296 was found only because a kind test ran, and B295 sat unseen since 2026-11-11) a GitHub Actions workflow running the kind scripts (`kind-standby.sh`, then `kind-distributed.sh`, `kind-kill.sh`, `kind-standalone.sh`), by hand and nightly or before a release rather than on each push; its first run by hand is M5.3h's; here on images of the commit, from CI's wheel. To settle when it starts: which runs when, the pins (kind, its node image, kubectl, helm), and how much slack the takeover limits need on a shared runner; whether the runner has what it takes is checked first (kind's and Docker's presence isn't verified yet). Then, as its second part, chaos on kind (the user, 2026-11-25: "the flakiness is what we invite, first - the test has to show something breaking", "what shouldn't change is the guarantees of our product so the test has to test exactly that, so probably less timing tests, more correctness tests"): a seeded schedule of faults a loopback proxy can't make, on a cluster of several nodes: a node's death (a master's, a worker's), packets dropped between a worker and the master and to Postgres, one way or both, Postgres restarted, a worker evicted or moved, DNS gone. It checks the guarantees page's statements and the stress suite's invariants only (no task run twice but as decisions 280 and 460 allow, none lost or left running, a cleanup once, no run stuck), not how fast it is. Of time there are three kinds (agreed with the user, 2026-11-25, on B296: a missing limit that broke a guarantee): how fast something is (tasks a second, a round's p99) is not checked here; a time schedr's own rules depend on is, as part of the guarantee (a fault shorter than the lease loses nothing, past it the cleanup moves once), so the schedule notes when each fault began and ended and the checks read it, with a margin; that something happens at all (a worker back, a run ended) is, with a generous limit, as "never" is told from "not yet" only by waiting. The tasks' marks go where pods can all write (a Postgres table, say), as the suite's shared file can't. A failure must be told apart from a fault: the seed, the timeline, the roles' logs and the database kept. To settle: which faults first (a node's death, dropped packets, Postgres restarted are proposed) and what each guarantee's check reads
 '''
 done_when = '''
-the kind scripts passing on CI against 1.2.1's images three times in a row, and the workflow run by hand on a commit's own images; its place (nightly or release) the user's choice; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
+the workflow run by hand on a commit's own images; its place (nightly or release) the user's choice; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
 '''
 status = "planned"
 
@@ -772,6 +783,17 @@ the user's choice built and tested, the guarantees page saying it
 status = "planned"
 
 [[steps]]
+id = "M5.3d"
+title = "Extension tasks placed by the plugins workers offer, beside their queue"
+scope = '''
+(the user, 2026-11-25: "we can think about automatic queues for extensions based on name@version", then "record it in M5.3 after 1.2.0") today an extension task goes by its queue alone: a worker of the queue without the plugin, or not serving the task's exact version, gives it back with `EXTENSION_UNDEFINED` and the next is tried, until every one has refused and the task is `unschedulable`; the operator keeps the plugins and the queues in agreement by hand. Instead, a filter beside the queue, not generated `name@version` queues (a queue says where a task runs, the plugin what a worker can run: `queue="gpu"` with `spark@1.0` needs both): the dispatcher's `Needs` gains the task's extension and version, the worker registry the offers `Register.extensions` already sends (the master's connections keep them today only for the parse's warnings), and `eligible()` checks `(name, version)` in them beside `serves(queue)`. Extension tasks then need no `queue=` of their own; a rolling upgrade from 1.0 to 1.1 routes each pinned task to the workers still serving it; no config or protocol change. The give-back stays, for a plugin that crashed or a service not ready (DN29). Decided (D527): a task no live worker of its queue serves waits, its reason said ("no worker of queue `default` offers `spark@2.0`"), and ends `unschedulable` after a while. To settle when it starts: that while (a config key or the existing one), and how `explain_waiting` and the UI's task view say it
+'''
+done_when = '''
+an extension task assigned only to workers of its queue offering its name and version (a test with workers offering 1.0, 1.0 and 1.1, and none: each task to the right ones, no give-back); the user's choice for a task nobody serves built and said in its waiting reason; the guide's extensions page saying routing needs no queue of its own; stress 25 on CI unchanged or faster
+'''
+status = "planned"
+
+[[steps]]
 id = "M5.3c"
 title = "A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster"
 scope = '''
@@ -783,17 +805,6 @@ first, its premise measured: a small binary of `task-ctx`'s code alone against `
 status = "planned"
 
 [[steps]]
-id = "M5.3d"
-title = "Extension tasks placed by the plugins workers offer, beside their queue"
-scope = '''
-(the user, 2026-11-25: "we can think about automatic queues for extensions based on name@version", then "record it in M5.3 after 1.2.0") today an extension task goes by its queue alone: a worker of the queue without the plugin, or not serving the task's exact version, gives it back with `EXTENSION_UNDEFINED` and the next is tried, until every one has refused and the task is `unschedulable`; the operator keeps the plugins and the queues in agreement by hand. Instead, a filter beside the queue, not generated `name@version` queues (a queue says where a task runs, the plugin what a worker can run: `queue="gpu"` with `spark@1.0` needs both): the dispatcher's `Needs` gains the task's extension and version, the worker registry the offers `Register.extensions` already sends (the master's connections keep them today only for the parse's warnings), and `eligible()` checks `(name, version)` in them beside `serves(queue)`. Extension tasks then need no `queue=` of their own; a rolling upgrade from 1.0 to 1.1 routes each pinned task to the workers still serving it; no config or protocol change. The give-back stays, for a plugin that crashed or a service not ready (DN29). To settle when it starts (the user): a task no live worker of its queue serves waits, its reason said ("no worker of queue `default` serves `spark@2.0`"), placed when one registers, or ends `unschedulable` after a while (a typo in its version fails fast); and whether `explain_waiting` and the UI's task view say so
-'''
-done_when = '''
-an extension task assigned only to workers of its queue offering its name and version (a test with workers offering 1.0, 1.0 and 1.1, and none: each task to the right ones, no give-back); the user's choice for a task nobody serves built and said in its waiting reason; the guide's extensions page saying routing needs no queue of its own; stress 25 on CI unchanged or faster
-'''
-status = "planned"
-
-[[steps]]
 id = "M5.3e"
 title = "Scenario 24's long rounds investigated"
 scope = '''
@@ -801,5 +812,16 @@ scope = '''
 '''
 done_when = '''
 the slow rounds of a full scenario 24 explained by their trace (which, when, waiting for what), said in the journal; the user's choice on a fix and the limit taken
+'''
+status = "planned"
+
+[[steps]]
+id = "R1.3"
+title = "Release 1.3.0"
+scope = '''
+(the user, 2026-11-25) connections numbered and left when unanswered (M5.3g, protocol 2.3: formally additive, in effect the workers are upgraded with the master, which the notes say first), kind and chaos on CI (M5.3h, M5.3f), a started cleanup's move (M5.3b, in the same 2.3 if it needs a message), extension tasks placed by the plugins workers offer (M5.3d), `schedr-ctx` if measured faster (M5.3c). M5.3e beside it, shipped if it finds something
+'''
+done_when = '''
+1.3.0 on PyPI and its images on ghcr.io, a release candidate first if a migration is in it; the chaos on kind passing on its commit
 '''
 status = "planned"

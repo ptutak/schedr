@@ -3771,3 +3771,52 @@ The failover test kills the master with SIGKILL on its node, cordoned (a side ag
 delete let it give its lease up); the standby led 35 s after, both workers back at 49 s, the attempt
 kept. Stress 17b is the fault in the plain suite: an address that drops SYNs; 1 s with the fix, the
 kernel's retry without.
+
+### <a id="D525"></a>2026-11-25: connections are numbered in `Register` (decision 525)
+
+For B301 (a worker refused while the master holds its dead connection). The messages' numbers (B240)
+start again with each stream, `Register` always 0, so nothing the worker sends says which of two of its
+connections is newer. The user accepted a connection number. Claude proposed storing the highest with
+the worker's row for a failover; the user asked whether a new master can't just learn it: it can. A
+stale first one is replaced by the live worker's higher one, and a `Register` sent to the old master
+reaches the new one only through a proxy that holds a request and picks the master afterwards (reasoned,
+not tested). M5.3g first shows, by a test, what a stale journal accepted after a disconnect changes; if
+lasting damage, the user is asked again. Keepalive, for a worker whose master went silent, stays a
+choice of its own.
+
+The user, on 1.2.x workers: "we just keep the protocol rule strict and we dont' care that old workers
+on the master keep sending 0, new registers with the same number are just refused". Known cost: such a
+worker is refused from its first reconnect, until it or the master restarts, its tasks lost at the lease;
+the release notes and the upgrade page say to upgrade the workers with the master.
+
+### <a id="D526"></a>2026-11-25: a worker leaves a connection whose heartbeats go unanswered (decision 526)
+
+A link dead both ways without a word is noticed by the worker at the lease, when the master counts it
+lost. Claude first left it to keepalive, after M5.3f; with numbered connections (D525) the worker can
+act on what it has: the master answers each heartbeat as it arrives (D258). The user chose A, M5.3g's
+second part. To check in the step: a stalled master (all workers reconnect, the registration's doubling
+limit spacing them; each session's end gives its queued tasks back), a paused one (sends no answers), a
+frozen worker's waking.
+
+Not chosen: B, HTTP/2 keepalive on both ends; C, the lease as now until the chaos on kind.
+
+### <a id="D527"></a>2026-11-25: 1.3.0's scope; an extension task no one offers (decision 527)
+
+1.3.0, in order: one kind test on CI by hand (M5.3h, split from M5.3f), connections numbered and left
+when unanswered (M5.3g), kind and chaos on CI (M5.3f), a started cleanup's move (M5.3b), extension
+tasks placed by the plugins workers offer (M5.3d), `schedr-ctx` if measured faster (M5.3c). Claude
+first put M5.3d and M5.3c after it; the user finds them more interesting than lazy imports, which are
+crossed out ("I don't like the idea overall"). For M5.3d the user chose A: a task whose version no live
+worker offers waits with its reason said, then ends `unschedulable`.
+
+Not chosen: B, waiting without end (a typo waits forever); C, failing at once (each redeploy of the
+plugin's workers would fail tasks).
+
+### 2026-11-25: 1.2.1 released
+
+A patch release in a day, from a bug M5.3a's kind test found (B296) and the same gap agy's reviews found
+elsewhere (B297 to B300), with the chart's hot standby masters. On its code: `make check`, `make docs`,
+`make upgrade-check`, CI, Stress 4, 5 and 17 to 21b in the full profile on CI, and the four kind scripts
+on images built here (version 1.2.0's name, the same Rust code). Scenario 1 quick with everything in
+memory (`STRESS_TMPFS`) gave 67.9 and 69.7 tasks a second against 63.4 and 59.2 on disk, in turn: the
+disk isn't what limits it.
