@@ -134,15 +134,16 @@ impl Db {
         values.into_iter().flatten().collect()
     }
 
-    /// When each try of each task ended, by the database: `(run, task, try)` to nanoseconds.
-    fn ended(&self) -> HashMap<(String, String, u32), u128> {
+    /// When each try of each task ended, by the database: `(run, task, try)` to its end (a moved
+    /// cleanup's attempt ends with the cleanup), and how long its process ran by its worker.
+    fn ended(&self) -> HashMap<(String, String, u32), Ended> {
         let sql = AssertSqlSafe(format!(
-            "SELECT {}, ti.task_id, a.try_number, {} FROM attempts a \
-             JOIN task_instances ti ON ti.id = a.task_instance_id WHERE a.ended_at IS NOT NULL",
+            "SELECT {}, ti.task_id, a.try_number, {}, CAST(a.duration_ms AS BIGINT) \
+             FROM attempts a JOIN task_instances ti ON ti.id = a.task_instance_id WHERE a.ended_at IS NOT NULL",
             self.text("ti.run_id"),
             self.epoch("a.ended_at")
         ));
-        let rows: Vec<(String, String, i32, f64)> = self.runtime.block_on(async {
+        let rows: Vec<(String, String, i32, f64, Option<i64>)> = self.runtime.block_on(async {
             match &self.pool {
                 Pool::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
                 Pool::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
@@ -150,12 +151,15 @@ impl Db {
             .unwrap()
         });
         rows.into_iter()
-            .map(|(run, task, try_number, seconds)| {
+            .map(|(run, task, try_number, seconds, ran_ms)| {
                 let try_number = u32::try_from(try_number).unwrap();
                 // Whole microseconds, as the database keeps them.
                 let micros = (seconds * 1e6).round();
-                let ns = u128::from(micros_u64(micros)) * 1000;
-                ((run, task, try_number), ns)
+                let at = u128::from(micros_u64(micros)) * 1000;
+                let ran = ran_ms
+                    .and_then(|ms| u128::try_from(ms).ok())
+                    .map(|ms| ms * 1_000_000);
+                ((run, task, try_number), Ended { at, ran })
             })
             .collect()
     }
@@ -365,7 +369,7 @@ pub fn overlapping_tries_but(
             _ => entry.end = Some(ns),
         }
         if entry.end.is_none() {
-            entry.end = ended.get(&key).copied();
+            entry.end = ended.get(&key).map(|by_db| by_db.at);
         }
     }
     let mut by_task: BTreeMap<(String, String), Vec<&Try>> = BTreeMap::new();
@@ -475,6 +479,46 @@ fn a_cleanup_moved_while_its_result_was_stuck_may_run_again_but_not_on_its_worke
     ));
 }
 
+/// A try's end, by the database, in nanoseconds.
+#[derive(Debug, Clone, Copy)]
+struct Ended {
+    at: u128,
+    /// How long its process ran, by its worker; none where no worker said (one lost).
+    ran: Option<u128>,
+}
+
+/// When a try that left no `end` mark and was never seen alive ended: its `start` mark and how
+/// long its worker says it ran, else the database's end. That one comes with the cleanup's when
+/// a worker stopped the try and ran its cleanup (the run of 2026-11-25, scenario 21: a try
+/// stopped after 39 ms, between two of the harness's looks, its cleanup taken for beside it).
+fn unseen_end(start: Option<u128>, ended: Option<&Ended>) -> Option<u128> {
+    let ended = ended?;
+    Some(match (start, ended.ran) {
+        (Some(start), Some(ran)) => start + ran,
+        _ => ended.at,
+    })
+}
+
+#[test]
+fn a_try_stopped_between_two_looks_ended_after_the_time_its_worker_says() {
+    // Scenario 21 on CI, 2026-11-25: c0004's try 1 on w01.
+    let start = 1_795_609_620_783_108_717;
+    let cleanup = 1_795_609_621_036_030_955;
+    let end = |ran: Option<u128>| {
+        let at = 1_795_609_621_545_036_000;
+        unseen_end(Some(start), Some(&Ended { at, ran })).unwrap()
+    };
+    assert!(end(Some(39_000_000)) <= cleanup, "gone before its cleanup");
+    assert!(
+        end(Some(300_000_000)) > cleanup,
+        "one that ran on beside its cleanup is caught"
+    );
+    assert!(
+        end(None) > cleanup,
+        "no worker's word: the database's end, as strict as before"
+    );
+}
+
 /// One run of a try's cleanup, by its marks.
 struct CleanupRun {
     worker: String,
@@ -556,9 +600,9 @@ pub fn cleanup_problems(
         // not knowing, so it moved the cleanup as for one that may have run, decision 460):
         // nothing for its cleanup to overlap. The database's end is no help there: a moved
         // cleanup's attempt ends with the cleanup.
-        let task = tasks
-            .get(key)
-            .map(|(start, end, worker)| (*start, end.or_else(|| ended.get(key).copied()), worker));
+        let task = tasks.get(key).map(|(start, end, worker)| {
+            (*start, end.or(unseen_end(*start, ended.get(key))), worker)
+        });
         for run in runs.values() {
             match task {
                 None => {}
