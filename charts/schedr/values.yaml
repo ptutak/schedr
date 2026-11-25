@@ -319,6 +319,12 @@ clusterDomain: cluster.local
 
 # mode distributed: the roles' own settings (standalone uses the top-level ones).
 master:
+  # More than one (mode distributed): hot standbys. One leads; the others wait, not ready, so the
+  # Service reaches the leader alone, and one takes the lease when it dies (within the lease
+  # period, 30 s). They migrate when leading (`migration: initContainer` doesn't apply) and prefer
+  # different nodes (unless `affinity` is set). An upgrade stops them all, as it does one. A
+  # standby is never ready: `helm upgrade --wait` would wait for it until its timeout.
+  replicas: 1
   # Without Python: the schedr server image (images/schedr-server). Tag: the chart's appVersion.
   image:
     repository: ghcr.io/ptutak/schedr-server

@@ -39,6 +39,12 @@ app.kubernetes.io/component: {{ index . 1 }}
 {{- if and (eq .Values.mode "ui") (not .Values.ui.deployments) -}}
 {{- fail "mode ui shows deployments: list them in ui.deployments (name, url, and tokenSecret where there is no mTLS)" -}}
 {{- end -}}
+{{- if not (regexMatch "^[0-9]+$" (printf "%v" .Values.master.replicas)) -}}
+{{- fail (printf "master.replicas is a whole number, 0 or more, not `%v`" .Values.master.replicas) -}}
+{{- end -}}
+{{- if and (ne .Values.mode "distributed") (ne (int .Values.master.replicas) 1) -}}
+{{- fail "master.replicas belongs to mode distributed: the other modes run no master pods of their own" -}}
+{{- end -}}
 {{- if and (eq .Values.mode "distributed") (not (or .Values.database.postgres.host .Values.database.existingSecret)) -}}
 {{- fail "mode distributed needs Postgres: set database.postgres.host (or database.existingSecret); SQLite is for one pod" -}}
 {{- end -}}

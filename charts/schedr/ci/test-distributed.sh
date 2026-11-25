@@ -34,6 +34,47 @@ for template in worker master webserver; do
 done
 echo "ok: the roles, their Services, the budget, an account each"
 
+# Hot standbys (decision 523): one master as before; several wait as standbys and migrate when
+# leading, no init container waiting for the lease, on different nodes if they can.
+master() { helm template t "$CHART" --namespace ns "${PG[@]}" --show-only templates/master.yaml "$@"; }
+master > "$WORK/out.yaml"
+has "replicas: 1$" "one master by default"
+has 'args: \["master"\]' "one master migrated by its init container"
+lacks "podAntiAffinity" "one master"
+master --set master.replicas=2 > "$WORK/out.yaml"
+has "replicas: 2$" "two masters"
+has "type: Recreate" "two masters"
+has 'args: \["master", "--migrate"\]' "two masters migrating when leading"
+lacks "initContainers" "two masters"
+for part in preferredDuringSchedulingIgnoredDuringExecution "topologyKey: kubernetes.io/hostname"; do
+    has "$part" "two masters on different nodes"
+done
+# Its own label in the anti-affinity too (besides the selector, the pod's and the Service's).
+[ "$(grep -c 'app.kubernetes.io/component: master' "$WORK/out.yaml")" = 4 ] || fail "the anti-affinity's labels"
+master --set master.replicas=2 --set migration=onStart > "$WORK/out.yaml"
+has 'args: \["master", "--migrate"\]' "two masters, onStart"
+master --set migration=onStart > "$WORK/out.yaml"
+has 'args: \["master", "--migrate"\]' "one master, onStart"
+lacks "podAntiAffinity" "one master, onStart"
+master --set-string master.replicas=2 > "$WORK/out.yaml"
+has "replicas: 2$" "two masters as a string"
+has 'args: \["master", "--migrate"\]' "two masters as a string"
+master --set master.replicas=0 > "$WORK/out.yaml"
+has "replicas: 0$" "no master, scaled down"
+render --set master.replicas=2 -f "$CHART/ci/istio-values.yaml" --set mode=distributed --set tls.mode=mesh > "$WORK/out.yaml"
+has "replicas: 2$" "two masters in a mesh"
+master --set master.replicas=2 --set-json 'master.affinity={"nodeAffinity":{}}' > "$WORK/out.yaml"
+lacks "podAntiAffinity" "an affinity given is the one used"
+has "nodeAffinity" "an affinity given is the one used"
+refused --set master.replicas=2
+refused --set master.replicas=0
+refused --set mode=ui --set 'ui.deployments[0].name=etl' --set 'ui.deployments[0].url=http://etl:8080' --set master.replicas=2
+for bad in -1 1.5 two true null ""; do
+    refused "${PG[@]}" --set master.replicas="$bad"
+done
+render > "$WORK/out.yaml" # what the checks below read
+echo "ok: hot standby masters"
+
 # Secret storage: Vault on the workers only (they fetch secrets), with a projected token; the
 # `db` storage's key never (standalone's).
 VAULT=(--set secretStorage.vault.enabled=true --set secretStorage.vault.address=https://v:8200

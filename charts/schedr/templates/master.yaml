@@ -2,10 +2,12 @@
 {{- include "schedr.checkTls" . -}}
 {{- $fullname := include "schedr.fullname" . }}
 {{- $m := .Values.master }}
-# schedr master: the scheduling loop and the workers' gRPC service. One replica, replaced by
-# stopping the old one first (Recreate): it gives up the master's lease, so the new one can
-# take it and migrate (a second replica as a standby would stall every rollout, its migration
-# waiting for the lease the old master holds).
+{{- $standbys := gt (int $m.replicas) 1 }}
+# schedr master: the scheduling loop and the workers' gRPC service. Replaced by stopping the old
+# ones first (Recreate): the leader gives up the master's lease, so a new one can take it and
+# migrate (a rolling update would stall: only the leader is ready, and it would never go). With
+# more than one replica the others wait as hot standbys, not ready, and migrate when they lead:
+# an init container's migration would wait for the lease the leader holds (decision 523).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +15,7 @@ metadata:
   labels:
     {{- include "schedr.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ int $m.replicas }}
   strategy:
     type: Recreate
   selector:
@@ -42,7 +44,7 @@ spec:
       {{- with include "schedr.podSecurityContext" . | trim }}
       {{- . | nindent 6 }}
       {{- end }}
-      {{- if eq .Values.migration "initContainer" }}
+      {{- if and (eq .Values.migration "initContainer") (not $standbys) }}
       initContainers:
         # The schema migrated as a step of its own, holding the master's lease (`--wait`
         # waits out the lease of a master that died).
@@ -63,7 +65,7 @@ spec:
         - name: schedr
           image: "{{ $m.image.repository }}:{{ $m.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ $m.image.pullPolicy }}
-          {{- if eq .Values.migration "onStart" }}
+          {{- if or $standbys (eq .Values.migration "onStart") }}
           # Migrated by the master itself once it holds the lease, only a schema not up to date.
           args: ["master", "--migrate"]
           {{- else }}
@@ -120,9 +122,19 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with $m.affinity }}
+      {{- if $m.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml $m.affinity | nindent 8 }}
+      {{- else if $standbys }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "schedr.roleSelector" (list . "master") | nindent 20 }}
       {{- end }}
 ---
 # The workers' way to the master (its certificate names this Service's names).

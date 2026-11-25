@@ -63,7 +63,7 @@ standalone's pod goes, the roles come (a short downtime). Standalone's volume st
 
 | Role | Kubernetes | Image | Notes |
 |---|---|---|---|
-| master | a Deployment, **1 replica, `Recreate`** | `schedr-server` (`images/schedr-server`, 44 MB, no Python) | The old master stops (giving up the lease) before the new one starts. `migration`: an init container (`db migrate --wait`) or `onStart` (`master --migrate`). Its Service `<release>-master` (gRPC 8070). |
+| master | a Deployment, **`master.replicas` (1), `Recreate`** | `schedr-server` (`images/schedr-server`, 44 MB, no Python) | The old master stops (giving up the lease) before the new one starts. `migration`: an init container (`db migrate --wait`) or `onStart` (`master --migrate`). Its Service `<release>-master` (gRPC 8070). |
 | webserver | a Deployment, `webserver.replicas` (1) | `schedr-server` | The API's Service `<release>` (8080). Waits for its schema, so during an upgrade the old one serves until the new one is ready. The web UI is a separate role (below). |
 | workers | a **StatefulSet**, `worker.replicas` (2), one pod at a time on updates | `image` (the base image or yours) | A headless Service `<release>-worker`; each pod's `log_address` is its own DNS name; **a volume each** (`worker.persistence`: logs and the journal survive the pod moving); a PodDisruptionBudget (`worker.podDisruptionBudget`, at most 1 down); `terminationGracePeriodSeconds` mirrored into `[worker] termination_grace_period`; the DAGs (git-sync, `dags.files`) only here. |
 | ui | a Deployment, `ui.replicas` (1), with `ui.enabled` (the default) | `schedr-server` | The web UI over the release's own webserver (`default`) and `ui.deployments`. Its Service `<release>-ui` (8082). No database, no DAG code. |
@@ -563,16 +563,27 @@ What happens when it goes away depends on the mode.
   its own master refuses its worker ("not leading"), so nothing runs until the other master
   stops.
 - **Distributed mode on Postgres fails over without stopping the tasks.** Workers run them
-  on, reconnect, and send their results to whichever master leads next. The chart runs one
-  master pod (`strategy: Recreate`), so its failover is Kubernetes restarting that pod.
-- **A hot standby** (two masters running at once) works outside the chart: start a second
-  `schedr master` on the same database, and give the workers a `[worker] master_url` that
-  reaches only the master whose `/readyz` answers (a Service, or a load balancer with that
-  health check). The standby takes over within the lease period after a crash, at once after
-  a clean stop. Stress scenarios 4 and 5 test that takeover ([Stress tests](11-stress.md)),
-  and `make standalone-separate-ui` runs one on this machine, a small proxy standing in for
-  the Service ([On a laptop](#on-a-laptop)). The chart's `master.replicas` is planned after
-  1.1.0 (M5.3a).
+  on, reconnect, and send their results to whichever master leads next. With one
+  master pod (`master.replicas: 1`, the default) the chart's failover is Kubernetes restarting it.
+- **Hot standbys in the chart:** `master.replicas: 2` (mode distributed) runs a second master that
+  waits while the first leads. It is never ready, so the master Service reaches the leader alone.
+  When the leader dies the standby takes the lease, within the lease period (30 s) after a crash,
+  at once after a clean stop; the workers reconnect through the Service. Each master migrates the
+  schema once it leads (`--migrate`): the chart leaves out the migration init container, which
+  would wait for the leader's lease. The pods prefer different nodes, unless `master.affinity`
+  is set.
+  - **An upgrade stops them all** (`strategy: Recreate`), as it does one: tasks run on, and the
+    scheduling pauses until a new master leads.
+  - **`helm upgrade --wait` waits for the standby** until its timeout, as it is never ready: leave
+    `--wait` out, and watch `kubectl rollout status` of the webserver and the workers. For the
+    same reason Kubernetes marks the masters' Deployment `ProgressDeadlineExceeded` after ten
+    minutes; nothing is wrong.
+- **Outside the chart** start a second `schedr master` on the same database, and give the workers a
+  `[worker] master_url` that reaches only the master whose `/readyz` answers (a Service, or a load
+  balancer with that health check). Stress scenarios 4 and 5 test that takeover
+  ([Stress tests](11-stress.md)), `scripts/kind-standby.sh` the chart's on a local kind cluster of
+  its own, and `make standalone-separate-ui` runs one on this machine, a small proxy standing in
+  for the Service ([On a laptop](#on-a-laptop)).
 
 ## Killing the master or a worker
 
