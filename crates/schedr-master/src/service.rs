@@ -5,9 +5,9 @@
 //! to send (assignments, cancels, acknowledgements) is delivered through it, from a stream's
 //! messages and from the loop's ticks alike.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -27,6 +27,7 @@ use crate::dispatch::{AssignReads, Outgoing};
 use crate::lease::{Leadership, Renewal};
 use crate::metrics::MasterMetrics;
 use crate::problems::{ProblemKind, Problems};
+use crate::session::{Session, Sessions};
 
 #[cfg(test)]
 mod tests;
@@ -42,78 +43,6 @@ pub const STREAM_BUFFER: usize = 1024;
 /// assigning it, with room for writes from worker turns in between.
 #[cfg(any(test, feature = "testing"))]
 const FOLLOW_UP_ROUNDS: usize = 4;
-
-/// A worker's stream of messages. Sending never waits (see [`Hub::deliver`]).
-/// A worker's stream to it (B240): each message's `MasterClock.sequence` is taken and the
-/// message queued under one lock, by the core's deliveries and the reader's answers alike, so
-/// the numbers leave in order; `id` tells it from the worker's other streams.
-#[derive(Debug, Clone)]
-struct Outbound {
-    sender: mpsc::Sender<Result<pb::MasterMessage, Status>>,
-    /// The last number used.
-    numbers: Arc<std::sync::Mutex<u64>>,
-    id: u64,
-    /// Set once a newer connection of its worker replaced it (decision 525): its serving and
-    /// reading stop, and nothing it still brings counts (agy's review of M5.3g).
-    replaced: Arc<watch::Sender<bool>>,
-}
-
-impl Outbound {
-    fn new(sender: mpsc::Sender<Result<pb::MasterMessage, Status>>, id: u64) -> Self {
-        Self {
-            sender,
-            numbers: Arc::default(),
-            id,
-            replaced: Arc::new(watch::channel(false).0),
-        }
-    }
-
-    /// A newer connection of its worker replaced it: it ends, for the worker too if it still
-    /// hears it, and its serving and reading stop.
-    fn end_replaced(&self) {
-        self.replaced.send_replace(true);
-        let _ = self.sender.try_send(Err(Status::aborted(
-            "a newer connection of this worker replaced this stream",
-        )));
-    }
-
-    fn same_channel(&self, other: &Self) -> bool {
-        self.sender.same_channel(&other.sender)
-    }
-
-    /// Numbers `message` (stamped already) and queues it: its number. Not queued, the number
-    /// isn't used, and the message is dropped.
-    fn send(&self, message: pb::MasterMessage) -> Result<u64, mpsc::error::TrySendError<()>> {
-        numbered_send(&self.numbers, &self.sender, message)
-    }
-
-    /// Ends the stream with `status` (unnumbered: no message).
-    fn end(&self, status: Status) {
-        let _ = self.sender.try_send(Err(status));
-    }
-}
-
-/// Numbers `message` past the last of `numbers` and queues it on `sender`, under the lock.
-fn numbered_send(
-    numbers: &std::sync::Mutex<u64>,
-    sender: &mpsc::Sender<Result<pb::MasterMessage, Status>>,
-    mut message: pb::MasterMessage,
-) -> Result<u64, mpsc::error::TrySendError<()>> {
-    let mut last = numbers
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let number = *last + 1;
-    if let Some(clock) = message.clock.as_mut() {
-        clock.sequence = number;
-    }
-    // The unsent message isn't wanted back: only whether the stream is full or closed.
-    sender.try_send(Ok(message)).map_err(|error| match error {
-        mpsc::error::TrySendError::Full(_) => mpsc::error::TrySendError::Full(()),
-        mpsc::error::TrySendError::Closed(_) => mpsc::error::TrySendError::Closed(()),
-    })?;
-    *last = number;
-    Ok(number)
-}
 
 /// Whether the certificate a call came with names worker `worker_id` (decision 520,
 /// `[tls] worker_identity = "certificate"`): given the call's extensions (where the role puts
@@ -138,10 +67,9 @@ pub struct Hub {
     /// leaving takes waits for it instead of sleeping (agy's sixth review of M5.3g).
     #[cfg(test)]
     calls_dropped: Arc<std::sync::atomic::AtomicUsize>,
-    /// Each worker's current stream. Held only briefly (a send never waits), so the core's
-    /// lock, which can be held while waiting for it, never waits on a slow worker; a delivery
-    /// goes out whole under it, one after another.
-    streams: Arc<Mutex<BTreeMap<String, Outbound>>>,
+    /// Each worker's session (its current stream), read without a lock; the core writes it
+    /// (M5.3i, decision 531).
+    sessions: Sessions,
     /// Set when the master stops: each stream's server lets its sender go, for the stream to
     /// end even when full (B200's review).
     closing: Arc<watch::Sender<bool>>,
@@ -207,10 +135,6 @@ pub struct Hub {
     steady: crate::clock::Steady,
     /// The lease epoch this master leads with (decision 444), on every message's stamp.
     epoch: i64,
-    /// The heartbeats heard on each worker's current stream: the latest's number goes on every
-    /// message to it (`MasterClock.heard_sequence`). One count per stream, so a replaced
-    /// stream's reader can't put its numbers on the new one's messages.
-    heard: Counters,
 }
 
 /// Another master took the lease over: this one's view is stale, and it must end.
@@ -256,6 +180,7 @@ impl Hub {
     #[must_use]
     pub fn with_clock(core: MasterCore, clock: fn() -> Timestamp) -> Self {
         let core_steady = core.steady_clock();
+        let sessions = core.sessions();
         Self {
             beat: Beat::default(),
             refresh_limit: DEFAULT_REFRESH_LIMIT,
@@ -284,13 +209,12 @@ impl Hub {
             worker_identity: None,
             listen_retry: None,
             core: Arc::new(Mutex::new(core)),
-            streams: Arc::new(Mutex::new(BTreeMap::new())),
+            sessions,
             closing: Arc::new(watch::channel(false).0),
             #[cfg(test)]
             calls_dropped: Arc::default(),
             steady: core_steady,
             epoch: 0,
-            heard: Arc::default(),
             clock,
         }
     }
@@ -718,7 +642,7 @@ impl Hub {
                 }
                 let result = core.round_part(part, now, &mut outgoing).await;
                 drop(core);
-                self.deliver(outgoing).await;
+                self.deliver(outgoing);
                 result?;
             }
             Ok(())
@@ -740,7 +664,7 @@ impl Hub {
             held += began.elapsed();
             pending
         };
-        self.deliver(std::mem::take(&mut outgoing)).await;
+        self.deliver(std::mem::take(&mut outgoing));
         let mut failed = Ok(());
         for command in pending? {
             let applied = {
@@ -752,7 +676,7 @@ impl Hub {
                 held += began.elapsed();
                 applied
             };
-            self.deliver(std::mem::take(&mut outgoing)).await;
+            self.deliver(std::mem::take(&mut outgoing));
             if applied.is_err() {
                 failed = applied;
                 break;
@@ -764,7 +688,7 @@ impl Hub {
             core.commands_done(&mut outgoing, (self.clock)()).await;
             held += began.elapsed();
         }
-        self.deliver(outgoing).await;
+        self.deliver(outgoing);
         self.metrics
             .round_part_done(RoundPart::Commands.name(), held);
         failed
@@ -1044,7 +968,7 @@ impl Hub {
                 .await
             })
             .await;
-        self.deliver(outgoing).await;
+        self.deliver(outgoing);
         if self.db.writes_ended() != before {
             // A run queued, a trigger started or stopped: the round starts what it can.
             self.finished.notify_one();
@@ -1120,9 +1044,8 @@ impl Hub {
     /// workers' messages, nor its messages pile up.
     ///
     /// Each is stamped with the master's clock as it is sent (B225).
-    async fn deliver(&self, outgoing: Vec<Outgoing>) {
+    fn deliver(&self, outgoing: Vec<Outgoing>) {
         let mut stuck = Vec::new();
-        let mut streams = self.streams.lock().await;
         for Outgoing {
             worker_id,
             mut message,
@@ -1140,17 +1063,17 @@ impl Hub {
                     self.arrivals.unsent(&worker_id, attempt_id);
                 }
             };
-            let Some(stream) = streams.get(&worker_id) else {
+            let Some(stream) = self.sessions.current(&worker_id) else {
                 tracing::warn!(worker_id, "no stream for worker; message dropped");
                 unsent(assigned.as_ref());
                 continue;
             };
-            message.clock = Some(self.stamp(self.heard_on(&worker_id)));
+            message.clock = Some(self.stamp(stream.heard()));
             match stream.send(message) {
                 Ok(number) => {
                     if let Some(attempt_id) = assigned {
                         self.arrivals
-                            .assigned(&worker_id, stream.id, &attempt_id, number);
+                            .assigned(&worker_id, stream.id(), &attempt_id, number);
                     }
                 }
                 Err(mpsc::error::TrySendError::Full(())) => {
@@ -1161,8 +1084,9 @@ impl Hub {
                          disconnected",
                         self.stream_buffer
                     );
-                    streams.remove(&worker_id);
-                    stuck.push(worker_id);
+                    // Gone for every reader at once; the core takes it out (under its lock).
+                    stream.mark_stuck();
+                    stuck.push((worker_id, stream.id()));
                 }
                 Err(mpsc::error::TrySendError::Closed(())) => {
                     unsent(assigned.as_ref());
@@ -1170,10 +1094,9 @@ impl Hub {
                 }
             }
         }
-        drop(streams);
-        for worker_id in stuck {
+        for (worker_id, id) in stuck {
             // Not here: the caller may hold the core's lock.
-            tokio::spawn(self.clone().disconnect_stuck(worker_id));
+            tokio::spawn(self.clone().disconnect_stuck(worker_id, id));
         }
     }
 
@@ -1183,19 +1106,12 @@ impl Hub {
         stamp_of((self.clock, self.steady), heard, self.epoch)
     }
 
-    /// The latest heartbeat heard on `worker_id`'s current stream (0: none yet, or no stream).
-    fn heard_on(&self, worker_id: &str) -> u64 {
-        lock_heard(&self.heard)
-            .get(worker_id)
-            .map_or(0, |heard| heard.load(Ordering::SeqCst))
-    }
-
-    /// Disconnects a worker whose stream was dropped for not being read, unless it has
-    /// registered again since. (Its stream's reader stops at its next message, which ends
-    /// the worker's side.)
-    async fn disconnect_stuck(self, worker_id: String) {
+    /// Takes out a worker's session found full (stuck, for not being read) and disconnects the
+    /// worker, unless it has registered again since (another session, `id` no longer its). (Its
+    /// stream's reader stops at its next message, which ends the worker's side.)
+    async fn disconnect_stuck(self, worker_id: String, id: u64) {
         let mut core = self.core_for("stream").await;
-        if self.streams.lock().await.contains_key(&worker_id) {
+        if core.sessions_mut().remove(&worker_id, Some(id)).is_none() {
             return;
         }
         if let Err(error) = core.disconnected(&worker_id, (self.clock)()).await {
@@ -1226,7 +1142,7 @@ impl Hub {
                 let hub = self.clone();
                 tokio::spawn(async move {
                     let answer = job.run().await;
-                    hub.deliver(vec![answer]).await;
+                    hub.deliver(vec![answer]);
                 });
                 Ok(Vec::new())
             }
@@ -1264,7 +1180,7 @@ impl Hub {
     /// rounds and other workers' turns get in between (decision 480).
     async fn turn(
         &self,
-        (worker_id, stream): (&str, &Outbound),
+        (worker_id, stream): (&str, &Arc<Session>),
         turn: Vec<worker_message::Message>,
     ) -> TurnEnd {
         let mut results = Vec::new();
@@ -1335,7 +1251,7 @@ impl Hub {
     fn queue_results(
         &self,
         worker_id: &str,
-        stream: &Outbound,
+        stream: &Arc<Session>,
         results: &mut Vec<worker_message::Message>,
     ) {
         if results.is_empty() {
@@ -1436,7 +1352,7 @@ impl Hub {
             // ended since still counts (it said this before its end). After one of its messages
             // ended its stream this round, nothing more of the worker's counts.
             if handling.ended.contains(&worker_id)
-                || !self.queued_served(&core, &worker_id, &stream).await
+                || !self.queued_served(&core, &worker_id, &stream)
             {
                 // Its start, if any, stays: its worker's registration or loss forgets it, and a
                 // newer stream's report of the same start isn't this one's to erase.
@@ -1489,7 +1405,7 @@ impl Hub {
             self.finished.notify_one();
         }
         drop(core);
-        self.deliver(handling.outgoing).await;
+        self.deliver(handling.outgoing);
         Ok(())
     }
 
@@ -1540,7 +1456,7 @@ impl Hub {
     async fn result_alone(
         &self,
         core: &mut MasterCore,
-        (worker_id, stream): (&str, &Outbound),
+        (worker_id, stream): (&str, &Arc<Session>),
         message: worker_message::Message,
         handling: &mut Handling,
     ) {
@@ -1565,14 +1481,7 @@ impl Hub {
         {
             // As a turn's end then: the stream let go and the worker disconnected, so it
             // registers again; what it queued after this is dropped, and sent again (B101).
-            let mut streams = self.streams.lock().await;
-            if streams
-                .get(worker_id)
-                .is_some_and(|s| s.same_channel(stream))
-            {
-                streams.remove(worker_id);
-            }
-            drop(streams);
+            core.sessions_mut().remove(worker_id, Some(stream.id()));
             if let Err(error) = core.disconnected(worker_id, (self.clock)()).await {
                 tracing::error!(worker_id, %error, "worker disconnect not recorded");
             }
@@ -1586,21 +1495,18 @@ impl Hub {
     /// taken for lost (its lease) while it waited, the stream then let go, as a turn would. Its
     /// stream having ended since is no reason: what it said came before its end, which waits
     /// behind it (M5.2cB).
-    async fn queued_served(&self, core: &MasterCore, worker_id: &str, stream: &Outbound) -> bool {
-        let mut streams = self.streams.lock().await;
-        let current = streams.get(worker_id);
+    fn queued_served(&self, core: &MasterCore, worker_id: &str, stream: &Arc<Session>) -> bool {
+        let current = self.sessions.current(worker_id);
         // A replaced stream's: another in place, or, the newer one ended too (its end waiting
         // in the queue), another registered after it (Codex's review of M5.2c).
-        if current.is_some_and(|s| !s.same_channel(stream))
-            || (current.is_none() && self.arrivals.latest_stream(worker_id) != Some(stream.id))
+        if current.as_ref().is_some_and(|s| s.id() != stream.id())
+            || (current.is_none() && self.arrivals.latest_stream(worker_id) != Some(stream.id()))
         {
             tracing::warn!(worker_id, "a queued message of a replaced stream dropped");
             return false;
         }
+        // Not live, it has no session (`MasterCore::not_live`, its loss): nothing to let go.
         if !core.is_live(worker_id) {
-            if current.is_some() {
-                streams.remove(worker_id);
-            }
             tracing::warn!(
                 worker_id,
                 "a queued message of a worker taken for lost dropped"
@@ -1612,7 +1518,7 @@ impl Hub {
 
     /// A stream's end, under the core's lock: the worker disconnected now, or once the round has
     /// handled what it queued before its end (M5.2cB), so that, a `Deregister`, still counts.
-    async fn stream_ended(&self, core: &mut MasterCore, worker_id: &str, stream: &Outbound) {
+    async fn stream_ended(&self, core: &mut MasterCore, worker_id: &str, stream: &Arc<Session>) {
         if self.results_waiting(worker_id) {
             self.queued_results().push(QueuedResult {
                 worker_id: worker_id.to_owned(),
@@ -1630,12 +1536,10 @@ impl Hub {
     async fn served_core(
         &self,
         worker_id: &str,
-        stream: &Outbound,
+        stream: &Arc<Session>,
     ) -> Option<tokio::sync::MutexGuard<'_, MasterCore>> {
         let core = self.core_for("turn").await;
-        self.still_served(&core, worker_id, stream)
-            .await
-            .then_some(core)
+        self.still_served(&core, worker_id, stream).then_some(core)
     }
 
     /// `message` handled alone, under the core's lock taken for it ([`Self::alone`]), what it
@@ -1643,7 +1547,7 @@ impl Hub {
     async fn alone_served(
         &self,
         worker_id: &str,
-        stream: &Outbound,
+        stream: &Arc<Session>,
         message: worker_message::Message,
     ) -> (TurnEnd, std::time::Duration) {
         let Some(mut core) = self.served_core(worker_id, stream).await else {
@@ -1670,7 +1574,7 @@ impl Hub {
             .await;
         let took = began.elapsed();
         drop(core);
-        self.sent(done.outgoing, done.finished).await;
+        self.sent(done.outgoing, done.finished);
         let end = if goes_on && !done.unhandled {
             TurnEnd::Goes
         } else {
@@ -1687,7 +1591,7 @@ impl Hub {
     async fn triggers_served(
         &self,
         worker_id: &str,
-        stream: &Outbound,
+        stream: &Arc<Session>,
         group: Vec<worker_message::Message>,
     ) -> (TurnEnd, std::time::Duration) {
         let Some(mut core) = self.served_core(worker_id, stream).await else {
@@ -1699,7 +1603,7 @@ impl Hub {
         drop(core);
         let group = match handled {
             Ok(outgoing) => {
-                self.sent(outgoing, false).await;
+                self.sent(outgoing, false);
                 return (TurnEnd::Goes, took);
             }
             Err(crate::core::TriggersFailed::Again(group)) => group,
@@ -1726,11 +1630,11 @@ impl Hub {
     }
 
     /// Delivers what a transaction of a turn sends, waking a round if it stored a `Finished`.
-    async fn sent(&self, outgoing: Vec<Outgoing>, finished: bool) {
+    fn sent(&self, outgoing: Vec<Outgoing>, finished: bool) {
         if finished {
             self.finished.notify_one();
         }
-        self.deliver(outgoing).await;
+        self.deliver(outgoing);
     }
 
     /// One message handled on its own, as every message was before M4B.3; whether the turn
@@ -1796,8 +1700,8 @@ impl Hub {
 
     /// Whether `stream` still carries its worker's messages (under the core's lock); not, it
     /// is let go.
-    async fn still_served(&self, core: &MasterCore, worker_id: &str, stream: &Outbound) -> bool {
-        if !self.is_current(worker_id, stream).await {
+    fn still_served(&self, core: &MasterCore, worker_id: &str, stream: &Arc<Session>) -> bool {
+        if !self.sessions.is_current(stream) {
             // Replaced by a newer stream of the worker: what this one still says is out of
             // date, and must not change the newer one's state (B44).
             tracing::warn!(worker_id, "messages of a replaced stream dropped");
@@ -1806,8 +1710,7 @@ impl Hub {
         if !core.is_live(worker_id) {
             // The worker was taken for lost (its lease) while this stream stayed open: ended,
             // so it registers again and its journal is reconciled; meanwhile its messages
-            // change nothing.
-            self.streams.lock().await.remove(worker_id);
+            // change nothing. Its session went with its loss (`MasterCore::not_live`).
             tracing::warn!(worker_id, "stream of a worker taken for lost ended");
             return false;
         }
@@ -1817,9 +1720,9 @@ impl Hub {
     async fn serve_stream(
         self,
         worker_id: String,
-        stream: Outbound,
+        stream: Arc<Session>,
         inbound: Streaming<pb::WorkerMessage>,
-        (heard, has_queue): (Arc<AtomicU64>, bool),
+        has_queue: bool,
     ) {
         // Read apart from handling: while the master is stuck behind its lock, the worker's
         // messages still arrive, are recorded and wait in order (B6).
@@ -1830,19 +1733,17 @@ impl Hub {
             self.arrivals.clone(),
             queue,
             HeartbeatAcks {
-                stream: stream.sender.downgrade(),
-                numbers: Arc::clone(&stream.numbers),
-                stream_id: stream.id,
+                session: Arc::downgrade(&stream),
+                stream_id: stream.id(),
                 leading: self.leading.subscribe(),
                 clocks: (self.clock, self.steady),
-                heard,
                 epoch: self.epoch,
-                current: (worker_id.clone(), Arc::clone(&self.heard)),
+                sessions: self.sessions.clone(),
                 slow_equals: (Arc::clone(&self.slow_equals), has_queue),
             },
         ));
         let mut closing = self.closing.subscribe();
-        let mut replaced = stream.replaced.subscribe();
+        let mut replaced = stream.ended();
         loop {
             let first = match self
                 .next_to_handle(&mut queued, (&mut closing, &mut replaced))
@@ -1882,15 +1783,13 @@ impl Hub {
         // nothing of the newer stream (B44). Checked and removed under the core's lock, which
         // a registration holds while it puts its stream in place.
         let mut core = self.core_for("stream").await;
-        let mut streams = self.streams.lock().await;
-        if !streams
-            .get(&worker_id)
-            .is_some_and(|s| s.same_channel(&stream))
+        if core
+            .sessions_mut()
+            .remove(&worker_id, Some(stream.id()))
+            .is_none()
         {
             return;
         }
-        streams.remove(&worker_id);
-        drop(streams);
         self.stream_ended(&mut core, &worker_id, &stream).await;
     }
 
@@ -1905,27 +1804,26 @@ impl Hub {
         // live stream down). One look at the streams: present or gone, and the old one taken
         // out. Not while the master stops: its streams emptied then are no worker's gone stream.
         let admissible = core.check(register).is_ok();
-        let replacing = {
-            let mut streams = self.streams.lock().await;
-            // Under the streams' lock, as the master stopping clears them under it (agy's third
-            // review of M5.3g); refused, not registered after all.
-            if !*self.leading.borrow() || *self.closing.borrow() {
-                return Err(Status::unavailable(NOT_LEADING));
-            }
-            let gone = !streams.contains_key(&register.worker_id);
-            let replacing = admissible
-                && core.is_live(&register.worker_id)
-                && (core.replaces(register) || gone);
-            if replacing && let Some(old) = streams.remove(&register.worker_id) {
-                old.end_replaced();
-                tracing::warn!(
-                    worker_id = register.worker_id,
-                    connection = register.connection,
-                    "a newer connection of the worker replaces its stream"
-                );
-            }
-            replacing
-        };
+        // Refused, not registered after all, while the master stops (agy's third review of
+        // M5.3g): its sessions are being closed.
+        if !*self.leading.borrow() || *self.closing.borrow() || self.sessions.is_closing() {
+            return Err(Status::unavailable(NOT_LEADING));
+        }
+        let gone = !self.sessions.has(&register.worker_id);
+        let replacing =
+            admissible && core.is_live(&register.worker_id) && (core.replaces(register) || gone);
+        if replacing
+            && core
+                .sessions_mut()
+                .replace_out(&register.worker_id)
+                .is_some()
+        {
+            tracing::warn!(
+                worker_id = register.worker_id,
+                connection = register.connection,
+                "a newer connection of the worker replaces its stream"
+            );
+        }
         if replacing
             && let Err(error) = core.disconnected(&register.worker_id, (self.clock)()).await
         {
@@ -1978,7 +1876,7 @@ impl Hub {
         // keeps anything, and one that would have replaced a live stream keeps its starts as
         // one beside no live stream does (agy's fourth review of M5.3g).
         if caller.is_closed() {
-            let gone = !self.streams.lock().await.contains_key(&register.worker_id);
+            let gone = !self.sessions.has(&register.worker_id);
             // A worker this master doesn't know keeps nothing: nothing would ever forget it.
             if core.knows(&register.worker_id)
                 && core.check(&register).is_ok()
@@ -1998,10 +1896,8 @@ impl Hub {
         // answered no more from here (decision 443): a replaced incarnation's lease runs out
         // from this registration, the master's last word to it, whatever the old process
         // still sends.
-        if !core.is_live(&register.worker_id) {
-            lock_heard(&self.heard).remove(&register.worker_id);
-        }
-        let before = core.newest_before(&register);
+        // (Not live, it has no session: `MasterCore::not_live`.)
+        let before = core.before_registration(&register.worker_id);
         let registered = core.register(&register, (self.clock)()).await;
         if core.dispatcher().takes_back() {
             // What it never started is the next round's to take back (M5.2cB).
@@ -2029,8 +1925,6 @@ impl Hub {
             .filter(|message| message.worker_id == register.worker_id)
             .count();
         let (sender, receiver) = mpsc::channel(self.stream_buffer + 1 + own);
-        // A new count of heartbeats for the new stream: its `Register` is heartbeat 0.
-        let heard = Arc::new(AtomicU64::new(0));
         let first = pb::MasterMessage {
             message: Some(master_message::Message::Registered(registered)),
             clock: Some(self.stamp(0)),
@@ -2038,41 +1932,43 @@ impl Hub {
         // The worker's stream from now on, put in place before the lock is let go: a message
         // of the old stream handled after this registration is known to be the old one's
         // (B44).
-        let stream = {
-            let mut streams = self.streams.lock().await;
-            // Checked under the streams' lock: a master stopping meanwhile (no longer leading,
-            // then closing its streams under that lock) either closes this one or refuses it,
-            // never leaving it open for its graceful shutdown to wait for (B200's review).
-            if !*self.leading.borrow() || *self.closing.borrow() {
-                // Registered all the same, it would be live with no stream, and its number
-                // known: a worker sending none locked out till its lease (agy's fourth review
-                // of M5.3g). Undone in memory, as a restart leaves it; the database's word is
-                // the next leader's.
-                drop(streams);
-                core.registration_undone(&register.worker_id, before);
-                return Err(Status::unavailable(NOT_LEADING));
-            }
-            // Numbered only now, certain to be put in place, under the core's lock as the
-            // registration: an older stream's reader records nothing more (B240), and a
-            // registration refused for not leading leaves the live stream current (agy's third
-            // review of M5.3g). Its journal is the whole truth: older starts go with it.
-            let stream = Outbound::new(sender, self.arrivals.registered(&register.worker_id));
-            stream
-                .send(first)
-                .map_err(|_| Status::internal("the stream closed at once"))?;
-            streams.insert(register.worker_id.clone(), stream.clone());
-            lock_heard(&self.heard).insert(register.worker_id.clone(), Arc::clone(&heard));
-            stream
-        };
+        // A master stopping meanwhile closes it or refuses it, never leaving it open for its
+        // graceful shutdown to wait for (B200's review): `SessionWriter::install` checks the
+        // closing under its compare-and-swap, as `Sessions::close_all` sets it first.
+        if !*self.leading.borrow() || *self.closing.borrow() || self.sessions.is_closing() {
+            // Registered all the same, it would be live with no stream, and its number known:
+            // a worker sending none locked out till its lease (agy's fourth review of M5.3g).
+            // Undone in memory, as a restart leaves it; the database's word is the next
+            // leader's.
+            core.registration_undone(&register.worker_id, &before);
+            return Err(Status::unavailable(NOT_LEADING));
+        }
+        // Numbered only now, certain to be put in place, under the core's lock as the
+        // registration: an older stream's reader records nothing more (B240), and a
+        // registration refused for not leading leaves the live stream current (agy's third
+        // review of M5.3g). Its journal is the whole truth: older starts go with it.
+        let stream = Arc::new(Session::new(
+            &register.worker_id,
+            self.arrivals.registered(&register.worker_id),
+            sender,
+        ));
+        stream
+            .send(first)
+            .map_err(|_| Status::internal("the stream closed at once"))?;
+        if core.sessions_mut().install(&stream).is_err() {
+            // Closing began meanwhile: as above.
+            core.registration_undone(&register.worker_id, &before);
+            return Err(Status::unavailable(NOT_LEADING));
+        }
         // Its starts the reconciliation's now, under the core's lock.
         drop(waiting);
         drop(core);
-        self.deliver(outgoing).await;
+        self.deliver(outgoing);
         tokio::spawn(self.clone().serve_stream(
             register.worker_id,
             stream,
             inbound,
-            (heard, register.queue_depth > 0),
+            register.queue_depth > 0,
         ));
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
@@ -2080,26 +1976,14 @@ impl Hub {
     /// Ends every worker's stream with `UNAVAILABLE`, for the master to stop: tonic's graceful
     /// shutdown waits for open calls, which a worker's stream never ends by itself, and each
     /// worker connects again, to the master that leads (B200).
-    pub async fn close_streams(&self) {
+    pub fn close_streams(&self) {
         // Each stream's server lets its sender go: a full one ends once its worker read it.
         self.closing.send_replace(true);
-        let streams = std::mem::take(&mut *self.streams.lock().await);
+        // Full, a worker isn't reading: its stream ends when its other senders go.
+        self.sessions.close_all(&Status::unavailable(STOPPING));
         // What waits for a round holds its stream's sender too: let go, or the stream never
         // ends (Grok's review of M4B.3); the worker sends it again to the next leader.
         drop(std::mem::take(&mut *self.queued_results()));
-        for stream in streams.into_values() {
-            // Full, the worker isn't reading: its stream ends when its other senders go.
-            stream.end(Status::unavailable(STOPPING));
-        }
-    }
-
-    /// Whether `stream` is still `worker_id`'s stream (not replaced by a newer registration).
-    async fn is_current(&self, worker_id: &str, stream: &Outbound) -> bool {
-        self.streams
-            .lock()
-            .await
-            .get(worker_id)
-            .is_some_and(|s| s.same_channel(stream))
     }
 }
 
@@ -2123,7 +2007,7 @@ fn fill_turn(
 #[derive(Debug)]
 struct QueuedResult {
     worker_id: String,
-    stream: Outbound,
+    stream: Arc<Session>,
     /// The message; none: its stream's end, which waits behind what it said before.
     message: Option<worker_message::Message>,
 }
@@ -2131,7 +2015,7 @@ struct QueuedResult {
 /// A worker's consecutive `Started`s and `Finished`s in a round's batch.
 struct Stretch {
     worker_id: String,
-    stream: Outbound,
+    stream: Arc<Session>,
     group: Group,
 }
 
@@ -2141,7 +2025,7 @@ struct Stretch {
 fn stretch_of<'a>(
     batch: &'a mut Vec<Stretch>,
     worker_id: &str,
-    stream: &Outbound,
+    stream: &Arc<Session>,
 ) -> &'a mut Group {
     let at = batch
         .iter()
@@ -2173,7 +2057,7 @@ impl Handling {
     fn put_back(
         &mut self,
         worker_id: &str,
-        stream: &Outbound,
+        stream: &Arc<Session>,
         messages: Vec<worker_message::Message>,
     ) {
         self.back
@@ -2289,37 +2173,22 @@ fn stamp_of(
     }
 }
 
-fn lock_heard(
-    heard: &std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>,
-) -> std::sync::MutexGuard<'_, BTreeMap<String, Arc<AtomicU64>>> {
-    heard
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Each worker's current stream's heartbeat counter (B225), shared by the hub and the
-/// streams' readers.
-type Counters = Arc<std::sync::Mutex<BTreeMap<String, Arc<AtomicU64>>>>;
-
 /// Answers a worker's heartbeats as they arrive, before they wait for the lock: a busy master
 /// isn't a lost one. Not while paused: another master may be leading, and may count the worker
-/// lost. The stream is held weakly, for this reader not to keep it open.
+/// lost. The session is held weakly, for this reader not to keep its stream open.
 struct HeartbeatAcks {
-    stream: mpsc::WeakSender<Result<pb::MasterMessage, Status>>,
-    /// The stream's numbering, shared with its [`Outbound`] (B240).
-    numbers: Arc<std::sync::Mutex<u64>>,
+    /// Its stream's session: its numbering (B240) and its heartbeats heard (B225).
+    session: std::sync::Weak<Session>,
     /// The stream's ID, for [`Arrivals::read`].
     stream_id: u64,
     leading: watch::Receiver<bool>,
     /// The master's wall clock and master time, for the stamp.
     clocks: (fn() -> Timestamp, crate::clock::Steady),
-    /// The heartbeats heard on this stream: the latest's number.
-    heard: Arc<AtomicU64>,
     /// The lease epoch on the stamp.
     epoch: i64,
-    /// Its worker and the hub's counters of the current streams: answered only while `heard`
-    /// is its worker's current one (decision 443).
-    current: (String, Counters),
+    /// The workers' sessions: answered only while this is its worker's current one (decision
+    /// 443).
+    sessions: Sessions,
     /// The workers' queue head ages, shared by every stream (decision 509), and whether this
     /// worker has a queue: one without counts no age (it would always say 0, busy or not).
     slow_equals: (Arc<crate::slow_equals::SlowEquals>, bool),
@@ -2330,18 +2199,18 @@ impl HeartbeatAcks {
     /// master's next stamps, B225), and a heartbeat (`Some`: its queue's head age) answered
     /// with it on the answer's stamp, and the cluster's slow-equals (decision 509).
     fn heard(&self, sequence: u64, heartbeat: Option<Duration>) {
-        let heard = self
-            .heard
-            .fetch_max(sequence, Ordering::SeqCst)
-            .max(sequence);
+        let Some(session) = self.session.upgrade() else {
+            return;
+        };
+        session.hear(sequence);
+        let heard = session.heard();
         if let Some(head_age) = heartbeat
             && *self.leading.borrow()
-            && self.is_current()
-            && let Some(stream) = self.stream.upgrade()
+            && self.sessions.is_current(&session)
         {
             let (slow_equals, has_queue) = &self.slow_equals;
             let slow = slow_equals.heard(
-                &self.current.0,
+                session.worker_id(),
                 has_queue.then_some(head_age),
                 tokio::time::Instant::now(),
             );
@@ -2352,17 +2221,8 @@ impl HeartbeatAcks {
                 clock: Some(stamp_of(self.clocks, heard, self.epoch)),
             };
             // Full, the worker isn't reading: the next heartbeat tries again.
-            let _ = numbered_send(&self.numbers, &stream, ack);
+            let _ = session.send(ack);
         }
-    }
-
-    /// Whether this is its worker's current stream: one replaced by a registration (a new
-    /// incarnation, or the same reconnecting) is answered no more.
-    fn is_current(&self) -> bool {
-        let (worker_id, streams) = &self.current;
-        lock_heard(streams)
-            .get(worker_id)
-            .is_some_and(|heard| Arc::ptr_eq(heard, &self.heard))
     }
 
     /// Master time now (a message's arrival).

@@ -235,7 +235,7 @@ async fn a_registration_finishing_after_shutdown_is_refused() {
         .unwrap()
         .unwrap();
     assert!(!*hub.leading().borrow());
-    hub.close_streams().await;
+    hub.close_streams();
     sqlx::query("COMMIT").execute(&mut locker).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(20), opening)
         .await

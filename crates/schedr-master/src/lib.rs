@@ -30,6 +30,7 @@ pub mod retention;
 pub mod samples;
 pub mod scheduler;
 pub mod service;
+pub mod session;
 pub mod slow_equals;
 pub mod validate;
 pub mod workers;

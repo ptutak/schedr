@@ -3891,3 +3891,15 @@ and published lock-free with the `arc-swap` crate. The tables of what each does,
 common situations (steady load, a round's batch, a reconnect, a reconnect storm, a send during a
 registration) and its edge cases (a reader racing a replacement, a send to an ended session, a
 writer missing a part, a poisoned lock, memory) were in the conversation. The user: "Option 2".
+
+### 2026-11-26: M5.3i's done-when kept to what was built
+
+Building M5.3i, two items of its done-when didn't hold as written. Arrivals' `*_on` checks
+stay: a reader records under Arrivals' lock, so its "is this the latest stream" check must be
+under it too (a check on the sessions map first would let an old stream's start be recorded after
+a registration cleared the old starts, agy's second review of M5.3g); Arrivals numbers the stream
+under the core's lock just before the session is published, one writer in one order. And a failed
+registration is undone by one function (`registration_undone` with `BeforeRegistration`, the
+connection's incarnation and number) on every failing exit, not a full snapshot: restoring the
+dispatcher's entry and the session would bring back a stream the registration had replaced and
+ended. Claude laid out both with their situations; the user: "ok, so it's already fixed, keep it".

@@ -19,4 +19,4 @@ registration writes, and two places written together).
 '''
 history = "JOURNAL.md#D531"  # <a id="D531"></a> starts its JOURNAL.md entry
 step = "M5.3i"
-code = []
+code = ["crates/schedr-master/src/session.rs", "crates/schedr-master/src/session.rs::SessionWriter", "crates/schedr-master/src/session.rs::Sessions", "crates/schedr-master/src/core.rs::registration_undone"]

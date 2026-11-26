@@ -11,7 +11,7 @@ Rules a change has to keep. The reader's account, with the defaults drawn out, i
 wall clock at the process's first reading, plus `Instant` since, on `clock::timeline`.
 `service::stamp_of` puts that timeline, master time rounded down to a millisecond (`master_ms`),
 the latest worker message heard, the wall clock (for people) and the lease epoch on every master
-message; `Outbound::send` numbers it (`sequence`).
+message; `session::Session::send` numbers it (`sequence`).
 
 ### The worker's bound is earlier than master time
 
@@ -71,7 +71,7 @@ whatever `started` says of its task. Proven, `take_back_cleanup`, no move used.
 
 The worker's side is `agent::ToMaster::send` (numbers and stamps under the outbox's lock, so in
 queue order) and `ToMaster::handled` after `on_master` returns. The master's is
-`service::Outbound::send` (numbers and queues under one lock), `Hub::deliver` recording
+`session::Session::send` (numbers and queues under one lock), `Hub::deliver` recording
 `Arrivals::assigned`, `read_stream` recording `Arrivals::read` before the message waits for the
 lock and `Arrivals::answered` on `Started`, `Rejected` or `Finished`; `Arrivals::never_started`
 decides, and `dispatch::expire`, `forget_worker`, `incarnation_replaced` and
@@ -223,10 +223,22 @@ Each is one line; the reader's page has the diagrams.
 
 ## Invariants of a worker's session
 
-Rules a change to registration, streams or their ends has to keep (M5.3i, DN43). A worker's
-**session** is its current stream: the core's connection (live, incarnation, newest number), the
-dispatcher's worker (`connected`), the hub's sender (`streams`) and heartbeat counter (`heard`),
-and what Arrivals records of it (its stream number, arrival times, reported starts).
+Rules a change to registration, streams or their ends has to keep (M5.3i, DN43, D531). A
+worker's **session** (`session::Session`) is its current stream: its sender and numbering, its
+heartbeats heard, whether it ended or is stuck. The sessions are one map, published with
+`arc-swap` and read without a lock (`session::Sessions`: deliveries, the readers' checks, the
+heartbeat answers); its writer (`session::SessionWriter`) is reached only through
+`MasterCore::sessions_mut`, so every change is made under the core's lock, beside the core's
+connection (live, incarnation, newest number) and the dispatcher's worker (`connected`). The one
+write beside it is `Sessions::close_all` when the master stops: a registration publishing
+meanwhile is closed by it or refused (its compare-and-swap re-checks the closing). Arrivals keeps
+each worker's stream numbers (`Arrivals::registered`, under the core's lock just before the
+session is published) and checks them under its own lock where a reader records.
+
+Two states are allowed on purpose. A stream found full is marked **stuck**: every reader sees it
+as gone at once, and the core takes it out (`Hub::disconnect_stuck`). And a stream that ended
+with results still queued has its session taken out at once while the connection stays live until
+the round handles that end (M5.2cB, B267).
 
 1. **One current stream, named alike everywhere.** The core's connection is live exactly when the
    dispatcher has the worker connected, the hub holds a sender for it, and Arrivals' latest stream
@@ -246,13 +258,13 @@ and what Arrivals records of it (its stream number, arrival times, reported star
 
 M5.3g's six reviews (2026-11-26), each finding against the rule it broke (rounds, findings):
 
-| Rule | Findings | Kept today by | After M5.3i |
-|---|---|---|---|
-| 1 | round 1: a replaced stream kept running; 5: an undone registration left the worker connected at the dispatcher; 6: so did `register`'s half-way failure | `MasterCore::not_live`, `Hub::replace_stream`, `end_replaced` | the session one record, changed by `register_stream`, `end_session` and closing all only |
-| 2 | round 2: a superseded stream's reader recorded arrivals and starts; 3: answers not scoped to their stream; 2: one look at the streams per message | the `*_on` calls of Arrivals, gated on its latest stream | what a reader records tagged with its stream number, dropped with the session; a reader's check one atomic load |
-| 3 | round 1: a failed registration kept its number; 3: a stream numbered before it was put in place, the replacement allowed when not leading; 4: a registration never put in place not undone, closing not checked; 5: a left registration of an unknown worker kept its starts | rollbacks per exit path: `registration_undone`, the number's restore, the `Registering` guard and `keep()` | one snapshot of the worker's record restored on any error |
-| 4 | round 2: a dropped message erased a start; 3: a refused or left registration took away a live stream's starts; 4: a left one kept them only if it would have been accepted | the guard owning its journal's starts (`registering_starts`) | starts tagged with their stream or registration, ended with it, moved only by an accepted registration |
-| 5 | round 1: only an acceptable registration replaces (B267's case kept); 5: the restore after an undo | `MasterCore::check`, `newest_before` | the same check, inside `register_stream`, the snapshot holding the number |
+| Rule | Findings | Kept since M5.3i by |
+|---|---|---|
+| 1 | round 1: a replaced stream kept running; 5: an undone registration left the worker connected at the dispatcher; 6: so did `register`'s half-way failure | `MasterCore::not_live` (the core, the dispatcher and the session together); `SessionWriter::install` and `replace_out` ending a replaced session; the writer reachable only through the core |
+| 2 | round 2: a superseded stream's reader recorded arrivals and starts; 3: answers not scoped to their stream; 2: one look at the streams per message | Arrivals' `*_on` checks under its own lock; `Sessions::is_current` (no lock) for the readers' loops and the heartbeat answers |
+| 3 | round 1: a failed registration kept its number; 3: a stream numbered before it was put in place, the replacement allowed when not leading; 4: a registration never put in place not undone, closing not checked; 5: a left registration of an unknown worker kept its starts | one undo on every failing exit: `MasterCore::registration_undone` with `BeforeRegistration`; the `Registering` guard and `keep()` |
+| 4 | round 2: a dropped message erased a start; 3: a refused or left registration took away a live stream's starts; 4: a left one kept them only if it would have been accepted | the guard owning its journal's starts (`registering_starts`) |
+| 5 | round 1: only an acceptable registration replaces (B267's case kept); 5: the restore after an undo | `MasterCore::check`; `BeforeRegistration` putting back the incarnation's number only |
 
 The rest were tests (waits that pass on silence, timing) and the agent's limit and jitter
 (DN41), outside the session.
@@ -675,6 +687,7 @@ The rest were tests (waits that pass on silence, timing) and the agent's limit a
 - `crates/schedr-master/src/core.rs::handle_group` (D397)
 - `crates/schedr-master/src/core.rs::handle_results_in` (D505)
 - `crates/schedr-master/src/core.rs::not_live` (D530)
+- `crates/schedr-master/src/core.rs::registration_undone` (D531)
 - `crates/schedr-master/src/core.rs::replaces` (D525)
 - `crates/schedr-master/src/core.rs::stale` (D525)
 - `crates/schedr-master/src/core.rs::take_back` (D308)
@@ -709,6 +722,9 @@ The rest were tests (waits that pass on silence, timing) and the agent's limit a
 - `crates/schedr-master/src/service.rs::stamp_of` (D442)
 - `crates/schedr-master/src/service.rs::turn` (D397, D480)
 - `crates/schedr-master/src/service.rs::with_epoch` (D444)
+- `crates/schedr-master/src/session.rs` (D531)
+- `crates/schedr-master/src/session.rs::SessionWriter` (D531)
+- `crates/schedr-master/src/session.rs::Sessions` (D531)
 - `crates/schedr-master/src/slow_equals.rs::SlowEquals` (D509)
 - `crates/schedr-master/src/workers.rs::free_for` (D509)
 - `crates/schedr-model/src/commands.rs::MAX_CONNECTION_TEST_MS` (D200)

@@ -574,6 +574,11 @@ struct Arrived {
     registering_starts: BTreeMap<(String, String), usize>,
 }
 
+/// A worker's connection as it was before a registration ([`MasterCore::before_registration`]):
+/// its incarnation and newest connection number, if it had one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BeforeRegistration(Option<(String, Option<u64>)>);
+
 /// A worker's `Register` waiting for the lock ([`Arrivals::registering`]): handled once dropped,
 /// the starts its journal reports going with it unless [kept](Self::keep).
 #[derive(Debug)]
@@ -963,6 +968,9 @@ pub struct MasterCore {
     /// Extensions' reports' queue (decision 521), its writer started with the first.
     extension_reports: Option<crate::extension_reports::ExtensionReports>,
     arrivals: Arrivals,
+    /// Each worker's session (its current stream), written here alone, so under the core's
+    /// lock, beside its connection and the dispatcher's worker (M5.3i, decision 531).
+    sessions: crate::session::SessionWriter,
     metrics: MasterMetrics,
     /// Workers resumed whose follow-up (their parse jobs) failed: tried again each round, as
     /// the resume command isn't applied again (B99).
@@ -1048,6 +1056,7 @@ impl MasterCore {
             connections: BTreeMap::new(),
             extension_reports: None,
             arrivals,
+            sessions: crate::session::SessionWriter::default(),
             metrics: MasterMetrics::default(),
             unresumed: BTreeSet::new(),
             sent_uses: crate::discovery::ScriptUses::new(),
@@ -1158,6 +1167,18 @@ impl MasterCore {
         self.arrivals.clone()
     }
 
+    /// The workers' sessions, for the hub's hot paths to read without the core's lock.
+    #[must_use]
+    pub fn sessions(&self) -> crate::session::Sessions {
+        self.sessions.sessions()
+    }
+
+    /// The sessions' writer: reached through the core alone, so a session changes only under
+    /// the core's lock (decision 531).
+    pub fn sessions_mut(&mut self) -> &mut crate::session::SessionWriter {
+        &mut self.sessions
+    }
+
     /// Reads the worker registry back at start: every worker not gone counts as disconnected
     /// from `now` plus [`Settings::takeover_wait`], so its lease starts from zero once a
     /// deposed leader can no longer answer it (decision 444; master downtime doesn't count
@@ -1206,38 +1227,47 @@ impl MasterCore {
         Ok(restored)
     }
 
-    /// The highest connection `register`'s incarnation had registered before it ([`Self::register`]
-    /// raises it): what [`Self::registration_undone`] puts back.
+    /// What `worker_id`'s connection was before a registration ([`Self::register`] changes
+    /// it): what [`Self::registration_undone`] puts back.
     #[must_use]
-    pub fn newest_before(&self, register: &pb::Register) -> Option<u64> {
-        self.connections
-            .get(&register.worker_id)
-            .filter(|known| known.incarnation == register.incarnation_id)
-            .and_then(|known| known.newest)
+    pub fn before_registration(&self, worker_id: &str) -> BeforeRegistration {
+        BeforeRegistration(
+            self.connections
+                .get(worker_id)
+                .map(|known| (known.incarnation.clone(), known.newest)),
+        )
     }
 
-    /// A registration accepted but never put in place (the master stopped leading meanwhile):
-    /// the worker not live, at the dispatcher too, nothing assigned to a stream that isn't there;
-    /// its incarnation's number back to `before` ([`Self::newest_before`]: agy's fifth review of
-    /// M5.3g, so a held older `Register` stays refused on this master, still running), not
-    /// raised by a connection never in place, so its next try isn't refused as no newer. Memory
-    /// only: the database's word is the next leader's.
-    pub fn registration_undone(&mut self, worker_id: &str, before: Option<u64>) {
+    /// The one undo of a registration (M5.3i), whichever way it failed: half-way at the
+    /// database, accepted but the master no longer leading, or closing before its session was
+    /// put in place. The worker not live, at the dispatcher and in its sessions too, nothing
+    /// assigned to a stream that isn't there; its incarnation's number back to what it was
+    /// (agy's fifth review of M5.3g: a held older `Register` stays refused on this master), or
+    /// none for an incarnation it didn't have before, so its next try isn't refused as no newer.
+    /// Memory only: the database's word is the next leader's.
+    pub fn registration_undone(&mut self, worker_id: &str, before: &BeforeRegistration) {
         self.not_live(worker_id);
         if let Some(connection) = self.connections.get_mut(worker_id) {
-            connection.newest = before;
+            connection.newest = before
+                .0
+                .as_ref()
+                .filter(|(incarnation, _)| *incarnation == connection.incarnation)
+                .and_then(|(_, newest)| *newest);
         }
     }
 
-    /// The one way a worker's connection goes not live: the core and the dispatcher together
-    /// (agy's sixth review of M5.3g: a third place left the worker connected at the dispatcher,
-    /// rounds picking a worker with no stream). Whether it was live. Memory only.
+    /// The one way a worker's connection goes not live: the core, the dispatcher and its
+    /// session together (agy's sixth review of M5.3g: a third place left the worker connected
+    /// at the dispatcher, rounds picking a worker with no stream; M5.3i). Whether it was live.
+    /// Memory only.
     fn not_live(&mut self, worker_id: &str) -> bool {
         let was = self
             .connections
             .get_mut(worker_id)
             .is_some_and(|connection| std::mem::replace(&mut connection.live, false));
         self.dispatcher.worker_disconnected(worker_id);
+        // Its session too: a worker not live has none (M5.3i).
+        self.sessions.remove(worker_id, None);
         was
     }
 
@@ -1324,12 +1354,9 @@ impl MasterCore {
                 "worker `{worker_id}` already has a live stream"
             )));
         }
-        // What its incarnation had registered, kept if this one fails half-way (agy's review of
-        // M5.3g: a failed first registration locked a worker sending no number out).
-        let before = self
-            .connections
-            .get(worker_id)
-            .map(|known| (known.incarnation.clone(), known.newest));
+        // What its connection was, put back if this fails half-way (agy's review of M5.3g: a
+        // failed first registration locked a worker sending no number out).
+        let before = self.before_registration(worker_id);
         let accepted = match self.accept(register, now).await {
             Ok((registered, mut outgoing)) => {
                 let triggers = self
@@ -1345,12 +1372,7 @@ impl MasterCore {
         if accepted.is_err() {
             // A registration that failed half-way (the database) leaves no live stream behind:
             // the worker's next attempt is accepted, or its lease runs out.
-            self.not_live(worker_id);
-            if let Some(connection) = self.connections.get_mut(worker_id) {
-                connection.newest = before
-                    .filter(|(incarnation, _)| *incarnation == connection.incarnation)
-                    .and_then(|(_, newest)| newest);
-            }
+            self.registration_undone(worker_id, &before);
         }
         accepted
     }
@@ -2962,6 +2984,8 @@ impl MasterCore {
         self.discovery.worker_gone(worker_id, now).await?;
         self.sync_code();
         self.connections.remove(worker_id);
+        // Gone, its stream with it (M5.3i: before, its stream stayed until its next message).
+        self.sessions.remove(worker_id, None);
         self.arrivals.forget(worker_id);
         self.stopping_triggers
             .retain(|_, (worker, _)| worker != worker_id);

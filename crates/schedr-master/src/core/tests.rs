@@ -6132,10 +6132,9 @@ async fn a_registration_undone_restores_the_worker_as_it_was() {
         connection: 6,
         ..register("w1", "i1", vec![])
     };
-    let before = core.newest_before(&next);
-    assert_eq!(before, Some(5));
+    let before = core.before_registration("w1");
     core.register(&next, later(2)).await.unwrap();
-    core.registration_undone("w1", before);
+    core.registration_undone("w1", &before);
     assert!(!core.is_live("w1"));
     assert!(
         !core.dispatcher().worker("w1").unwrap().connected,
@@ -6303,4 +6302,69 @@ async fn a_registration_failing_half_way_leaves_the_worker_disconnected_everywhe
         !core.dispatcher().worker("w1").unwrap().connected,
         "not live in the core, not connected at the dispatcher"
     );
+}
+
+/// Refuses every root hash written from now on: a registration reporting a new root fails after
+/// the dispatcher has taken the worker (M5.3i's failing exits).
+async fn refuse_roots(core: &MasterCore) {
+    let db = core.db.clone();
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_roots BEFORE INSERT ON root_hashes \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// M5.3i: a new incarnation failing half-way, after it replaced the old one in the core, is
+/// undone with no number of its own: its retry, with the same number, is accepted.
+#[tokio::test]
+async fn a_new_incarnation_failing_half_way_keeps_no_number_and_its_retry_is_accepted() {
+    let mut core = with_dag_of(&dag_file()).await;
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    refuse_roots(&core).await;
+    let newer = pb::Register {
+        connection: 1,
+        roots: vec![root("h9")],
+        ..register("w1", "i2", vec![])
+    };
+    assert!(core.register(&newer, later(1)).await.is_err());
+    assert!(!core.is_live("w1"));
+    assert!(!core.dispatcher().worker("w1").unwrap().connected);
+    assert!(core.sessions().current("w1").is_none(), "no session");
+    assert!(
+        core.check(&newer).is_ok(),
+        "its retry isn't refused as no newer"
+    );
+}
+
+/// M5.3i: the same incarnation failing half-way gets its number back: an older `Register` of it
+/// still refused, its own retry not.
+#[tokio::test]
+async fn the_same_incarnation_failing_half_way_gets_its_number_back() {
+    let mut core = with_dag_of(&dag_file()).await;
+    let first = pb::Register {
+        connection: 5,
+        ..register("w1", "i1", vec![])
+    };
+    core.register(&first, later(1)).await.unwrap();
+    core.disconnected("w1", later(2)).await.unwrap();
+    refuse_roots(&core).await;
+    let next = pb::Register {
+        connection: 6,
+        roots: vec![root("h9")],
+        ..register("w1", "i1", vec![])
+    };
+    assert!(core.register(&next, later(3)).await.is_err());
+    assert!(!core.is_live("w1"));
+    let older = pb::Register {
+        connection: 4,
+        ..register("w1", "i1", vec![])
+    };
+    assert!(core.check(&older).is_err(), "an older one still refused");
+    assert!(core.check(&next).is_ok(), "its own retry isn't refused");
 }

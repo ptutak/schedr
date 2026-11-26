@@ -1128,7 +1128,7 @@ async fn a_worker_still_live_whose_stream_is_gone_registers_again_at_once() {
         .unwrap()
         .into_inner();
     // The stream gone from the hub, its end not handled yet.
-    hub.streams.lock().await.remove("w1");
+    hub.core.lock().await.sessions_mut().remove("w1", None);
     assert!(hub.core().lock().await.is_live("w1"));
     let (to_master, outbound) = mpsc::channel(16);
     to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
@@ -1152,7 +1152,7 @@ async fn a_worker_still_live_whose_stream_is_gone_registers_again_at_once() {
         hub.core().lock().await.is_live("w1"),
         "the new stream disconnected"
     );
-    assert!(hub.streams.lock().await.contains_key("w1"));
+    assert!(hub.sessions.has("w1"));
 }
 
 /// A worker registered over a stream, its root parsed: its messages' sender and the
@@ -1665,7 +1665,7 @@ async fn a_round_checks_a_queued_messages_stream_as_a_turn_did() {
     // The round found its stream no longer served and let it go (Grok's review: a sleep alone
     // would pass on a `Finished` stored late).
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while hub.streams.lock().await.contains_key("w1") {
+    while hub.sessions.has("w1") {
         assert!(std::time::Instant::now() < deadline, "the stream is let go");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -2002,7 +2002,7 @@ async fn a_queued_message_that_cant_be_handled_ends_the_stream_and_drops_what_ca
     // worker before what it sent is sorted out.
     let (hub, db, mut client) = connected().await;
     let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
-    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let outbound = hub.sessions.current("w1").unwrap();
     let mut messages = vec![
         worker_message::Message::Rejected(pb::Rejected {
             attempt_id: "01a00000-0000-7000-8000-000000000001".to_owned(),
@@ -2013,10 +2013,7 @@ async fn a_queued_message_that_cant_be_handled_ends_the_stream_and_drops_what_ca
     ];
     hub.queue_results("w1", &outbound, &mut messages);
     Box::pin(hub.round_results((hub.clock)())).await.unwrap();
-    assert!(
-        !hub.streams.lock().await.contains_key("w1"),
-        "the stream let go"
-    );
+    assert!(!hub.sessions.has("w1"), "the stream let go");
     assert_eq!(
         db.workers().await.unwrap()[0].state,
         schedr_model::WorkerState::Disconnected,
@@ -2048,7 +2045,7 @@ async fn a_read_before_the_lock_that_fails_doesnt_stop_the_round() {
             .unwrap();
     }
     drop(connection);
-    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let outbound = hub.sessions.current("w1").unwrap();
     hub.queue_results("w1", &outbound, &mut vec![finished_msg(&assign.attempt_id)]);
     Box::pin(hub.round_results((hub.clock)())).await.unwrap();
     assert!(hub.queued_results().is_empty(), "the queue moved on");
@@ -2060,7 +2057,7 @@ async fn nothing_of_a_worker_counts_in_the_round_after_its_message_ended_its_str
     // worker's stream; its `Deregister` after it must not then forget the worker.
     let (hub, db, mut client) = connected().await;
     let (_to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
-    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let outbound = hub.sessions.current("w1").unwrap();
     let mut messages = vec![
         worker_message::Message::Finished(pb::Finished {
             attempt_id: assign.attempt_id.clone(),
@@ -2085,10 +2082,10 @@ async fn a_queued_message_of_a_replaced_stream_is_dropped_once_the_newer_one_end
     // must not count (it would forget the worker the newer stream belongs to).
     let (hub, db, mut client) = connected().await;
     let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
-    let old = hub.streams.lock().await.get("w1").unwrap().clone();
+    let old = hub.sessions.current("w1").unwrap();
     // A newer registration's stream, ended since.
     let _newer = hub.arrivals.new_stream("w1");
-    hub.streams.lock().await.remove("w1");
+    hub.core.lock().await.sessions_mut().remove("w1", None);
     let mut messages = vec![worker_message::Message::Deregister(pb::Deregister {})];
     hub.queue_results("w1", &old, &mut messages);
     Box::pin(hub.round_results((hub.clock)())).await.unwrap();
@@ -2101,8 +2098,8 @@ async fn a_closing_master_queues_nothing_more_for_the_round() {
     // keep its stream's sender, and so the stream, open with no round left to take it.
     let (hub, db, mut client) = connected().await;
     let (_to_master, _stream, assign) = assigned_one(&hub, &db, &mut client).await;
-    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
-    hub.close_streams().await;
+    let outbound = hub.sessions.current("w1").unwrap();
+    hub.close_streams();
     hub.queue_results("w1", &outbound, &mut vec![finished_msg(&assign.attempt_id)]);
     assert!(hub.queued_results().is_empty());
 }
@@ -2240,7 +2237,7 @@ async fn a_turn_lets_the_stream_go_when_the_master_stops() {
     drop(core);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!hub.queued_results().is_empty(), "queued for a round");
-    hub.close_streams().await;
+    hub.close_streams();
     // Their senders let go: a worker that stopped reading (its buffer full, the closing status
     // not sent) has its stream end only once no sender of it is left.
     assert!(hub.queued_results().is_empty(), "let go with the streams");
@@ -2287,7 +2284,7 @@ async fn a_round_handles_at_most_ten_messages_alone_and_leaves_the_rest_in_order
     // transaction, hold the lock; past ten a round, the rest wait at the queue's front.
     let (hub, db, mut client) = connected().await;
     let (_to_master, _stream, _assign) = assigned_one(&hub, &db, &mut client).await;
-    let outbound = hub.streams.lock().await.get("w1").unwrap().clone();
+    let outbound = hub.sessions.current("w1").unwrap();
     let rejected = |n: u32| {
         worker_message::Message::Rejected(pb::Rejected {
             attempt_id: format!("01a00000-0000-7000-8000-0000000000{n:02}"),
@@ -2979,20 +2976,25 @@ async fn a_worker_that_stops_reading_holds_up_no_delivery() {
     let (slow, _unread) = mpsc::channel(STREAM_BUFFER);
     let (other, mut read) = mpsc::channel(STREAM_BUFFER);
     {
-        let mut streams = hub.streams.lock().await;
-        streams.insert("slow".to_owned(), Outbound::new(slow, 1));
-        streams.insert("other".to_owned(), Outbound::new(other, 2));
+        let mut core = hub.core.lock().await;
+        let writer = core.sessions_mut();
+        writer
+            .install(&Arc::new(Session::new("slow", 1, slow)))
+            .unwrap();
+        writer
+            .install(&Arc::new(Session::new("other", 2, other)))
+            .unwrap();
     }
     let to = |worker: &str| Outgoing {
         worker_id: worker.to_owned(),
         message: pb::MasterMessage::default(),
     };
     let outgoing: Vec<Outgoing> = (0..5000).map(|_| to("slow")).chain([to("other")]).collect();
-    let delivered = tokio::time::timeout(Duration::from_secs(5), hub.deliver(outgoing)).await;
-    assert!(delivered.is_ok(), "a delivery waited on a worker");
+    // A delivery can't wait on a worker any more: it is no future (M5.3i).
+    hub.deliver(outgoing);
     assert!(read.try_recv().is_ok(), "the other worker got its message");
     // Its messages don't pile up: the stream of the one that stopped reading is dropped.
-    assert!(!hub.streams.lock().await.contains_key("slow"));
+    assert!(!hub.sessions.has("slow"));
 }
 
 #[tokio::test]
@@ -3085,12 +3087,12 @@ async fn a_worker_that_stops_reading_is_disconnected() {
                 message: pb::MasterMessage::default(),
             })
             .collect();
-        hub.deliver(flood).await;
-        if !hub.streams.lock().await.contains_key("w1") {
+        hub.deliver(flood);
+        if !hub.sessions.has("w1") {
             break;
         }
     }
-    assert!(!hub.streams.lock().await.contains_key("w1"), "never full");
+    assert!(!hub.sessions.has("w1"), "never full");
     for _ in 0..100 {
         if !core.lock().await.is_live("w1") {
             return;
@@ -3139,7 +3141,7 @@ async fn a_registration_with_more_new_roots_than_a_stream_holds_gets_every_parse
         ));
     }
     assert!(hub.core().lock().await.is_live("w1"));
-    assert!(hub.streams.lock().await.contains_key("w1"));
+    assert!(hub.sessions.has("w1"));
     drop(to_master);
 }
 
@@ -3284,17 +3286,10 @@ async fn closing_the_streams_lets_every_sender_of_a_stream_go() {
         next(&mut stream).await,
         master_message::Message::Registered(_)
     ));
-    let weak = hub
-        .streams
-        .lock()
-        .await
-        .values()
-        .next()
-        .unwrap()
-        .sender
-        .downgrade();
+    // Its session holds the stream's sender: dropped, nothing does.
+    let weak = Arc::downgrade(&hub.sessions.current("w1").unwrap());
     // The worker's side stays open: its server would wait for its messages for ever.
-    hub.close_streams().await;
+    hub.close_streams();
     let released = tokio::time::timeout(Duration::from_secs(5), async {
         while weak.upgrade().is_some() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3316,7 +3311,7 @@ async fn closing_the_streams_ends_one_waiting_for_its_register() {
         client.control(ReceiverStream::new(outbound)).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-    hub.close_streams().await;
+    hub.close_streams();
     let ended = tokio::time::timeout(Duration::from_secs(5), call).await;
     let status = ended
         .expect("the call is still waiting")
@@ -3337,7 +3332,7 @@ async fn closing_the_streams_ends_an_unfinished_upload() {
         client.upload_parse_result(ReceiverStream::new(parts)).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-    hub.close_streams().await;
+    hub.close_streams();
     let ended = tokio::time::timeout(Duration::from_secs(5), call).await;
     let status = ended
         .expect("the upload is still waiting")
@@ -3362,7 +3357,7 @@ async fn a_wait_for_leadership_ends_when_the_streams_close() {
         !waiting.is_finished(),
         "it waits while the master doesn't lead"
     );
-    hub.close_streams().await;
+    hub.close_streams();
     let ended = tokio::time::timeout(Duration::from_secs(5), waiting).await;
     assert!(!ended.expect("still waiting").unwrap());
 }
@@ -3537,7 +3532,7 @@ async fn a_refused_newer_connection_leaves_the_live_stream_alone() {
         .await
         .expect_err("an incompatible protocol");
     assert!(hub.core().lock().await.is_live("w1"));
-    assert!(hub.streams.lock().await.contains_key("w1"));
+    assert!(hub.sessions.has("w1"));
 }
 
 /// Agy's review of M5.3g: the replaced stream went on, its reader renewing the worker's lease
@@ -3590,7 +3585,7 @@ async fn a_new_incarnation_registers_when_the_old_stream_is_gone() {
         .await
         .unwrap()
         .into_inner();
-    hub.streams.lock().await.remove("w1");
+    hub.core.lock().await.sessions_mut().remove("w1", None);
     let (to_master, outbound) = mpsc::channel(16);
     let mut message = register(PROTOCOL_VERSION);
     if let Some(worker_message::Message::Register(register)) = &mut message.message {
@@ -3624,7 +3619,7 @@ async fn a_dropped_message_of_a_replaced_stream_leaves_the_new_streams_start() {
         next(&mut old_stream).await,
         master_message::Message::Registered(_)
     ));
-    let replaced = hub.streams.lock().await.get("w1").cloned().unwrap();
+    let replaced = hub.sessions.current("w1").unwrap();
     let (new, outbound) = mpsc::channel(16);
     new.send(register(PROTOCOL_VERSION)).await.unwrap();
     let _new_stream = client
@@ -3647,8 +3642,8 @@ async fn a_dropped_message_of_a_replaced_stream_leaves_the_new_streams_start() {
     drop((old, new));
 }
 
-/// Agy's second review of M5.3g: a stream taken out of the hub (its buffer full) and then
-/// superseded by a newer registration still had its reader record what it brought.
+/// Agy's second review of M5.3g: a stream found full (stuck) and then superseded by a newer
+/// registration still had its reader record what it brought.
 #[tokio::test]
 async fn a_superseded_streams_reader_records_nothing() {
     let (hub, _db, mut client) = connected().await;
@@ -3663,8 +3658,8 @@ async fn a_superseded_streams_reader_records_nothing() {
         next(&mut old_stream).await,
         master_message::Message::Registered(_)
     ));
-    // As `deliver` does with a full stream: out of the hub, nothing told.
-    hub.streams.lock().await.remove("w1");
+    // As `deliver` does with a full stream: gone for the hub, nothing told.
+    hub.sessions.current("w1").unwrap().mark_stuck();
     let (new, outbound) = mpsc::channel(16);
     new.send(register(PROTOCOL_VERSION)).await.unwrap();
     let _new_stream = client
@@ -3672,12 +3667,16 @@ async fn a_superseded_streams_reader_records_nothing() {
         .await
         .unwrap()
         .into_inner();
-    old.send(wrap(started_msg("a9"))).await.unwrap();
+    // The stuck stream, still the core's to take out, is ended as replaced (M5.3i; before, it
+    // was out of the hub already and its reader went on): its start, if it gets through at
+    // all, counts for nothing.
+    let _ = old.send(wrap(started_msg("a9"))).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         !hub.arrivals.start_waiting("a9"),
         "a superseded stream's start counts for nothing"
     );
+    assert!(hub.sessions.has("w1"), "the new stream in place");
     drop(new);
 }
 
@@ -3875,4 +3874,24 @@ async fn a_master_closing_while_it_leads_lets_nothing_in() {
     for _ in 0..50 {
         assert!(!hub.leading_unless_closing().await, "closing first");
     }
+}
+
+/// M5.3i: a registration while the sessions close (the master stopping) is refused and undone:
+/// not live, no session left open for the graceful shutdown to wait for.
+#[tokio::test]
+async fn a_registration_while_the_sessions_close_is_refused_and_undone() {
+    let (hub, _db, client) = connected().await;
+    hub.sessions.close_all(&Status::unavailable("stopping"));
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let refused = client
+        .clone()
+        .control(ReceiverStream::new(outbound))
+        .await
+        .expect_err("refused while closing");
+    assert_eq!(refused.code(), tonic::Code::Unavailable);
+    let core = hub.core();
+    let core = core.lock().await;
+    assert!(!core.is_live("w1"));
+    assert!(!hub.sessions.has("w1"), "no session left open");
 }

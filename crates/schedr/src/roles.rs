@@ -989,7 +989,7 @@ pub async fn serve_master(
         ended = &mut master_loop => {
             // The workers' streams ended, or the server's graceful shutdown waits for them
             // forever (B200).
-            hub.close_streams().await;
+            hub.close_streams();
             ended.map_err(|lost| AppError::BadArgument(lost.to_string()))?;
             grpc.await.map_err(|e| AppError::BadArgument(format!("gRPC server: {e}")))
         }
