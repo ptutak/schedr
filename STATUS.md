@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-26)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.3i, A worker's session owned by the core: the registration path restructured (decisions D531). Done when: the invariants on the design page and every M5.3g finding checked against them; the session one record, its three functions the only writers; the hub's `streams` and `heard` maps gone, Arrivals keeping its stream numbers and their check under its own lock (where a reader records: the user, 2026-11-26, keeping it as built); the existing tests passing unchanged, one undo of a registration (`registration_undone`, a snapshot of the connection's incarnation and number) on every failing exit, a test for each; the paired speed job built and used: stress 1 (throughput, the round's p99), 23 (bursts), 17b and 17c (reconnects), the new build against `origin/main` on one runner, no slower beyond the spread; chaos on kind (the user, 2026-11-26: "very good timing for core rework") on the same seeds before and after, seed 2 aimed among them: every guarantee held both times, the broken-cutoff build caught after too, and each record's figures side by side (runs finished, attempts `lost`, cleanups moved, a fault's end until every worker is back); its own review with the two review rules of 2026-11-26; kind-standby and chaos on kind on its images
-- **Then:** M5.3c, M5.3e, R1.3, M6.1, M6.2.
+- **Next step:** M5.3c, A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster. Done when: first, its premise measured: a small binary of `task-ctx`'s code alone against `schedr`'s start on an idle machine (2026-11-23, loaded: `schedr --version` 20-70 ms, `/bin/ls` ~10 ms, mostly kernel time; 86 MB of mapped code; a stripped copy no faster); at most half of its time is the gain asked for (the user, 2026-11-25: "a half is enough"); short of it, the step is dropped with those numbers. Measured (2026-11-26, release builds, 300 runs each alternately, after a warm-up, load 1.8-2.1, both failing without an agent): `schedr task-ctx` median 10.51 ms (p90 12.47), a 0.9 MB program of the same crates and first steps 2.90 ms (p90 3.62), `/bin/true` 1.85 ms: 0.28 of it (0.12 above the floor), so built. Otherwise: a script's `task-ctx` calls run through the small program with the same results (the existing task-ctx tests passing through it); one call's time measured idle before and after; scenario 25's shell plugin run measured again; the guide's pages on `task-ctx` and shell plugins say how it is found
+- **Then:** M5.3e, R1.3, M6.1, M6.2, M6.3.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -19,14 +19,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D530 (2026-11-26): the registration path keeps its structure
 - DN42 (2026-11-26): What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (corrects D524)
 - DN41 (2026-11-26): The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (adds to D526)
+- M5.3i (2026-11-26): A worker's session owned by the core: the registration path restructured
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
-- M5.3f (2026-11-26): The kind tests on CI, then chaos on kind
 
 ## In progress
 
-- M5.3i, building: pushed so far the paired speed job (calibration run 45814320439: main against itself, scenario 1, 3 pairs), the session invariants on design/workers.md, D531 (arc-swap, the user). Next: session.rs (draft in the job's scratchpad), the core's writer, the hub's maps gone, tests, agy's review, then paired stress 1, 23, 17b, 17c against origin/main and chaos seeds 2, 7, 11 against target/kind-chaos/baseline-dfa4bb5f.txt.
-- Then M5.3c (measure first), M5.3e, R1.3 (ask before the version commit and the tag). M5.3f done; its fuller record, replay and other 12 faults open.
+- M5.3i done and pushed (d465ce38, d2227ae6): paired run within noise, the user accepted it; chaos seeds 2, 7, 11 on CI (45861804673), its result to report.
+- M5.3c building: schedr-ctx measured 3.65 ms against 10.52 ms (0.35); the library split and the program committed locally (9886af94). Waiting for the user: scripts opt in by calling schedr-ctx (option 1) or no script changes through a second schedr on PATH (option 2); then the worker's PATH, the wheel and images checked, the task-ctx tests against both, docs.
+- Then M5.3e, R1.3 (ask before the version commit and the tag).
 
 ## Waiting for the user
 

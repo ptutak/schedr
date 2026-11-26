@@ -4,8 +4,9 @@
 updated = 2026-11-26
 
 in_progress = [
-    "M5.3i, building: pushed so far the paired speed job (calibration run 45814320439: main against itself, scenario 1, 3 pairs), the session invariants on design/workers.md, D531 (arc-swap, the user). Next: session.rs (draft in the job's scratchpad), the core's writer, the hub's maps gone, tests, agy's review, then paired stress 1, 23, 17b, 17c against origin/main and chaos seeds 2, 7, 11 against target/kind-chaos/baseline-dfa4bb5f.txt.",
-    "Then M5.3c (measure first), M5.3e, R1.3 (ask before the version commit and the tag). M5.3f done; its fuller record, replay and other 12 faults open.",
+    "M5.3i done and pushed (d465ce38, d2227ae6): paired run within noise, the user accepted it; chaos seeds 2, 7, 11 on CI (45861804673), its result to report.",
+    "M5.3c building: schedr-ctx measured 3.65 ms against 10.52 ms (0.35); the library split and the program committed locally (9886af94). Waiting for the user: scripts opt in by calling schedr-ctx (option 1) or no script changes through a second schedr on PATH (option 2); then the worker's PATH, the wheel and images checked, the task-ctx tests against both, docs.",
+    "Then M5.3e, R1.3 (ask before the version commit and the tag).",
 ]
 
 waiting = []
