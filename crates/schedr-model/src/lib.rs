@@ -21,6 +21,7 @@ pub mod schema;
 pub mod secret;
 pub mod states;
 pub mod task;
+pub mod times;
 pub mod trigger;
 pub mod types;
 pub mod usage;

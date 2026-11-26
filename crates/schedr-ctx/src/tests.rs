@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
@@ -696,23 +697,15 @@ fn a_report_takes_negative_numbers_and_refuses_what_isnt_finite() {
     use clap::Parser as _;
     // agy's review of M5.2i6: `-5.5` was read as a flag, `NaN` sent as null. DN27: under
     // `extension`; the old place is gone.
-    let parsed = crate::cli::Cli::try_parse_from([
-        "schedr",
-        "task-ctx",
-        "extension",
-        "metric",
-        "temp",
-        "-5.5",
-    ]);
+    let parsed = Small::try_parse_from(["schedr-ctx", "extension", "metric", "temp", "-5.5"]);
     assert!(parsed.is_ok(), "{parsed:?}");
-    let parsed =
-        crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "extension", "output", "set", "-1"]);
+    let parsed = Small::try_parse_from(["schedr-ctx", "extension", "output", "set", "-1"]);
     assert!(parsed.is_ok(), "{parsed:?}");
-    let moved = crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "metric", "temp", "1"]);
+    let moved = Small::try_parse_from(["schedr-ctx", "metric", "temp", "1"]);
     assert!(moved.is_err());
-    let moved = crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "stop-reason"]);
+    let moved = Small::try_parse_from(["schedr-ctx", "stop-reason"]);
     assert!(moved.is_err());
-    let stop = crate::cli::Cli::try_parse_from(["schedr", "task-ctx", "extension", "stop-reason"]);
+    let stop = Small::try_parse_from(["schedr-ctx", "extension", "stop-reason"]);
     assert!(stop.is_ok(), "{stop:?}");
     let env = BTreeMap::new();
     for value in ["NaN", "inf", "-inf", "x"] {
@@ -765,4 +758,50 @@ async fn an_extension_call_outside_a_shell_plugin_is_refused() {
         "{:?}",
         got.1
     );
+}
+
+/// `schedr-ctx`'s arguments, as `run` takes them.
+fn small(args: &[&str]) -> Vec<std::ffi::OsString> {
+    std::iter::once("schedr-ctx")
+        .chain(args.iter().copied())
+        .map(Into::into)
+        .collect()
+}
+
+/// `run(args)` with `env`: its exit code, stdout and stderr.
+fn small_run(args: &[&str], env: &BTreeMap<String, String>) -> (u8, String, String) {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code = crate::run(small(args), env, &mut out, &mut err);
+    (
+        code,
+        String::from_utf8(out).unwrap(),
+        String::from_utf8(err).unwrap(),
+    )
+}
+
+#[test]
+fn schedr_ctx_outside_a_task_fails_as_schedr_task_ctx_does() {
+    let (code, out, err) = small_run(&["status", "loading"], &BTreeMap::new());
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert!(err.starts_with("error: "), "{err}");
+    assert!(err.contains("SCHEDR_CTX_FD"), "{err}");
+}
+
+#[test]
+fn schedr_ctx_says_its_version_and_its_help_on_stdout() {
+    let (code, out, _) = small_run(&["--version"], &BTreeMap::new());
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), format!("schedr-ctx {VERSION}"));
+    let (code, out, _) = small_run(&["--help"], &BTreeMap::new());
+    assert_eq!(code, 0);
+    assert!(out.contains("secret"), "{out}");
+}
+
+#[test]
+fn schedr_ctx_refuses_a_wrong_command_as_wrong_usage() {
+    let (code, out, err) = small_run(&["nothing"], &BTreeMap::new());
+    assert_eq!(code, EXIT_USAGE);
+    assert_eq!(out, "");
+    assert!(err.contains("nothing"), "{err}");
 }

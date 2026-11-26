@@ -3191,6 +3191,7 @@ dependencies = [
  "schedr-api",
  "schedr-client",
  "schedr-config",
+ "schedr-ctx",
  "schedr-db",
  "schedr-extension",
  "schedr-fd",
@@ -3320,6 +3321,23 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "schedr-ctx"
+version = "1.2.1"
+dependencies = [
+ "clap",
+ "jiff",
+ "pretty_assertions",
+ "rstest",
+ "rustix",
+ "schedr-agent",
+ "schedr-fd",
+ "schedr-model",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

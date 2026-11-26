@@ -13,8 +13,9 @@ use clap::error::ErrorKind;
 
 pub mod app;
 pub mod cli;
-pub mod ctx;
 pub use schedr_client as client;
+/// The in-task CLI, in its own crate for the small `schedr-ctx` program (M5.3c).
+pub use schedr_ctx as ctx;
 pub mod interpreter;
 pub mod local;
 pub mod logging;

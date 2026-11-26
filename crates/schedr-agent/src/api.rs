@@ -8,8 +8,9 @@ use std::time::Duration;
 use schedr_proto::pb;
 use tokio::sync::oneshot;
 
-/// How long a call waits for its answer, over reconnects, before it is given up.
-pub const API_CALL_LIMIT: Duration = Duration::from_mins(1);
+/// How long a call waits for its answer, over reconnects, before it is given up: the in-task
+/// CLI's, which waits a little longer (in `schedr-model`, which the small `schedr-ctx` uses).
+pub use schedr_model::ctx::API_CALL_LIMIT;
 
 /// Sends a call on to the master (through the agent's loop); the answer comes on the receiver.
 pub type ApiSend = Arc<dyn Fn(pb::ApiCall) -> oneshot::Receiver<pb::ApiAnswer> + Send + Sync>;

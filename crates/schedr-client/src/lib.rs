@@ -24,7 +24,8 @@ use serde::de::DeserializeOwned;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod stream;
-pub mod times;
+/// Times as people type them: in `schedr-model`, which the small `schedr-ctx` uses too (M5.3c).
+pub use schedr_model::times;
 
 pub use stream::{Chunks, EventReader, ServerEvent};
 

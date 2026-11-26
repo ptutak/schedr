@@ -421,24 +421,7 @@ pub async fn run_events<T: Transport>(
     Ok(())
 }
 
-/// `--event-data`: JSON, or `@file.json`.
-///
-/// # Errors
-///
-/// What is wrong with it.
-pub(crate) fn given_event_data(given: Option<&str>) -> Result<Option<serde_json::Value>, String> {
-    let Some(given) = given else {
-        return Ok(None);
-    };
-    let text = match given.strip_prefix('@') {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|e| format!("--event-data: can't read `{path}`: {e}"))?,
-        None => given.to_owned(),
-    };
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|e| format!("--event-data must be JSON: {e}"))
-}
+pub(crate) use schedr_ctx::given_event_data;
 
 /// `schedr resources ...`.
 ///

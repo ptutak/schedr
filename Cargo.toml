@@ -21,6 +21,7 @@ schedr-master = { path = "crates/schedr-master" }
 schedr-agent = { path = "crates/schedr-agent" }
 schedr-api = { path = "crates/schedr-api" }
 schedr-client = { path = "crates/schedr-client" }
+schedr-ctx = { path = "crates/schedr-ctx" }
 schedr-ui = { path = "crates/schedr-ui" }
 schedr-tls = { path = "crates/schedr-tls" }
 

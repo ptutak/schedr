@@ -16,6 +16,12 @@ path = "src/lib.rs"
 name = "schedr"
 path = "src/main.rs"
 
+# `schedr task-ctx`'s commands alone, linking only `schedr_ctx` (M5.3c); maturin puts every binary
+# of this package in the wheel.
+[[bin]]
+name = "schedr-ctx"
+path = "src/ctx_main.rs"
+
 [dependencies]
 prometheus-client.workspace = true
 rustix.workspace = true
@@ -27,6 +33,7 @@ schedr-agent.workspace = true
 schedr-extension.workspace = true
 schedr-api.workspace = true
 schedr-client.workspace = true
+schedr-ctx.workspace = true
 schedr-ui.workspace = true
 schedr-master.workspace = true
 schedr-model.workspace = true

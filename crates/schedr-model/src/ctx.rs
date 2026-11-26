@@ -21,6 +21,10 @@ mod tests;
 /// The environment variable with a command task's descriptor of its context channel.
 pub const CTX_FD_ENV: &str = "SCHEDR_CTX_FD";
 
+/// How long a task's API call waits for its answer, over the agent's reconnects, before the agent
+/// gives it up (the in-task CLI waits for that answer a little longer).
+pub const API_CALL_LIMIT: std::time::Duration = std::time::Duration::from_mins(1);
+
 /// The context channel's protocol (decision 148): the agent accepts a caller speaking the same
 /// one, whatever its schedr version. Within a protocol, changes are only additions (a new
 /// request, a new field), and either side ignores fields it doesn't know; anything else is a

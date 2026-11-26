@@ -1,9 +1,59 @@
-//! `schedr dag-ctx`: a command task's processes reading the run's parameters and information
-//! from the agent, over the task's context channel (decisions 143-147, see
-//! `schedr_model::ctx`).
-//!
-//! Blocking and without the configuration: it runs inside a task, which may have none, and
-//! is one request and one answer.
+//! The in-task CLI: `schedr task-ctx` and `schedr dag-ctx`, a command task's processes reading
+//! the run's parameters and information from the agent, and reporting to it, over the task's
+//! context channel (decisions 143-147, see `schedr_model::ctx`). Shared by `schedr` and the small
+//! `schedr-ctx` program, which starts in a fraction of `schedr`'s time (M5.3c: 2.9 ms against
+//! 10.5 ms).
+
+pub mod cli;
+
+/// This crate's version, the same as `schedr`'s (one workspace): what the agent's channel is
+/// told the CLI is.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Exit code for wrong usage (unknown command, bad arguments), as `schedr`'s.
+pub const EXIT_USAGE: u8 = 2;
+
+/// `schedr-ctx`: `schedr task-ctx`'s commands, the same arguments, output and exit codes.
+#[derive(Debug, clap::Parser)]
+#[command(
+    name = "schedr-ctx",
+    version,
+    about = "Inside a running task: `schedr task-ctx`'s commands, started in a fraction of its time"
+)]
+struct Small {
+    #[command(subcommand)]
+    command: cli::TaskCtxCommand,
+}
+
+/// The small `schedr-ctx` program (M5.3c): `args` parsed as `schedr task-ctx`'s, run with the
+/// task's environment `env`; its exit code. Help and the version on `out`, errors on `err` as
+/// `schedr` prints them (`error: ...`, 1; wrong usage 2).
+pub fn run(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    env: &BTreeMap<String, String>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> u8 {
+    use clap::Parser as _;
+    match Small::try_parse_from(args) {
+        Ok(small) => match run_task_ctx(&small.command, env, VERSION, (&mut *out, &mut *err)) {
+            Ok(()) => 0,
+            Err(message) => {
+                let _ = writeln!(err, "error: {message}");
+                1
+            }
+        },
+        Err(error) => {
+            let shown = error.render().ansi().to_string();
+            let _ = if error.use_stderr() {
+                err.write_all(shown.as_bytes())
+            } else {
+                out.write_all(shown.as_bytes())
+            };
+            u8::try_from(error.exit_code()).unwrap_or(EXIT_USAGE)
+        }
+    }
+}
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -135,7 +185,7 @@ pub fn run_task_ctx(
             text,
             data,
         } => {
-            let data = crate::user::given_event_data(data.as_deref())
+            let data = given_event_data(data.as_deref())
                 .map_err(|why| why.replace("--event-data", "--data"))?;
             let request = CtxRequest::ApiCall {
                 method: "POST".to_owned(),
@@ -204,7 +254,7 @@ pub fn run_task_ctx_report(
         TaskCtxCommand::Extension {
             command: ExtensionCtxCommand::Notify { event, text, data },
         } => {
-            let data = crate::user::given_event_data(data.as_deref())
+            let data = given_event_data(data.as_deref())
                 .map_err(|why| why.replace("--event-data", "--data"))?;
             let request = CtxRequest::ExtensionNotify {
                 event: event.clone(),
@@ -504,7 +554,7 @@ pub fn run_task_ctx_events(
             at,
             idempotency_key,
         } => {
-            let data = crate::user::given_event_data(data.as_deref())
+            let data = given_event_data(data.as_deref())
                 .map_err(|why| why.replace("--event-data", "--data"))?;
             let mut body = serde_json::json!({
                 "name": name,
@@ -512,7 +562,8 @@ pub fn run_task_ctx_events(
                 "data": data.unwrap_or_default(),
             });
             if let Some(text) = at {
-                let parsed = crate::times::parse_for(text).map_err(|why| format!("--at: {why}"))?;
+                let parsed =
+                    schedr_model::times::parse_for(text).map_err(|why| format!("--at: {why}"))?;
                 if let Some(warning) = parsed.warning {
                     let _ = writeln!(err, "{warning}");
                 }
@@ -578,7 +629,7 @@ fn api_call(
     // The agent waits for the master up to its limit, over reconnects: the answer comes then.
     stream
         .set_read_timeout(Some(
-            schedr_agent::api::API_CALL_LIMIT.saturating_add(ANSWER_TIMEOUT),
+            schedr_model::ctx::API_CALL_LIMIT.saturating_add(ANSWER_TIMEOUT),
         ))
         .map_err(|e| format!("can't set up the connection: {e}"))?;
     let answer = call(&mut stream, version, request)?;
@@ -691,7 +742,7 @@ fn service_call(
     (method, args): (&str, Option<&str>),
     out: &mut impl Write,
 ) -> Result<(), String> {
-    let args = crate::user::given_event_data(args)
+    let args = given_event_data(args)
         .map_err(|why| why.replace("--event-data", "--args"))?
         .unwrap_or(Value::Null);
     let mut stream = connect(env, Ctx::Task)?;
@@ -952,4 +1003,23 @@ fn metric_request(name: &str, value: &str, labels: &[String]) -> Result<CtxReque
         value,
         labels,
     })
+}
+
+/// `--event-data`'s JSON, given as text or `@file`; none when not given.
+///
+/// # Errors
+///
+/// What is wrong with it.
+pub fn given_event_data(given: Option<&str>) -> Result<Option<serde_json::Value>, String> {
+    let Some(given) = given else {
+        return Ok(None);
+    };
+    let text = match given.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("--event-data: can't read `{path}`: {e}"))?,
+        None => given.to_owned(),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("--event-data must be JSON: {e}"))
 }
