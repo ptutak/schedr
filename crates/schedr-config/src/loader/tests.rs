@@ -840,8 +840,9 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
     // rate and burst and the events held and kept (D493, M5.2i5); 132 with the trigger runs
     // kept (B272); 133 with `WORKER__MASTER_CONNECT_TIMEOUT` (B296); 135
     // with `WORKER__REGISTER_TIMEOUT` (B297) and `CLIENT__STREAM_IDLE` (B298); 136 with
-    // `WORKER__UNANSWERED_TIMEOUT` (decision 526); 137 with `MASTER__UNOFFERED_WAIT` (decision 529).
-    assert_eq!(names.len(), 137, "{names:?}");
+    // `WORKER__UNANSWERED_TIMEOUT` (decision 526); 137 with `MASTER__UNOFFERED_WAIT` (decision 529);
+    // 138 with `MASTER__SLOW_TICK_LOG` (M5.3e).
+    assert_eq!(names.len(), 138, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute

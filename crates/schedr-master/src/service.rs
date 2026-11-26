@@ -983,6 +983,10 @@ impl Hub {
     /// A round, its duration observed.
     async fn timed_tick(&self, ahead: Duration) {
         let started = std::time::Instant::now();
+        let slow = self.timings.slow_tick_log;
+        if !slow.is_zero() {
+            self.metrics.begin_tick();
+        }
         match self.tick_ahead(ahead).await {
             Ok(()) => self.problems.clear(ProblemKind::Round),
             Err(error) => {
@@ -991,9 +995,20 @@ impl Hub {
                     .set(ProblemKind::Round, true, format!("a round failed: {error}"));
             }
         }
-        self.metrics
-            .tick_duration
-            .observe(started.elapsed().as_secs_f64());
+        let took = started.elapsed();
+        self.metrics.tick_duration.observe(took.as_secs_f64());
+        // Where a slow tick's time went (M5.3e): its parts, its waits for the lock, the rest.
+        if let Some(parts) = self.metrics.end_tick()
+            && took >= slow
+        {
+            tracing::warn!(
+                took_s = took.as_secs_f64(),
+                lock_wait_s = parts.lock_wait.as_secs_f64(),
+                unaccounted_s = parts.unaccounted(took).as_secs_f64(),
+                parts = parts.describe(),
+                "a slow tick"
+            );
+        }
     }
 
     /// Renews `leadership` every third of its period, pausing the master when its last

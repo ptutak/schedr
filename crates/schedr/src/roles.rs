@@ -256,6 +256,7 @@ pub fn master_settings(config: &Config) -> Settings {
         script_root_grace: config.timings.script_root_grace,
         event_lookback: config.timings.event_lookback,
         timings: schedr_master::core::MasterTimings {
+            slow_tick_log: config.timings.slow_tick_log,
             round_gap: config.timings.round_gap,
             task_round_gap: config.timings.task_round_gap,
             notification_retry: config.timings.notification_retry,

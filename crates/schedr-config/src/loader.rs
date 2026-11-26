@@ -608,6 +608,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "MASTER__ALIVE_INTERVAL" => &mut timings.master_alive_interval,
         "MASTER__GAUGE_REFRESH" => &mut timings.gauge_refresh,
         "MASTER__OUTBOX_POLL" => &mut timings.outbox_poll,
+        "MASTER__SLOW_TICK_LOG" => &mut timings.slow_tick_log,
         "MASTER__OUTBOX_RETRY_FIRST" => &mut timings.outbox_retry_first,
         "MASTER__OUTBOX_RETRY_MAX" => &mut timings.outbox_retry_max,
         "MASTER__RETENTION_INTERVAL" => &mut timings.retention_interval,

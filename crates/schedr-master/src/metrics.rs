@@ -406,6 +406,9 @@ pub struct QueryLabels {
 pub struct MasterMetrics {
     /// How long each tick of the loop took.
     pub tick_duration: Histogram,
+    /// The tick being broken down, while one is (`slow_tick_log`, M5.3e): its parts' times and
+    /// its waits for the core's lock.
+    tick_parts: std::sync::Arc<std::sync::Mutex<Option<TickParts>>>,
     /// From a task's start on its worker to the master recording it.
     pub start_recorded: Histogram,
     /// How long the core lock was waited for, by who waited.
@@ -487,6 +490,7 @@ struct Seen {
 impl Default for MasterMetrics {
     fn default() -> Self {
         Self {
+            tick_parts: std::sync::Arc::default(),
             // 1 ms to about 16 s, each bucket √2 times the last: fine enough for scenario 14
             // to tell a round's p99 one step worse from two (M2.5.2).
             tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
@@ -592,8 +596,30 @@ impl MasterMetrics {
             .inc_by(count);
     }
 
+    /// Starts breaking a tick down ([`Self::end_tick`]).
+    pub fn begin_tick(&self) {
+        *self.tick_parts() = Some(TickParts::default());
+    }
+
+    /// The tick's parts since [`Self::begin_tick`]; none if it wasn't begun.
+    #[must_use]
+    pub fn end_tick(&self) -> Option<TickParts> {
+        self.tick_parts().take()
+    }
+
+    fn tick_parts(&self) -> std::sync::MutexGuard<'_, Option<TickParts>> {
+        self.tick_parts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Records a wait of `took` for the core lock by `by`.
     pub fn core_lock_waited(&self, by: &str, took: Duration) {
+        if by == "round"
+            && let Some(parts) = self.tick_parts().as_mut()
+        {
+            parts.lock_wait += took;
+        }
         self.core_lock_wait
             .get_or_create(&ByLabels { by: by.to_owned() })
             .observe(took.as_secs_f64());
@@ -601,6 +627,9 @@ impl MasterMetrics {
 
     /// Records a part of a round that took `took`.
     pub fn round_part_done(&self, part: &str, took: Duration) {
+        if let Some(parts) = self.tick_parts().as_mut() {
+            *parts.parts.entry(part.to_owned()).or_default() += took;
+        }
         self.round_part
             .get_or_create(&PartLabels {
                 part: part.to_owned(),
@@ -975,5 +1004,37 @@ fn set_gauges<L: Clone + Hash + Eq + EncodeLabelSet + std::fmt::Debug + Send + S
     for (labels, count) in counts {
         family.get_or_create(&labels).set(count);
         seen.insert(labels);
+    }
+}
+
+/// A tick broken down (`slow_tick_log`, M5.3e): how long each round part took in all, summed over
+/// its rounds (a trigger pass running beside it included), and how long the round waited for the
+/// core's lock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TickParts {
+    /// Each part's time, by its name.
+    pub parts: std::collections::BTreeMap<String, Duration>,
+    /// The round's waits for the core's lock.
+    pub lock_wait: Duration,
+}
+
+impl TickParts {
+    /// The parts as one line, the longest first: `results 1.20 s, assign 0.31 s, ...`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let mut parts: Vec<_> = self.parts.iter().collect();
+        parts.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        parts
+            .iter()
+            .map(|(name, took)| format!("{name} {:.2} s", took.as_secs_f64()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The time no part accounts for out of `tick` (outside the core's lock: the probe, the
+    /// assign part's reads, waiting for the database or the CPU).
+    #[must_use]
+    pub fn unaccounted(&self, tick: Duration) -> Duration {
+        tick.saturating_sub(self.parts.values().sum::<Duration>() + self.lock_wait)
     }
 }

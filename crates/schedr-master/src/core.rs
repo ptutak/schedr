@@ -191,6 +191,8 @@ impl Default for RoundLimits {
 /// How the master's loop and its parse jobs are paced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MasterTimings {
+    /// A tick at least this long is logged with its parts ("a slow tick", M5.3e); zero, none.
+    pub slow_tick_log: Duration,
     /// The wait before a failed trigger starts again; it doubles with each failure in a row.
     pub trigger_restart_backoff: Duration,
     /// The most it waits.
@@ -227,6 +229,7 @@ impl Default for MasterTimings {
             accept_retry: Duration::from_millis(100),
             trigger_restart_backoff: Duration::from_secs(5),
             trigger_restart_backoff_max: Duration::from_mins(5),
+            slow_tick_log: Duration::ZERO,
         }
     }
 }

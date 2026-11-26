@@ -119,3 +119,28 @@ fn events_are_counted_with_bounded_labels() {
 fn the_gauges_refresh_often_enough_for_a_scrape() {
     assert_eq!(GAUGE_REFRESH, Duration::from_secs(15));
 }
+
+/// M5.3e: a tick is broken down only while begun; its parts summed by name, the round's lock
+/// waits beside them (a turn's not), the rest unaccounted.
+#[test]
+fn a_tick_is_broken_down_into_its_parts_and_lock_waits() {
+    let metrics = MasterMetrics::default();
+    metrics.round_part_done("assign", Duration::from_millis(500));
+    assert_eq!(metrics.end_tick(), None, "not begun: nothing kept");
+    metrics.begin_tick();
+    metrics.round_part_done("assign", Duration::from_millis(300));
+    metrics.round_part_done("results", Duration::from_millis(1200));
+    metrics.round_part_done("assign", Duration::from_millis(100));
+    metrics.core_lock_waited("round", Duration::from_millis(250));
+    metrics.core_lock_waited("turn", Duration::from_secs(9));
+    let parts = metrics.end_tick().unwrap();
+    assert_eq!(parts.parts["assign"], Duration::from_millis(400));
+    assert_eq!(parts.lock_wait, Duration::from_millis(250));
+    assert_eq!(parts.describe(), "results 1.20 s, assign 0.40 s");
+    assert_eq!(
+        parts.unaccounted(Duration::from_secs(3)),
+        Duration::from_millis(1150)
+    );
+    assert_eq!(parts.unaccounted(Duration::from_secs(1)), Duration::ZERO);
+    assert_eq!(metrics.end_tick(), None, "ended once");
+}

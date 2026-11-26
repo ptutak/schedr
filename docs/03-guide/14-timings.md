@@ -88,6 +88,7 @@ reason.
 | `SCHEDR_HIDDEN__MASTER__ALIVE_INTERVAL` | 5 s | How often the master's loop turns at least while waiting; it must stay shorter than the loop stall timeout, or a waiting master looks stuck. |
 | `SCHEDR_HIDDEN__MASTER__GAUGE_REFRESH` | 15 s | How often the master reads gauges from the database. |
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_POLL` | 5 s | How often the sender looks for notifications to deliver. |
+| `SCHEDR_HIDDEN__MASTER__SLOW_TICK_LOG` | 0 (off) | A master tick at least this long is logged as "a slow tick": each round part's time, the waits for the core's lock, and the time no part accounts for (M5.3e). |
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_FIRST` | 10 s | First wait before retrying a failed notification; it doubles up to the maximum. |
 | `SCHEDR_HIDDEN__MASTER__OUTBOX_RETRY_MAX` | 1 h | Longest wait before retrying a failed notification. |
 | `SCHEDR_HIDDEN__MASTER__RETENTION_INTERVAL` | 1 h | How often the leading master runs retention. |

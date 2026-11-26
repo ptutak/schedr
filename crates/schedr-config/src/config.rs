@@ -182,6 +182,9 @@ pub struct Timings {
     pub gauge_refresh: Duration,
     /// How often the master's sender looks for notifications to deliver.
     pub outbox_poll: Duration,
+    /// A master's tick at least this long is logged with its parts' times and its waits for the
+    /// core's lock ("a slow tick", M5.3e); zero, none are.
+    pub slow_tick_log: Duration,
     /// The first wait before a notification that failed is tried again; it doubles up to
     /// `outbox_retry_max`.
     pub outbox_retry_first: Duration,
@@ -349,6 +352,7 @@ impl Default for Timings {
             master_alive_interval: Duration::from_secs(5),
             gauge_refresh: Duration::from_secs(15),
             outbox_poll: Duration::from_secs(5),
+            slow_tick_log: Duration::ZERO,
             outbox_retry_first: Duration::from_secs(10),
             outbox_retry_max: Duration::from_secs(3600),
             retention_interval: Duration::from_hours(1),
