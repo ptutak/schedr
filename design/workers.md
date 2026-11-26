@@ -334,9 +334,11 @@ Each is one line; the reader's page has the diagrams.
   known or not: 10 s, doubling after each try that ended silent, up to 8 times (a master registers
   behind its round). Only waits end by it; a `Registered` that arrived is judged by the lease
   (decision 281). The master doesn't register a worker that left while it waited for the core's
-  lock; what its journal reported as started stays known for its next try. Not chosen: HTTP/2
-  keepalive with it (B301, M5.3g: an open connection dead without a word); a limit on the first
-  registration alone.
+  lock; what its journal reported as started stays known for its next try when the registration
+  would have been accepted (DN42). Not chosen: HTTP/2 keepalive with it (B301, M5.3g: an open
+  connection dead without a word); a limit on the first registration alone. *Corrected by DN42:*
+  What a left registration keeps: only for one that would have been accepted, of a known worker,
+  with no stream live or one it would replace.
 - **A worker leaves a connection whose heartbeats go unanswered, well before the lease** (D526,
   planned (M5.3g)): A worker whose heartbeats go unanswered for 25 s (a hidden timing, at most half
   the lease) ends that connection and opens its next, which replaces the old one at the master
@@ -344,7 +346,8 @@ Each is one line; the reader's page has the diagrams.
   stay as they are. What already waits on the connection is read before it is judged (a frozen
   worker waking). The master needs no check of its own. Not chosen: HTTP/2 keepalive on both ends (a
   second ping, answered while schedr's own loop is stuck); leaving it at the lease until the chaos
-  on kind.
+  on kind. *Added to by DN41:* The unanswered limit: at least two heartbeats, a share of 80 to 100 %
+  per connection.
 
 ### Drain
 
@@ -539,6 +542,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::kept_cleanup` (D229)
 - `crates/schedr-agent/src/agent.rs::older_leader` (D444)
 - `crates/schedr-agent/src/agent.rs::on_done_group` (D396)
+- `crates/schedr-agent/src/agent.rs::open_session` (D525)
 - `crates/schedr-agent/src/agent.rs::reconnect_cap` (D307)
 - `crates/schedr-agent/src/agent.rs::report_changes` (D303)
 - `crates/schedr-agent/src/agent.rs::send_handles` (D242)
@@ -546,6 +550,7 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-agent/src/agent.rs::start_group` (D507)
 - `crates/schedr-agent/src/agent.rs::start_journaled` (D507)
 - `crates/schedr-agent/src/agent.rs::start_queued` (D509)
+- `crates/schedr-agent/src/agent.rs::unanswered_at` (D526)
 - `crates/schedr-agent/src/agent.rs::unregistered_at` (D524)
 - `crates/schedr-agent/src/agent.rs::warned_room` (D250)
 - `crates/schedr-agent/src/attempt.rs::CleanupGate` (D253)
@@ -610,6 +615,8 @@ Each is one line; the reader's page has the diagrams.
 - `crates/schedr-master/src/core.rs::USAGE_EVERY` (D463)
 - `crates/schedr-master/src/core.rs::handle_group` (D397)
 - `crates/schedr-master/src/core.rs::handle_results_in` (D505)
+- `crates/schedr-master/src/core.rs::replaces` (D525)
+- `crates/schedr-master/src/core.rs::stale` (D525)
 - `crates/schedr-master/src/core.rs::take_back` (D308)
 - `crates/schedr-master/src/core.rs::takeover_wait` (D444)
 - `crates/schedr-master/src/core/round.rs::InRound` (D505)

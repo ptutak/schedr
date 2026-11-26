@@ -15,4 +15,4 @@ chosen: a 25 s default everywhere; a longer default grace (330 s); warning only 
 history = "JOURNAL.md#D497"  # <a id="D497"></a> starts its JOURNAL.md entry
 step = "M5.1q"  # the plan step that builds it; "later"; "n/a" for a rule
 code = ["crates/schedr-config/src/config.rs::cleanup_timeout", "crates/schedr-config/src/config.rs::cleanup_room"]
-checked = 2026-11-25
+checked = 2026-11-26

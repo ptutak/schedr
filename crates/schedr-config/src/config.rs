@@ -271,6 +271,9 @@ pub struct Timings {
     pub client_connect_timeout: Duration,
     /// How long a worker waits for a stream to open and the master to register it. (`WORKER__REGISTER_TIMEOUT`)
     pub register_timeout: Duration,
+    /// How long a worker's registered stream may go unanswered before it opens another, at most
+    /// half the lease. (`WORKER__UNANSWERED_TIMEOUT`)
+    pub unanswered_timeout: Duration,
     /// How long `schedr ui` waits for the next bytes of a webserver's live stream. (`CLIENT__STREAM_IDLE`)
     pub client_stream_idle: Duration,
     /// How long a worker waits for the master's address to answer before it tries again. (`WORKER__MASTER_CONNECT_TIMEOUT`)
@@ -287,6 +290,7 @@ pub struct Timings {
 
 impl Default for Timings {
     /// The values every deployment runs with.
+    #[allow(clippy::too_many_lines)] // a line a timing
     fn default() -> Self {
         Self {
             tick_interval: Duration::from_secs(1),
@@ -381,6 +385,7 @@ impl Default for Timings {
             node_row_kept: Duration::from_hours(1),
             client_connect_timeout: Duration::from_secs(5),
             register_timeout: Duration::from_secs(10),
+            unanswered_timeout: Duration::from_secs(25),
             client_stream_idle: Duration::from_mins(1),
             master_connect_timeout: Duration::from_secs(5),
             client_request_timeout: Duration::from_secs(30),

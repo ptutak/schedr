@@ -895,6 +895,29 @@ fn seed(journal: &Journal, start: Start) {
 }
 
 /// [`against_script_with`], against a prepared master.
+/// A channel to `master`, served in this process, for one connection.
+async fn scripted_channel(master: Scripted) -> Channel {
+    let (client_io, server_io) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(pb::master_server::MasterServer::new(master))
+            .serve_with_incoming(tokio_stream::once(Ok::<_, std::io::Error>(server_io)))
+            .await
+    });
+    let mut client_io = Some(client_io);
+    Endpoint::try_from("http://[::]:50051")
+        .unwrap()
+        .connect_with_connector(tower::service_fn(move |_| {
+            let io = client_io.take();
+            async move {
+                io.map(hyper_util::rt::TokioIo::new)
+                    .ok_or_else(|| std::io::Error::other("connected once"))
+            }
+        }))
+        .await
+        .unwrap()
+}
+
 async fn against_master(
     slots: u32,
     start: Start,
@@ -909,25 +932,7 @@ async fn against_master(
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("sync.py"), "").unwrap();
     let received = Arc::clone(&master.received);
-    let (client_io, server_io) = tokio::io::duplex(1 << 20);
-    tokio::spawn(async move {
-        Server::builder()
-            .add_service(pb::master_server::MasterServer::new(master))
-            .serve_with_incoming(tokio_stream::once(Ok::<_, std::io::Error>(server_io)))
-            .await
-    });
-    let mut client_io = Some(client_io);
-    let channel = Endpoint::try_from("http://[::]:50051")
-        .unwrap()
-        .connect_with_connector(tower::service_fn(move |_| {
-            let io = client_io.take();
-            async move {
-                io.map(hyper_util::rt::TokioIo::new)
-                    .ok_or_else(|| std::io::Error::other("connected once"))
-            }
-        }))
-        .await
-        .unwrap();
+    let channel = scripted_channel(master).await;
     let settings = AgentSettings {
         discovered: Vec::new(),
         watcher_slots: 2,
@@ -969,9 +974,15 @@ async fn against_master(
     let mut agent = Agent::new(settings, Fake::default(), "i1".to_owned());
     assert_eq!(agent.running(), Vec::<String>::new());
     tweak(&mut agent);
+    // The agent's whole loop on this one connection: a session left for want of answers
+    // (decision 526) goes on offline, where the lease's cutoff still comes.
     let session = tokio::spawn(async move {
-        agent.recover().await;
-        agent.session(MasterClient::new(channel)).await
+        let connect = connect_once(channel);
+        // A test's own shutdown requests, if it set them up.
+        let (requests, own) = watch::channel(0);
+        let shutdown = agent.shutdown.take().unwrap_or(own);
+        agent.run(connect, shutdown).await;
+        drop(requests);
     });
     for _ in 0..1000 {
         let seen = received.lock().unwrap().clone();
@@ -990,6 +1001,21 @@ async fn against_master(
         "the agent didn't send what was expected: {:?}",
         received.lock().unwrap()
     );
+}
+
+/// An agent's `connect` that gives `channel` once, then fails.
+fn connect_once(
+    channel: Channel,
+) -> impl Fn(Option<Duration>) -> std::future::Ready<Result<MasterClient<Channel>, String>> {
+    let once = std::sync::Mutex::new(Some(channel));
+    move |_limit| {
+        let channel = once.lock().unwrap().take();
+        std::future::ready(
+            channel
+                .map(MasterClient::new)
+                .ok_or_else(|| "connected once".to_owned()),
+        )
+    }
 }
 
 /// What the agent sent, by kind; heartbeats, warnings and results sent again (B41: until
@@ -6246,4 +6272,119 @@ async fn connecting_takes_a_quarter_of_the_lease_at_most() {
     drop(requests);
     let tries = tries.load(std::sync::atomic::Ordering::SeqCst);
     assert!(tries >= 2, "{tries} tries in a lease");
+}
+
+/// Decision 526: a registered stream without a word for the limit (at most half the lease) is
+/// left; the lease's last word stays, so tasks are cut off at the lease as before.
+#[tokio::test]
+async fn an_unanswered_stream_is_left_at_its_limit_or_half_the_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.setup.timeouts.unanswered = Duration::from_secs(25);
+    agent.heartbeat = Duration::from_secs(5);
+    let opened = agent.heard;
+    assert_eq!(
+        agent.unanswered_at(opened),
+        None,
+        "not before a registration"
+    );
+    agent.registered = true;
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_secs(25)
+    );
+    // Each connection its share, 0.8 to 1.0 of it: workers don't leave together.
+    agent.unanswered_share = 0.8;
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_secs(20)
+    );
+    agent.lease = Some(Duration::from_secs(20));
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        agent.silent_at(opened).unwrap() - opened,
+        Duration::from_secs(20)
+    );
+    // Agy's second review of M5.3g: the share applies to the limit as half the lease caps it,
+    // else a cap below 80 % of it left every worker at the same moment.
+    agent.lease = Some(Duration::from_secs(30));
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_secs(12)
+    );
+    agent.unanswered_share = 1.0;
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_secs(15)
+    );
+    agent.unanswered_share = 0.8;
+    // Agy's review of M5.3g: a heartbeat as long as the limit left every healthy stream.
+    agent.lease = Some(Duration::from_mins(2));
+    agent.heartbeat = Duration::from_secs(30);
+    assert_eq!(
+        agent.unanswered_at(opened).unwrap() - opened,
+        Duration::from_mins(1)
+    );
+}
+
+/// Agy's review of M5.3g: a scripted master that stops answering after `Registered` is left at
+/// the limit, not at the lease, and the session's reason says so.
+#[tokio::test]
+async fn a_master_that_stops_answering_is_left_before_the_lease() {
+    let channel = scripted_channel(Scripted {
+        script: silent_master_leased(false, 10_000),
+        ..Scripted::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.settings.setup.timeouts.unanswered = Duration::from_millis(300);
+    let started = Instant::now();
+    let ended = tokio::time::timeout(
+        Duration::from_secs(5),
+        agent.session(MasterClient::new(channel)),
+    )
+    .await
+    .expect("the session ended");
+    assert!(
+        matches!(&ended, SessionEnd::Lost(reason) if reason == UNANSWERED),
+        "{ended:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// B163's check where the stream is still open: a message read past the lease since the master's
+/// last word is no word from it (agy's review of M5.3g: the stream now ends sooner, so the
+/// scripted test no longer reached it).
+#[tokio::test]
+async fn a_message_read_past_the_lease_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    agent.lease = Some(Duration::from_millis(50));
+    agent.registered = true;
+    let opened = tokio::time::Instant::now() - Duration::from_millis(200);
+    agent.heard = opened;
+    let (sender, _outbound) = mpsc::unbounded_channel();
+    let to_master = ToMaster::new(sender, agent.master_time.outbox());
+    let late = master_message::Message::HeartbeatAck(pb::HeartbeatAck::default());
+    let taken = agent.take_in(&late, None, opened, &to_master);
+    assert!(matches!(taken, Err(SessionEnd::Lost(reason)) if reason == NO_WORD));
+}
+
+/// Each try is a connection numbered one higher (decision 525).
+#[tokio::test]
+async fn each_connection_is_numbered_one_higher() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agent = offline_agent(dir.path());
+    for n in 1..=3 {
+        agent.open_session();
+        assert_eq!(agent.register_message(vec![]).connection, n);
+    }
 }

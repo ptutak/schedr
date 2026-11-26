@@ -5,6 +5,18 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
+## Unreleased
+
+- **A worker's new connection replaces one that died without a word** (B301, decision 525): each
+  `Register` numbers its connection; a newer one of the same process replaces the old stream at
+  once, where the master refused it as "already live" until the lease ran out and its tasks were
+  lost. An equal or older one is refused, so a registration held on its way no longer takes back
+  attempts the worker started since (B302, which could run a task twice). Protocol 2.3: **upgrade
+  the workers with the master**; a worker older than 2.3 is refused after its first lost connection.
+- **A worker leaves a connection the master stopped answering** (decision 526) after 25 s, at most
+  half the lease (`SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT`), and connects again within its lease.
+- Scenarios 1 and 6 of the stress suite: the round's p99 limit 7 s.
+
 ## 1.2.1
 
 Connections with a limit: a worker, the master and the web UI no longer wait without end for an

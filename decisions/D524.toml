@@ -10,11 +10,11 @@ worker lease), and so has opening a stream and being registered on it, lease kno
 doubling after each try that ended silent, up to 8 times (a master registers behind its round). Only
 waits end by it; a `Registered` that arrived is judged by the lease (decision 281). The master doesn't
 register a worker that left while it waited for the core's lock; what its journal reported as started
-stays known for its next try. Not chosen: HTTP/2 keepalive with it (B301, M5.3g: an open connection
+stays known for its next try when the registration would have been accepted (DN42). Not chosen: HTTP/2 keepalive with it (B301, M5.3g: an open connection
 dead without a word); a limit on the first registration alone.
 '''
 history = "JOURNAL.md#D524"
 step = "B297"
 also = ["protocol"]
 code = ["crates/schedr-agent/src/agent.rs::unregistered_at", "crates/schedr-tls/src/connect.rs::first_answering", "crates/schedr-master/src/service.rs::open_stream"]
-checked = 2026-11-25
+checked = 2026-11-26

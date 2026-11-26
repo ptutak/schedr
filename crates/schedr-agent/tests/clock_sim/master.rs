@@ -150,6 +150,10 @@ pub struct Scenario {
     pub faults: Vec<(u64, Fault)>,
     /// The workers keep a waiting queue (decision 509).
     pub queue: bool,
+    /// Every process stopping takes the whole cancel grace (one ignoring SIGTERM): the case the
+    /// move wait is there for, aimed at by its scenarios (B303: with the cutoff counted
+    /// connected or not, a shorter stop rarely left the window open).
+    pub slow_stops: bool,
 }
 
 fn fault() -> impl Strategy<Value = Fault> {
@@ -192,6 +196,7 @@ pub fn scenario() -> impl Strategy<Value = Scenario> {
                 seed,
                 faults,
                 queue,
+                slow_stops: false,
             }
         })
 }
@@ -277,7 +282,7 @@ pub fn aimed_at(safeguard: Weakened) -> BoxedStrategy<Scenario> {
         faults,
         any::<bool>(),
     )
-        .prop_map(|(a, b, seed, mut faults, queue)| {
+        .prop_map(move |(a, b, seed, mut faults, queue)| {
             faults.sort_by_key(|(at, _)| *at);
             Scenario {
                 timings: Timings::SCALED,
@@ -285,6 +290,7 @@ pub fn aimed_at(safeguard: Weakened) -> BoxedStrategy<Scenario> {
                 seed,
                 faults,
                 queue,
+                slow_stops: safeguard == Weakened::MoveWait,
             }
         })
         .boxed()
@@ -397,8 +403,11 @@ struct Instance {
     backoff: u64,
     time: MasterTime,
     lease: Option<Duration>,
-    /// The boot clock at the master's last word (or a stream's opening).
+    /// The boot clock at the master's last word: as the agent's `heard`, a new stream leaves it
+    /// (agy's second review of M5.3g: reset at each connection, the cutoff never came).
     heard_boot: Duration,
+    /// The boot clock as its latest stream opened: unanswered counts from the later of the two.
+    opened_boot: Duration,
     /// When master time may pass its cutoff, in real time (carried over a reconnect).
     cutoff_at: Option<u64>,
     cut_off: bool,
@@ -427,6 +436,7 @@ impl Instance {
             time: MasterTime::with_window(Duration::from_mins(10)),
             lease: None,
             heard_boot: Duration::ZERO,
+            opened_boot: Duration::ZERO,
             cutoff_at: None,
             cut_off: false,
             procs: BTreeMap::new(),
@@ -484,6 +494,8 @@ struct Interval {
 }
 
 struct Sim {
+    /// [`Scenario::slow_stops`].
+    slow_stops: bool,
     now: u64,
     seq: u64,
     queue: BinaryHeap<Reverse<(u64, u64)>>,
@@ -582,7 +594,10 @@ fn register(
     journal: Vec<pb::JournalEntry>,
     (slots, depth): (usize, usize),
 ) -> pb::Register {
+    // Each a connection numbered higher than the last (decision 525).
+    static CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     pb::Register {
+        connection: CONNECTION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         running_triggers: Vec::new(),
         watcher_slots: 0,
         queue_depth: u32::try_from(depth).unwrap(),
@@ -1237,25 +1252,33 @@ impl Sim {
 
     /// A worker's alive check: its cutoff, and a connection tried again.
     ///
-    /// As the agent: silent for the lease, it closes its stream; past the cutoff it stops the
-    /// tasks whose cleanup may move and closes its stream only while it runs one of them (its
-    /// cleanup gates, `cut_off_at`), else it keeps the stream for the master's word (B265).
+    /// As the agent: silent for half the lease, it leaves its stream and connects again
+    /// (decision 526: its numbered connection replacing the old one, decision 525); silent for
+    /// the lease, or past the cutoff, it stops the tasks whose cleanup may move; past the cutoff
+    /// it closes its stream only while it runs one of them (its cleanup gates, `cut_off_at`),
+    /// else it keeps the stream for the master's word (B265).
     fn alive(&mut self, inst: usize) {
         if !self.instances[inst].alive {
             return;
         }
         let local = self.local(inst);
         let i = &self.instances[inst];
+        // Its cutoff counts from the master's last word, connected or not: the agent's offline
+        // wait watches the same deadline.
         let silent = i
             .lease
-            .is_some_and(|lease| local.boot >= i.heard_boot + lease)
-            && i.stream().is_some();
+            .is_some_and(|lease| local.boot >= i.heard_boot + lease);
+        // As the agent's `unanswered_at`: a registered stream only.
+        let unanswered = i
+            .lease
+            .is_some_and(|lease| local.boot >= i.heard_boot.max(i.opened_boot) + lease / 2)
+            && i.session.is_some();
         let past = i.cutoff_at.is_some_and(|at| self.now >= at);
         let gated = i.gated();
         if !i.cut_off && gated && (silent || past) {
             self.cut_off(inst);
         }
-        if silent || (past && gated && self.instances[inst].session.is_some()) {
+        if unanswered || (past && gated && self.instances[inst].session.is_some()) {
             self.worker_closes(inst);
         }
         let i = &self.instances[inst];
@@ -1286,7 +1309,7 @@ impl Sim {
     /// How long a process takes to stop: half the time the whole cancel grace (one that
     /// ignores SIGTERM, killed at its end), else less.
     fn stop_time(&mut self) -> u64 {
-        if self.rng.below(2) == 0 {
+        if self.slow_stops || self.rng.below(2) == 0 {
             self.timings.cancel_grace
         } else {
             self.rng.below(self.timings.cancel_grace)
@@ -1306,7 +1329,7 @@ impl Sim {
         let sid = self.next_sid;
         i.connecting = Some(sid);
         i.time = MasterTime::with_window(Duration::from_mins(10));
-        i.heard_boot = local.boot;
+        i.opened_boot = local.boot;
         let mut journal: Vec<pb::JournalEntry> = i
             .procs
             .keys()
@@ -1504,11 +1527,24 @@ impl Sim {
             return;
         }
         let local = self.local(inst);
-        // Past the lease, a message doesn't count as the master's word (B162, B163).
-        if i.lease
+        // Past the lease, a message doesn't count as the master's word (B162, B163), as the
+        // agent's `silent_too_long`: silent for the lease since its last word or this stream's
+        // opening, whichever is later, or past the lease since its last word with a task whose
+        // cleanup may move not cut off yet.
+        let silent = i
+            .lease
+            .is_some_and(|lease| local.boot >= i.heard_boot.max(i.opened_boot) + lease);
+        // The lease's deadline as the agent's `lease_deadline`: since its last word, or the
+        // master-time cutoff if earlier (agy's third review of M5.3g).
+        let past = i.cutoff_at.is_some_and(|at| self.now >= at);
+        let late = (i
+            .lease
             .is_some_and(|lease| local.boot >= i.heard_boot + lease)
-        {
-            if !i.cut_off && i.gated() {
+            || past)
+            && i.gated()
+            && !i.cut_off;
+        if silent || late {
+            if late {
                 self.cut_off(inst);
             }
             self.worker_closes(inst);
@@ -1783,6 +1819,7 @@ pub fn simulate(scenario: &Scenario, weakened: Option<Weakened>) -> Result<(), S
                 events: BTreeMap::new(),
                 rng: Rng(scenario.seed),
                 timings: scenario.timings,
+                slow_stops: scenario.slow_stops,
                 db,
                 core: Some(core),
                 weakened,

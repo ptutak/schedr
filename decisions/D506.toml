@@ -30,4 +30,4 @@ code = [
     "crates/schedr-master/src/dispatch.rs::AssignReads",
     "crates/schedr-master/src/dispatch.rs::ResultsReads",
 ]
-checked = 2026-11-25
+checked = 2026-11-26

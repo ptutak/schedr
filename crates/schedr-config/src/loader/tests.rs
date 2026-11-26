@@ -839,8 +839,9 @@ fn the_guide_names_every_fixed_timing_as_the_loader_knows_it() {
     // `WORKER__EXTENSION_FIGURES_INTERVAL` (decision 513); 131 with the extension reports'
     // rate and burst and the events held and kept (D493, M5.2i5); 132 with the trigger runs
     // kept (B272); 133 with `WORKER__MASTER_CONNECT_TIMEOUT` (B296); 135
-    // with `WORKER__REGISTER_TIMEOUT` (B297) and `CLIENT__STREAM_IDLE` (B298).
-    assert_eq!(names.len(), 135, "{names:?}");
+    // with `WORKER__REGISTER_TIMEOUT` (B297) and `CLIENT__STREAM_IDLE` (B298); 136 with
+    // `WORKER__UNANSWERED_TIMEOUT` (decision 526).
+    assert_eq!(names.len(), 136, "{names:?}");
     for name in names {
         // The lease at least four heartbeats (B226).
         // The lease at least four heartbeats (B226); the Metrics buckets final and the minute
@@ -1291,6 +1292,7 @@ fn decision_493s_hidden_timings_each_set_their_own() {
         ("SCHEDR_HIDDEN__MASTER__CODE_RETRY_DELAY", "49995s"),
         ("SCHEDR_HIDDEN__MASTER__NODE_ROW_KEPT", "49994s"),
         ("SCHEDR_HIDDEN__WORKER__REGISTER_TIMEOUT", "49988s"),
+        ("SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT", "49986s"),
         ("SCHEDR_HIDDEN__CLIENT__STREAM_IDLE", "49987s"),
         ("SCHEDR_HIDDEN__WORKER__MASTER_CONNECT_TIMEOUT", "49989s"),
         ("SCHEDR_HIDDEN__CLIENT__CONNECT_TIMEOUT", "49993s"),
@@ -1331,6 +1333,10 @@ fn decision_493s_hidden_timings_each_set_their_own() {
         (
             "SCHEDR_HIDDEN__WORKER__REGISTER_TIMEOUT",
             config.timings.register_timeout,
+        ),
+        (
+            "SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT",
+            config.timings.unanswered_timeout,
         ),
         (
             "SCHEDR_HIDDEN__CLIENT__STREAM_IDLE",

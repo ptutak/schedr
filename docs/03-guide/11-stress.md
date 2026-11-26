@@ -68,6 +68,7 @@ are in the report.
 | 16 | Concurrency limits: DAGs of two mapped Python tasks, two runs each at once, on many more slots than the limits allow | never more open at once than `max_active_per_run`, `max_active` or `max_active_tasks`; the DAG's limit reached; every run succeeds. Written in M4.4; results are recorded below |
 | 17 | Silent two-way cut, shorter and then longer than the worker lease and cleanup move wait | reconnection and moved cleanups |
 | 17b | The master's address answers nothing past the lease (a killed pod's), then does again | the worker trying again by itself, back within 20 s (B296) |
+| 17c | One worker's open connection passes nothing more and never closes, new ones pass, past the lease | the worker leaving it and its newer connection replacing the old stream: nothing lost, the worker never lost (B301, decisions 525 and 526) |
 | 18 | One-way cuts past the lease, first toward the master, then toward the worker | each direction's recovery |
 | 19 | Slow links: 200 ms per chunk on every worker, then 1.5 s on one | no failures |
 | 20 | Worker frozen with `SIGSTOP` past the lease and cleanup move, then thawed | its tasks continue while its agent is frozen |

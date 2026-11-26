@@ -1,0 +1,16 @@
+title = "What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace"
+date = 2026-11-26
+by = "claude"
+on = "D524"
+kind = "corrects"
+summary = '''
+A `Register` whose worker left while it waited for the core's lock (D524) keeps its journal's
+starts for the worker's next try only if it would have been accepted (the protocol, its size, its
+connection newer than its incarnation's, D525), its worker is known to this master, and no stream
+of the worker is live or it would replace that one (gone from the hub, or numbered higher). A
+refused one keeps nothing; one beside a live stream keeps nothing (that stream's registration was
+the whole truth); one of an unknown worker keeps nothing (nothing would ever forget it). Those
+starts are the waiting registration's own, apart from what streams report, so a refused or left
+one never takes away a stream's report of the same start (agy's reviews of M5.3g).
+'''
+history = "JOURNAL.md#DN42"

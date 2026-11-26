@@ -21,4 +21,4 @@ code = [
     "crates/schedr-db/src/database.rs::connect_prepared",
     "crates/schedr-db/src/query.rs::query",
 ]
-checked = 2026-11-25
+checked = 2026-11-26

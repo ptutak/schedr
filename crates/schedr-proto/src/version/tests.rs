@@ -8,10 +8,10 @@ const fn v(major: u32, minor: u32) -> ProtocolVersion {
 }
 
 #[test]
-fn the_current_version_is_2_2() {
-    // 2.2 for 1.2.0: a cleanup's barrier (`CleanupStart`, `CleanupGo`; B255, decision 504),
-    // moved once for the release.
-    assert_eq!(PROTOCOL_VERSION, v(2, 2));
+fn the_current_version_is_2_3() {
+    // 2.3 for 1.3.0: a connection's number in `Register` (decision 525), moved once for the
+    // release.
+    assert_eq!(PROTOCOL_VERSION, v(2, 3));
 }
 
 #[test]

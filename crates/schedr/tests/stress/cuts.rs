@@ -320,6 +320,52 @@ fn stress_17b_silent_address() {
     chaos.finish(20 * MINUTE);
 }
 
+/// Scenario 17c: A connection dead without a word (B301, decisions 525 and 526): one worker's open
+/// connection passes nothing more and never closes, while new ones pass. The worker leaves it
+/// within half the lease and connects again, its newer connection replacing the old stream at the
+/// master: it is never counted lost, and nothing of it is.
+#[test]
+fn stress_17c_stranded_connection() {
+    let mut chaos = Chaos::start("17c_stranded_connection", (6, 3), 4);
+    chaos.under_way("w01");
+    let lost_before = chaos
+        .stress
+        .db
+        .count("SELECT COUNT(*) FROM attempts WHERE status = 'lost'");
+    let accepted = chaos.links.accepted("w01");
+    chaos.links.strand("w01", true);
+    // Past the lease: had the master kept the old stream, w01 would be lost by now. Lost meanwhile
+    // and back before the end, it would read active at the end: watched all along.
+    let stranded = Instant::now();
+    let mut lost_meanwhile = 0;
+    while stranded.elapsed() < LEASE + LEASE / 2 {
+        lost_meanwhile = lost_meanwhile.max(
+            chaos
+                .stress
+                .db
+                .count("SELECT COUNT(*) FROM workers WHERE worker_id = 'w01' AND state = 'lost'"),
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    chaos.links.strand("w01", false);
+    // It left the stranded connection and opened another (else this proves nothing).
+    #[allow(clippy::cast_precision_loss)]
+    let reconnected = (chaos.links.accepted("w01") - accepted) as f64;
+    chaos.report.at_least("new_connections", reconnected, 1.0);
+    #[allow(clippy::cast_precision_loss)]
+    let lost = (chaos
+        .stress
+        .db
+        .count("SELECT COUNT(*) FROM attempts WHERE status = 'lost'")
+        - lost_before) as f64;
+    chaos.report.at_most("lost_attempts", lost, 0.0);
+    #[allow(clippy::cast_precision_loss)]
+    chaos
+        .report
+        .at_most("worker_lost", lost_meanwhile as f64, 0.0);
+    chaos.finish(20 * MINUTE);
+}
+
 /// Scenario 18: A one-way cut past the lease: first the master hears nothing from one worker
 /// (its messages still arrive), then another worker hears nothing from the master.
 #[test]

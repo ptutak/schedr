@@ -110,6 +110,10 @@ struct Link {
     silent: AtomicBool,
     /// The workers' ends of the open connections, closed when the address goes silent.
     open: Mutex<Vec<TcpStream>>,
+    /// The connections accepted so far; those numbered below `stranded` pass nothing either way
+    /// and are never closed (an old connection dead without a word), the later ones pass.
+    accepted: AtomicU64,
+    stranded: AtomicU64,
 }
 
 /// A TCP proxy on 127.0.0.1: forwards each new connection to the current upstream, and can be
@@ -180,6 +184,17 @@ impl Proxy {
         }
     }
 
+    /// The connections open now pass nothing more, either way, and are never closed; new ones
+    /// pass (B301: a connection that died without a word, its worker connecting again).
+    pub fn strand(&self, stranded: bool) {
+        let below = if stranded {
+            self.link.accepted.load(Ordering::SeqCst) + 1
+        } else {
+            0
+        };
+        self.link.stranded.store(below, Ordering::SeqCst);
+    }
+
     /// Holds one way, or lets it go.
     pub fn hold(&self, way: Way, held: bool) {
         self.link.held[way as usize].store(held, Ordering::SeqCst);
@@ -222,6 +237,7 @@ fn accept(
         };
         let to = *upstream.lock().unwrap();
         let (link, stop) = (link.clone(), stop.clone());
+        let number = link.accepted.fetch_add(1, Ordering::SeqCst) + 1;
         // Each connection dialled in its own thread, within a limit: an upstream that stopped
         // accepting (a master exiting, its port still bound) held this loop for the kernel's
         // SYN retries (over 2 minutes), every other worker's connection waiting behind it,
@@ -248,7 +264,7 @@ fn accept(
                 (Way::Down, server, client),
             ] {
                 let (link, stop) = (link.clone(), stop.clone());
-                std::thread::spawn(move || pump(way, from, to, &link, &stop));
+                std::thread::spawn(move || pump((way, number), from, to, &link, &stop));
             }
         });
     }
@@ -259,7 +275,13 @@ const UPSTREAM_CONNECT: Duration = Duration::from_secs(2);
 
 /// Copies one direction of a connection, holding what it read while that way is held, each
 /// chunk after the link's delay.
-fn pump(way: Way, mut from: TcpStream, mut to: TcpStream, link: &Link, stop: &AtomicBool) {
+fn pump(
+    (way, number): (Way, u64),
+    mut from: TcpStream,
+    mut to: TcpStream,
+    link: &Link,
+    stop: &AtomicBool,
+) {
     let mut buffer = vec![0; 64 * 1024];
     loop {
         let read = match from.read(&mut buffer) {
@@ -270,12 +292,19 @@ fn pump(way: Way, mut from: TcpStream, mut to: TcpStream, link: &Link, stop: &At
         if delay > 0 && !stop.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(delay));
         }
-        while link.held[way as usize].load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
+        while (link.held[way as usize].load(Ordering::SeqCst)
+            || number < link.stranded.load(Ordering::SeqCst))
+            && !stop.load(Ordering::SeqCst)
+        {
             std::thread::sleep(Duration::from_millis(10));
         }
         if to.write_all(&buffer[..read]).is_err() {
             break;
         }
+    }
+    // A stranded connection's end is held too: it never closes (agy's review of M5.3g).
+    while number < link.stranded.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(10));
     }
     let _ = to.shutdown(Shutdown::Write);
 }
@@ -420,6 +449,18 @@ impl Links {
         proxy.slow(Duration::ZERO);
         self.timeline.note(&format!("heal {worker}"));
         self.end_trouble(worker);
+    }
+
+    /// `worker`'s open connection strands ([`Proxy::strand`]), or its stranded ones pass again.
+    pub fn strand(&mut self, worker: &str, stranded: bool) {
+        self.proxy(worker).strand(stranded);
+        let what = if stranded { "strand" } else { "unstrand" };
+        self.timeline.note(&format!("{what} {worker}"));
+    }
+
+    /// How many connections `worker`'s proxy has accepted.
+    pub fn accepted(&self, worker: &str) -> u64 {
+        self.proxy(worker).link.accepted.load(Ordering::SeqCst)
     }
 
     /// `worker`'s way to the master answers nothing ([`Proxy::silence`]), or does again.

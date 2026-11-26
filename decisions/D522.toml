@@ -23,4 +23,4 @@ code = [
   "crates/schedr-master/src/dispatch.rs::with_trigger_cancel_grace",
   "crates/schedr-master/src/core/triggers.rs::stop_trigger",
 ]
-checked = 2026-11-25
+checked = 2026-11-26

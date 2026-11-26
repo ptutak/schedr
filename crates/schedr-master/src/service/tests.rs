@@ -95,9 +95,20 @@ fn root() -> pb::RootHash {
     }
 }
 
+/// A `Register`, each a connection numbered higher than the last (decision 525).
 fn register(protocol: pb::ProtocolVersion) -> pb::WorkerMessage {
+    static CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    register_as(
+        protocol,
+        CONNECTION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// A `Register` of connection `connection`.
+fn register_as(protocol: pb::ProtocolVersion, connection: u64) -> pb::WorkerMessage {
     pb::WorkerMessage {
         message: Some(worker_message::Message::Register(pb::Register {
+            connection,
             worker_id: "w1".to_owned(),
             incarnation_id: "i1".to_owned(),
             protocol: Some(protocol),
@@ -1056,14 +1067,18 @@ async fn a_refused_register_doesnt_keep_the_old_stream_of_its_worker_alive() {
         .await
         .unwrap()
         .into_inner();
+    // Refused: older connections (a newer one would replace the stream, decision 525).
     for at in (10..=70).step_by(10) {
         move_to(at);
         let (to_master, outbound) = mpsc::channel(16);
-        to_master.send(register(PROTOCOL_VERSION)).await.unwrap();
+        to_master
+            .send(register_as(PROTOCOL_VERSION, 0))
+            .await
+            .unwrap();
         let status = client
             .control(ReceiverStream::new(outbound))
             .await
-            .expect_err("its old stream is live");
+            .expect_err("an older connection");
         assert_eq!(status.code(), tonic::Code::FailedPrecondition, "{status:?}");
     }
     // 70 s since it was last heard on its old stream, past the lease.
@@ -1072,6 +1087,32 @@ async fn a_refused_register_doesnt_keep_the_old_stream_of_its_worker_alive() {
         !hub.core().lock().await.is_live("w1"),
         "the refused registrations kept the old stream's lease"
     );
+}
+
+#[tokio::test]
+async fn a_newer_connection_replaces_a_stream_whose_end_never_came() {
+    // B301: the old connection died without a word, its stream still live here: each new one was
+    // refused ("already has a live stream") until the lease ran out, its tasks lost.
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let (new, outbound) = mpsc::channel(16);
+    new.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .expect("the newer connection replaces the old stream")
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    assert!(hub.core().lock().await.is_live("w1"));
 }
 
 #[tokio::test]
@@ -3474,4 +3515,352 @@ async fn with_a_worker_identity_each_call_is_checked_against_the_certificate() {
         .into_inner();
     assert_eq!(inputs.message().await.unwrap().unwrap().data, b"{}");
     drop(to_master);
+}
+
+/// Agy's review of M5.3g: a newer connection refused (here its protocol) tore down the worker's
+/// live stream before the refusal.
+#[tokio::test]
+async fn a_refused_newer_connection_leaves_the_live_stream_alone() {
+    let (hub, _db, mut client) = connected().await;
+    let (live, outbound) = mpsc::channel(16);
+    live.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _live_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let (bad, outbound) = mpsc::channel(16);
+    let newer = pb::ProtocolVersion { major: 9, minor: 0 };
+    bad.send(register(newer)).await.unwrap();
+    client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .expect_err("an incompatible protocol");
+    assert!(hub.core().lock().await.is_live("w1"));
+    assert!(hub.streams.lock().await.contains_key("w1"));
+}
+
+/// Agy's review of M5.3g: the replaced stream went on, its reader renewing the worker's lease
+/// with whatever came late; it ends now, for the worker too.
+#[tokio::test]
+async fn a_replaced_stream_ends() {
+    let (_hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut old_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let (new, outbound) = mpsc::channel(16);
+    new.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _new_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match old_stream.message().await {
+                Ok(Some(_)) => {}
+                ended => return ended,
+            }
+        }
+    })
+    .await
+    .expect("the replaced stream ends");
+    let status = ended.expect_err("ended by the master");
+    assert_eq!(status.code(), tonic::Code::Aborted, "{status:?}");
+    drop(old);
+}
+
+/// Agy's review of M5.3g (B267's case kept): a new incarnation whose old stream is already gone
+/// from the hub, its end not handled yet, registers at once.
+#[tokio::test]
+async fn a_new_incarnation_registers_when_the_old_stream_is_gone() {
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    hub.streams.lock().await.remove("w1");
+    let (to_master, outbound) = mpsc::channel(16);
+    let mut message = register(PROTOCOL_VERSION);
+    if let Some(worker_message::Message::Register(register)) = &mut message.message {
+        register.incarnation_id = "i2".to_owned();
+    }
+    to_master.send(message).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .expect("registered in place of the gone stream")
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+}
+
+/// Agy's second review of M5.3g: a replaced stream's queued `Started`, dropped, erased the start
+/// the worker's new stream had reported for the same attempt.
+#[tokio::test]
+async fn a_dropped_message_of_a_replaced_stream_leaves_the_new_streams_start() {
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut old_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let replaced = hub.streams.lock().await.get("w1").cloned().unwrap();
+    let (new, outbound) = mpsc::channel(16);
+    new.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _new_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    // The old stream's `Started` still queued; the new stream's reader reports the same start.
+    hub.queued_results().push(QueuedResult {
+        worker_id: "w1".to_owned(),
+        stream: replaced,
+        message: Some(started_msg("a1")),
+    });
+    hub.arrivals.start_arrived("w1", "a1");
+    Box::pin(hub.round_results((hub.clock)())).await.unwrap();
+    assert!(
+        hub.arrivals.start_waiting("a1"),
+        "the new stream's start kept"
+    );
+    drop((old, new));
+}
+
+/// Agy's second review of M5.3g: a stream taken out of the hub (its buffer full) and then
+/// superseded by a newer registration still had its reader record what it brought.
+#[tokio::test]
+async fn a_superseded_streams_reader_records_nothing() {
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut old_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut old_stream).await,
+        master_message::Message::Registered(_)
+    ));
+    // As `deliver` does with a full stream: out of the hub, nothing told.
+    hub.streams.lock().await.remove("w1");
+    let (new, outbound) = mpsc::channel(16);
+    new.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let _new_stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    old.send(wrap(started_msg("a9"))).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !hub.arrivals.start_waiting("a9"),
+        "a superseded stream's start counts for nothing"
+    );
+    drop(new);
+}
+
+/// Waits until `check` holds, at most 5 s (a fixed sleep would let a test pass on silence).
+async fn until(what: &str, check: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !check() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A `Register` of `w1` numbered `connection`, its journal running `attempts`.
+fn register_running(connection: u64, attempts: &[&str]) -> pb::WorkerMessage {
+    let mut message = register_as(PROTOCOL_VERSION, connection);
+    if let Some(worker_message::Message::Register(register)) = &mut message.message {
+        register.journal = attempts
+            .iter()
+            .map(|id| pb::JournalEntry {
+                attempt_id: (*id).to_owned(),
+                state: pb::JournalState::Running.into(),
+                handles: 0,
+            })
+            .collect();
+    }
+    message
+}
+
+/// `w1` registered and live on a stream numbered high: its stream, and the way to it.
+async fn live_w1(
+    client: &mut MasterClient<Channel>,
+) -> (
+    mpsc::Sender<pb::WorkerMessage>,
+    Streaming<pb::MasterMessage>,
+) {
+    let (to_master, outbound) = mpsc::channel(16);
+    to_master
+        .send(register_as(PROTOCOL_VERSION, 1_000))
+        .await
+        .unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    (to_master, stream)
+}
+
+/// Agy's third review of M5.3g: a stale `Register` refused after waiting for the lock erased the
+/// start the worker's live stream had reported meanwhile.
+#[tokio::test]
+async fn a_refused_registration_leaves_the_live_streams_start() {
+    let (hub, _db, mut client) = connected().await;
+    let (_live, _stream) = live_w1(&mut client).await;
+    let core = hub.core();
+    let busy = core.lock().await;
+    let mut stale_client = client.clone();
+    let stale = tokio::spawn(async move {
+        stale_client
+            .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
+            .await
+    });
+    until("the stale one waits", || hub.arrivals.start_waiting("a1")).await;
+    // The live stream reports the same attempt's start while the stale one waits.
+    hub.arrivals.start_arrived("w1", "a1");
+    drop(busy);
+    stale
+        .await
+        .unwrap()
+        .expect_err("no newer than the live connection");
+    assert!(
+        hub.arrivals.start_waiting("a1"),
+        "the live stream's start kept"
+    );
+}
+
+/// Agy's third review of M5.3g: a `Register` its worker left while it waited (a newer one
+/// registered since) kept its journal's starts for as long as the newer stream lived.
+#[tokio::test]
+async fn a_left_registration_keeps_no_start_beside_a_live_stream() {
+    let (hub, _db, mut client) = connected().await;
+    let (_live, _stream) = live_w1(&mut client).await;
+    let core = hub.core();
+    let busy = core.lock().await;
+    let mut left_client = client.clone();
+    let left = tokio::spawn(async move {
+        left_client
+            .control(tokio_stream::iter(vec![register_running(1, &["a_stale"])]))
+            .await
+    });
+    until("the left one waits", || {
+        hub.arrivals.start_waiting("a_stale")
+    })
+    .await;
+    left.abort();
+    let _ = left.await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(busy);
+    until("its start gone", || !hub.arrivals.start_waiting("a_stale")).await;
+    assert!(
+        !hub.arrivals.start_waiting("a_stale"),
+        "nothing kept beside the live stream"
+    );
+}
+
+/// Agy's fourth review of M5.3g: a stale `Register` its worker left while it waited kept its
+/// journal's starts because no stream of the worker was live, though it would have been refused.
+#[tokio::test]
+async fn a_left_stale_registration_keeps_no_start() {
+    let (hub, _db, mut client) = connected().await;
+    let (live, stream) = live_w1(&mut client).await;
+    drop((live, stream));
+    let core = hub.core();
+    until("w1 disconnected", || {
+        core.try_lock().is_ok_and(|core| !core.is_live("w1"))
+    })
+    .await;
+    let busy = core.lock().await;
+    let mut left_client = client.clone();
+    let left = tokio::spawn(async move {
+        left_client
+            .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
+            .await
+    });
+    until("the stale one waits", || hub.arrivals.start_waiting("a1")).await;
+    left.abort();
+    let _ = left.await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(busy);
+    until("its start gone", || !hub.arrivals.start_waiting("a1")).await;
+}
+
+/// Agy's fourth review of M5.3g: a newer `Register` its worker left while it waited (its old
+/// stream dead but not yet ended at the master) dropped its journal's starts, though it would
+/// have replaced the old stream and its next try reports the same journal.
+#[tokio::test]
+async fn a_left_newer_registration_keeps_its_starts() {
+    let (hub, _db, mut client) = connected().await;
+    let (_live, _stream) = live_w1(&mut client).await;
+    let core = hub.core();
+    let busy = core.lock().await;
+    let mut left_client = client.clone();
+    let left = tokio::spawn(async move {
+        left_client
+            .control(tokio_stream::iter(vec![register_running(2_000, &["a1"])]))
+            .await
+    });
+    until("the newer one waits", || hub.arrivals.start_waiting("a1")).await;
+    left.abort();
+    let _ = left.await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(busy);
+    // Its guard gone, what remains is what it kept (agy's fifth review of M5.3g).
+    until("handled", || hub.arrivals.registrations_waiting("w1") == 0).await;
+    assert!(hub.arrivals.start_waiting("a1"), "kept for its next try");
+}
+
+/// Agy's fifth review of M5.3g: a left `Register` of a worker this master doesn't know kept its
+/// journal's starts for ever: nothing forgets an unknown worker.
+#[tokio::test]
+async fn a_left_registration_of_an_unknown_worker_keeps_nothing() {
+    let (hub, _db, client) = connected().await;
+    let core = hub.core();
+    let busy = core.lock().await;
+    let mut left_client = client.clone();
+    let left = tokio::spawn(async move {
+        left_client
+            .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
+            .await
+    });
+    until("it waits", || hub.arrivals.start_waiting("a1")).await;
+    left.abort();
+    let _ = left.await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(busy);
+    until("handled", || hub.arrivals.registrations_waiting("w1") == 0).await;
+    assert!(
+        !hub.arrivals.start_waiting("a1"),
+        "nothing kept for an unknown worker"
+    );
+    drop(client);
 }

@@ -3835,3 +3835,28 @@ the 1.3.0 version commit and tag asked for; M5.3b keeps a let-through cleanup mo
 M5.3d's wait is 10 minutes, hidden (D529); if M5.3g's first test shows a stale `Register` doing lasting
 damage today, it is logged and fixed within M5.3g. Scenarios 1 and 6 also got a round limit of 7 s
 (the user): 5 s lay between the histogram's steps 4.10 and 5.79, and CI's runs read either.
+
+### <a id="DN41"></a>2026-11-26: The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (decision note 41; adds to D526)
+
+Taken by Claude during M5.3g's reviews, unattended (the user asleep; to overrule on waking).
+agy's first review showed D526's limit of 25 s leaving every healthy stream when the heartbeat
+interval is 25 s or more, and every worker reconnecting at the same moment after a master's
+stall. The limit is now at least two heartbeat intervals, and each connection takes a share of
+it, 0.8 to 1.0, picked when it opens (from the clock, the worker's ID and the connection's
+number, so workers opening together still differ). agy's second review showed the share wiped
+out when half the lease is below 80 % of the configured limit (a 30 s lease: every worker at
+15 s), so the share applies after that cap: half the lease capping the configured limit, times
+the share, at least two heartbeats, at most half the lease. Tests: `an_unanswered_stream_is_left_at_its_limit_or_half_the_lease`.
+
+### <a id="DN42"></a>2026-11-26: What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (decision note 42; corrects D524)
+
+Taken by Claude during M5.3g's reviews, unattended (to overrule on waking). agy's third, fourth
+and fifth reviews showed D524's rule, "what its journal reported as started stays known for its
+next try", wrong in three cases: a refused `Register` taking away the start a live stream had
+reported meanwhile (the two shared one set); a left one keeping its starts beside a live stream
+(they stayed for that stream's life); a left one that would have been refused, or whose worker
+this master doesn't know, keeping them (nothing would forget them). The starts are now the
+waiting registration's own (its `Registering` guard), kept past it only as the summary says.
+Tests: `a_refused_registration_leaves_the_live_streams_start`,
+`a_left_registration_keeps_no_start_beside_a_live_stream`, `a_left_stale_registration_keeps_no_start`,
+`a_left_newer_registration_keeps_its_starts`, `a_left_registration_of_an_unknown_worker_keeps_nothing`.

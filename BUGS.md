@@ -53,21 +53,8 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B301: a worker reconnecting is refused while the master holds its old connection, dead without a word | 6 | high | possible | reliability |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-
-## B301: a worker reconnecting is refused while the master holds its old connection, dead without a word
-
-- **Rating:** severity **high**, probability **possible**, reliability (score 6): a worker whose connection ended for it alone (its closing never reached the master) is refused as already live on each try until its lease runs out, and its tasks are lost.
-- **Found:** agy's review of B297's fix (2026-11-25), read in the code: `MasterCore::register` refuses
-  any worker with a live stream, and the old stream ends only when the master reads its end. A refused
-  registration renews nothing (B267). Not reproduced yet; there before 1.2.0's fixes.
-- **Not a fix by itself:** letting the same incarnation replace its stream. A `Register` held on its way
-  (a one-way cut, stress 18) and arriving after a newer one would replace it, and its older journal
-  would be taken as the whole truth: attempts started since are taken back while they run. The refusal
-  guards against that. It needs the registrations' order (a session number in `Register`, a protocol
-  addition) or the silent end noticed by the master (keepalive): M5.3g.
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 

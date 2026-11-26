@@ -33,8 +33,11 @@ fn root(hash: &str) -> pb::RootHash {
     }
 }
 
+/// A `Register`, each one a connection numbered higher than the last (decision 525).
 fn register(worker: &str, incarnation: &str, journal: Vec<pb::JournalEntry>) -> pb::Register {
+    static CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     pb::Register {
+        connection: CONNECTION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         running_triggers: Vec::new(),
         watcher_slots: 500,
         queue_depth: 0,
@@ -2002,6 +2005,76 @@ async fn a_reconnect_of_the_same_incarnation_keeps_its_attempts() {
         .unwrap();
     let open = core.db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!(open.status, None);
+}
+
+#[tokio::test]
+async fn a_register_held_on_its_way_is_refused_and_takes_nothing_back() {
+    // B302: after a disconnect, an older connection's `Register` was accepted, its journal taken
+    // as the whole truth: an attempt the worker had started since, its `Started` lost, was taken
+    // back and run again elsewhere.
+    let mut core = with_dag().await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    core.disconnected("w1", later(1)).await.unwrap();
+    let stale = pb::Register {
+        connection: 0,
+        ..register("w1", "i1", vec![])
+    };
+    let error = core.register(&stale, later(2)).await.unwrap_err();
+    assert!(error.to_string().contains("no newer than"), "{error}");
+    core.tick(later(3)).await.unwrap();
+    let open = core.db.attempt(&assign.attempt_id).await.unwrap().unwrap();
+    assert_eq!(open.status, None, "taken back by a stale journal");
+    core.register(&register("w1", "i1", vec![]), later(4))
+        .await
+        .unwrap();
+}
+
+/// Decision 525: within an incarnation a higher number replaces, an equal or lower one is refused,
+/// live or not; another incarnation is judged as before.
+#[tokio::test]
+async fn a_connections_number_decides_who_registers() {
+    let mut core = core().await;
+    let numbered = |incarnation: &str, connection| pb::Register {
+        connection,
+        ..register("w1", incarnation, vec![])
+    };
+    core.register(&numbered("i1", 5), ts(NOW)).await.unwrap();
+    // Live: a higher one replaces it; an equal or lower one is refused.
+    for refused in [5, 4, 0] {
+        let error = core
+            .register(&numbered("i1", refused), ts(NOW))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("no newer than"),
+            "{refused}: {error}"
+        );
+    }
+    assert!(core.replaces(&numbered("i1", 6)));
+    core.register(&numbered("i1", 6), ts(NOW)).await.unwrap();
+    // Not live: still refused below what was registered.
+    core.disconnected("w1", later(1)).await.unwrap();
+    assert!(core.register(&numbered("i1", 6), later(2)).await.is_err());
+    // A new incarnation counts from 1, refused only while the old one's stream lives.
+    core.register(&numbered("i2", 1), later(3)).await.unwrap();
+    assert!(!core.replaces(&numbered("i3", 9)));
+    // A restarted master learns the number from the first it sees.
+    let mut restarted = MasterCore::new(core.db.clone(), Settings::default());
+    restarted.restore(later(4)).await.unwrap();
+    restarted
+        .register(&numbered("i2", 2), later(5))
+        .await
+        .unwrap();
+    assert!(
+        restarted
+            .register(&numbered("i2", 2), later(6))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -5857,4 +5930,86 @@ async fn a_turn_is_refused_what_the_round_handles() {
             "{refused:?}"
         );
     }
+}
+
+/// Agy's review of M5.3g: a first registration failing half-way kept its number, and a worker
+/// sending none (0, older than 2.3) was refused as stale on its retry.
+#[tokio::test]
+async fn a_registration_that_failed_half_way_keeps_no_number() {
+    let mut core = core().await;
+    let db = core.db.clone();
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_workers BEFORE INSERT ON workers \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let old = pb::Register {
+        connection: 0,
+        ..register("w1", "i1", vec![])
+    };
+    assert!(core.register(&old, ts(NOW)).await.is_err());
+    sqlx::query("DROP TRIGGER refuse_workers")
+        .execute(pool)
+        .await
+        .unwrap();
+    core.register(&old, later(1))
+        .await
+        .expect("its retry is no older than nothing registered");
+}
+
+/// Agy's third review of M5.3g: an older stream's answer erased the newer stream's assignment of
+/// the same attempt (a moved cleanup's), so its never starting went unseen.
+#[test]
+fn an_older_streams_answer_leaves_the_newer_streams_assignment() {
+    let arrivals = Arrivals::default();
+    let older = arrivals.new_stream("w1");
+    let newer = arrivals.registered("w1");
+    arrivals.assigned("w1", newer, "a1", 5);
+    arrivals.answered_on("w1", older, "a1");
+    arrivals.read("w1", newer, 5);
+    assert!(
+        arrivals.never_started("w1", "a1"),
+        "the newer stream's assignment kept"
+    );
+    // Its own stream's answer still counts.
+    arrivals.answered_on("w1", newer, "a1");
+    assert!(!arrivals.never_started("w1", "a1"));
+}
+
+/// Agy's fifth review of M5.3g: a registration undone (never put in place) left the worker
+/// connected at the dispatcher, and its number forgotten, so an older held `Register` would be
+/// accepted on this master still running.
+#[tokio::test]
+async fn a_registration_undone_restores_the_worker_as_it_was() {
+    let mut core = core().await;
+    let first = pb::Register {
+        connection: 5,
+        ..register("w1", "i1", vec![])
+    };
+    core.register(&first, ts(NOW)).await.unwrap();
+    core.disconnected("w1", later(1)).await.unwrap();
+    let next = pb::Register {
+        connection: 6,
+        ..register("w1", "i1", vec![])
+    };
+    let before = core.newest_before(&next);
+    assert_eq!(before, Some(5));
+    core.register(&next, later(2)).await.unwrap();
+    core.registration_undone("w1", before);
+    assert!(!core.is_live("w1"));
+    assert!(
+        !core.dispatcher().worker("w1").unwrap().connected,
+        "not connected at the dispatcher"
+    );
+    let held = pb::Register {
+        connection: 4,
+        ..register("w1", "i1", vec![])
+    };
+    assert!(core.check(&held).is_err(), "an older one still refused");
+    assert!(core.check(&next).is_ok(), "its own retry isn't refused");
 }

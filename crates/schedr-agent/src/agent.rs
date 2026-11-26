@@ -124,6 +124,9 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// How long opening a stream and being registered on it may take (B297).
 pub const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a registered stream may go unanswered before the worker leaves it (decision 526).
+pub const UNANSWERED_TIMEOUT: Duration = Duration::from_secs(25);
+
 /// How often [`REGISTER_TIMEOUT`] doubles at most, tries ending silent.
 const MOST_SILENT_TRIES: u32 = 3;
 
@@ -1625,6 +1628,11 @@ pub struct Agent<E> {
     heartbeat: Duration,
     /// Whether the master registered this agent in the current session.
     registered: bool,
+    /// This process's connections so far, the latest's number in its `Register` (decision 525).
+    connections: u64,
+    /// This connection's share of the unanswered limit, 0.8 to 1.0, picked as it opens: workers
+    /// whose master went quiet for all at once don't leave together (agy's review of M5.3g).
+    unanswered_share: f64,
     /// Tries in a row that ended with no word before a registration (B297).
     silent_tries: u32,
     /// The largest message the master accepts (from `Registered`; gRPC's default before).
@@ -1776,6 +1784,8 @@ impl<E: Executor> Agent<E> {
             done_rx,
             heartbeat: Duration::from_secs(10),
             registered: false,
+            connections: 0,
+            unanswered_share: 1.0,
             silent_tries: 0,
             master_limit: GRPC_DEFAULT_LIMIT,
             figures_at: std::sync::Mutex::new(None),
@@ -2088,6 +2098,7 @@ impl<E: Executor> Agent<E> {
             default_secret_storage: self.settings.secrets.reported_default(),
             extensions: crate::extensions::offers(&self.settings.setup.extensions),
             journal: self.journal_entries(),
+            connection: self.connections,
             process_id: self.settings.node.process_id.clone(),
             config_json: self.settings.node.config_json.clone(),
         }
@@ -2153,6 +2164,17 @@ impl<E: Executor> Agent<E> {
     /// A session opens: master time starts afresh, the cutoff the last session's stamps set
     /// standing until this one's (Grok's review); its opening on the timer clock.
     fn open_session(&mut self) -> tokio::time::Instant {
+        self.connections += 1;
+        // The clock, the worker and the connection: workers opening on one clock tick differ.
+        let mut seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos())
+            ^ u32::try_from(self.connections & 0xFFFF_FFFF).unwrap_or(0);
+        for byte in self.settings.worker_id.bytes() {
+            seed = (seed ^ u32::from(byte)).wrapping_mul(16_777_619);
+        }
+        let seed = seed.wrapping_mul(2_654_435_761);
+        self.unanswered_share = 0.8 + 0.2 * f64::from(seed) / f64::from(u32::MAX);
         self.carried_cutoff = self.lease.and_then(|lease| self.master_cutoff(lease));
         self.clock_skew = None;
         self.master_time.open()
@@ -2173,6 +2195,22 @@ impl<E: Executor> Agent<E> {
     /// at the lease (decision 281, B163).
     fn silent_at(&self, opened: tokio::time::Instant) -> Option<tokio::time::Instant> {
         self.lease.map(|lease| self.heard.max(opened) + lease)
+    }
+
+    /// When a registered stream opened at `opened` is left for want of answers (decision 526): the
+    /// limit after the master's last word, at most half the lease. It ends the connection only:
+    /// the last word, the lease and the cutoff stay, and the next connection replaces this one at
+    /// the master (decision 525).
+    fn unanswered_at(&self, opened: tokio::time::Instant) -> Option<tokio::time::Instant> {
+        // Never before two heartbeats could have been answered (agy's review of M5.3g: a heartbeat
+        // longer than the limit left every healthy stream), never past half the lease.
+        // The share of the limit as half the lease caps it (agy's second review of M5.3g: a
+        // cap below 80 % of it left every worker at the same moment).
+        let fewest = self.heartbeat.saturating_mul(2);
+        let cap = |limit: Duration| self.lease.map_or(limit, |lease| limit.min(lease / 2));
+        let limit = cap(self.settings.setup.timeouts.unanswered);
+        let limit = cap(limit.mul_f64(self.unanswered_share).max(fewest));
+        self.registered.then(|| self.heard.max(opened) + limit)
     }
 
     /// When a stream opened at `opened` is left for want of a registration (B297: an address
@@ -2818,6 +2856,7 @@ impl<E: Executor> Agent<E> {
     }
 
     /// [`Self::session`]'s stream, until it ends.
+    #[allow(clippy::too_many_lines)] // one select over the session's waits, read as one
     async fn session_stream(&mut self, mut client: MasterClient<Channel>) -> SessionEnd {
         let Some(roots) = self.hashes().await else {
             return SessionEnd::Stopped;
@@ -2870,6 +2909,14 @@ impl<E: Executor> Agent<E> {
                 }
                 () = at(self.unregistered_at(opened)) => {
                     return SessionEnd::Lost(NOT_REGISTERED.to_owned());
+                }
+                () = at(self.unanswered_at(opened)), if held_message.is_none() => {
+                    // What already waits is read first: a worker frozen past the limit finds its
+                    // master's words on waking, not its silence (decision 526).
+                    match futures_util::FutureExt::now_or_never(inbound.message()) {
+                        Some(arrived) => held_message = Some(arrived),
+                        None => return SessionEnd::Lost(UNANSWERED.to_owned()),
+                    }
                 }
                 () = at(self.triggers_cut_off_at()) => self.stop_triggers_cut_off(),
                 count = next_request(&mut self.shutdown) => self.shutdown_asked(count, &to_master),
@@ -6057,6 +6104,7 @@ fn task_ended_message(result: pb::Finished) -> pb::WorkerMessage {
 }
 
 /// Why a session ends when the master has gone silent.
+const UNANSWERED: &str = "the master answered no heartbeat in time";
 const NOT_REGISTERED: &str = "the master didn't register this worker in time";
 const NO_WORD: &str = "no word from the master for the worker lease";
 

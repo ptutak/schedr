@@ -39,4 +39,4 @@ code = [
   "crates/schedr/src/standalone.rs::links_tls",
   "charts/schedr/templates/worker.yaml",
 ]
-checked = 2026-11-25
+checked = 2026-11-26

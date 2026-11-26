@@ -510,6 +510,9 @@ fn not_stored(finished: &pb::Finished, error: &CoreError) -> pb::Finished {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Connection {
     incarnation: String,
+    /// The highest of its incarnation's connections registered (decision 525); `None` until one
+    /// registers with this master (restored from the database: learned, not stored).
+    newest: Option<u64>,
     schedr_version: String,
     /// When it was last heard from, in master time (B228; see [`crate::clock`]): its lease
     /// counts from it.
@@ -560,13 +563,34 @@ struct Arrived {
     /// Each worker's `Register`s waiting for the lock: the latest one's arrival, and how many
     /// wait (B267).
     registering: BTreeMap<String, (Timestamp, usize)>,
+    /// The attempts those `Register`s' journals report running, with their worker, and how many
+    /// of them report each (B50: none taken back for want of a `Started` while one waits).
+    /// Apart from [`Self::started`]: a refused or left one takes its own away, never a stream's
+    /// report of the same start (agy's third review of M5.3g).
+    registering_starts: BTreeMap<(String, String), usize>,
 }
 
-/// A worker's `Register` waiting for the lock ([`Arrivals::registering`]): handled once dropped.
+/// A worker's `Register` waiting for the lock ([`Arrivals::registering`]): handled once dropped,
+/// the starts its journal reports going with it unless [kept](Self::keep).
 #[derive(Debug)]
 pub struct Registering {
     arrivals: Arrivals,
     worker_id: String,
+    starts: Vec<String>,
+}
+
+impl Registering {
+    /// Its journal's starts kept past it, as a stream's: it failed half-way (the database) or
+    /// its worker left with no stream live, and the worker's next try reports the same journal;
+    /// nothing else protects those attempts meanwhile. Its registration or loss forgets them.
+    pub fn keep(&self) {
+        let mut inner = self.arrivals.inner();
+        for attempt_id in &self.starts {
+            inner
+                .started
+                .insert((attempt_id.clone(), self.worker_id.clone()));
+        }
+    }
 }
 
 impl Drop for Registering {
@@ -576,6 +600,15 @@ impl Drop for Registering {
             waiting.1 -= 1;
             if waiting.1 == 0 {
                 inner.registering.remove(&self.worker_id);
+            }
+        }
+        for attempt_id in &self.starts {
+            let key = (attempt_id.clone(), self.worker_id.clone());
+            if let Some(count) = inner.registering_starts.get_mut(&key) {
+                *count -= 1;
+                if *count == 0 {
+                    inner.registering_starts.remove(&key);
+                }
             }
         }
     }
@@ -616,13 +649,23 @@ impl Arrivals {
         inner.last.get(worker_id).copied().max(waiting)
     }
 
+    /// How many of `worker_id`'s `Register`s wait, for tests: one handled has let go of its starts.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn registrations_waiting(&self, worker_id: &str) -> usize {
+        self.inner()
+            .registering
+            .get(worker_id)
+            .map_or(0, |(_, count)| *count)
+    }
+
     /// A `Register` from `worker_id` arrived `at`: a sign of life while it waits for the lock
     /// (B6: a reconnect during a stall), until the returned guard is dropped, once it is
     /// handled. Not after: a refused one (its worker's old stream still live) would renew that
     /// stream's lease with every try, and the worker be refused forever (B267). An accepted
     /// one is heard by its registration.
     #[must_use]
-    pub fn registering(&self, worker_id: &str, at: Timestamp) -> Registering {
+    pub fn registering(&self, worker_id: &str, at: Timestamp, starts: Vec<String>) -> Registering {
         let mut inner = self.inner();
         let waiting = inner
             .registering
@@ -630,9 +673,16 @@ impl Arrivals {
             .or_insert((at, 0));
         waiting.0 = waiting.0.max(at);
         waiting.1 += 1;
+        for attempt_id in &starts {
+            *inner
+                .registering_starts
+                .entry((attempt_id.clone(), worker_id.to_owned()))
+                .or_insert(0) += 1;
+        }
         Registering {
             arrivals: self.clone(),
             worker_id: worker_id.to_owned(),
+            starts,
         }
     }
 
@@ -669,6 +719,70 @@ impl Arrivals {
             },
         );
         id
+    }
+
+    /// `worker_id` registered: its new stream's ID, as [`Self::new_stream`], with the starts
+    /// its earlier streams reported forgotten, as [`Self::forget_starts`] (its journal is the
+    /// whole truth now), under one lock: an older stream's reader records for the latest stream
+    /// only, so nothing it brings lands in between (agy's second review of M5.3g).
+    #[must_use]
+    pub fn registered(&self, worker_id: &str) -> u64 {
+        let mut inner = self.inner();
+        inner.started.retain(|(_, worker)| worker != worker_id);
+        inner.unsent.retain(|_, worker| worker != worker_id);
+        inner.last_stream += 1;
+        let id = inner.last_stream;
+        inner.streams.insert(
+            worker_id.to_owned(),
+            StreamRead {
+                id,
+                ..StreamRead::default()
+            },
+        );
+        id
+    }
+
+    /// Whether `stream` is `worker_id`'s latest registered stream: what an older one's reader
+    /// still brings counts for nothing.
+    fn current(inner: &Arrived, worker_id: &str, stream: u64) -> bool {
+        inner
+            .streams
+            .get(worker_id)
+            .is_some_and(|read| read.id == stream)
+    }
+
+    /// As [`Self::arrived`], for a message read on `worker_id`'s stream `stream`: only its
+    /// latest registered stream's counts. Whether it did.
+    #[must_use]
+    pub fn arrived_on(&self, worker_id: &str, stream: u64, at: Timestamp) -> bool {
+        let mut inner = self.inner();
+        if !Self::current(&inner, worker_id, stream) {
+            return false;
+        }
+        let last = inner.last.entry(worker_id.to_owned()).or_insert(at);
+        *last = (*last).max(at);
+        true
+    }
+
+    /// As [`Self::start_arrived`], for stream `stream`: only its latest registered stream's.
+    pub fn start_arrived_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+        let mut inner = self.inner();
+        if Self::current(&inner, worker_id, stream) {
+            inner
+                .started
+                .insert((attempt_id.to_owned(), worker_id.to_owned()));
+        }
+    }
+
+    /// As [`Self::start_handled`], for stream `stream`: a later stream's start of the same
+    /// attempt stays.
+    pub fn start_handled_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+        let mut inner = self.inner();
+        if Self::current(&inner, worker_id, stream) {
+            inner
+                .started
+                .remove(&(attempt_id.to_owned(), worker_id.to_owned()));
+        }
     }
 
     /// `attempt_id`'s assignment went out as message `number` of `worker_id`'s stream `stream`.
@@ -708,6 +822,17 @@ impl Arrivals {
         }
     }
 
+    /// As [`Self::answered`], heard on `worker_id`'s stream `stream`: only its latest
+    /// registered stream's assignments (agy's third review of M5.3g: an older stream's answer
+    /// erased a newer stream's assignment of the same attempt, a moved cleanup's).
+    pub fn answered_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+        if let Some(read) = self.inner().streams.get_mut(worker_id)
+            && read.id == stream
+        {
+            read.assigned.remove(attempt_id);
+        }
+    }
+
     /// Whether `worker_id` surely never started `attempt_id`: a message from it said it had
     /// handled the assignment's message, and no start of it has arrived. What a worker sends
     /// while handling an assignment (`Started`, `Rejected`) is queued before anything naming
@@ -716,9 +841,9 @@ impl Arrivals {
     #[must_use]
     pub fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
         let inner = self.inner();
-        !inner
-            .started
-            .contains(&(attempt_id.to_owned(), worker_id.to_owned()))
+        let key = (attempt_id.to_owned(), worker_id.to_owned());
+        !inner.started.contains(&key)
+            && !inner.registering_starts.contains_key(&key)
             && (inner.unsent.get(attempt_id).is_some_and(|w| w == worker_id)
                 || inner.streams.get(worker_id).is_some_and(|read| {
                     read.assigned
@@ -743,17 +868,18 @@ impl Arrivals {
     /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
     #[must_use]
     pub fn start_waiting(&self, attempt_id: &str) -> bool {
-        self.inner()
+        let inner = self.inner();
+        let from = (attempt_id.to_owned(), String::new());
+        inner
             .started
-            .range((attempt_id.to_owned(), String::new())..)
+            .range(from.clone()..)
             .next()
             .is_some_and(|(attempt, _)| attempt == attempt_id)
-    }
-
-    /// How many `Started` or `Finished` messages arrived and aren't handled yet.
-    #[must_use]
-    pub fn starts_waiting(&self) -> usize {
-        self.inner().started.len()
+            || inner
+                .registering_starts
+                .range(from..)
+                .next()
+                .is_some_and(|((attempt, _), _)| attempt == attempt_id)
     }
 
     /// Forgets the starts of `worker_id`'s that wait: it registered, and its journal is what
@@ -1055,6 +1181,7 @@ impl MasterCore {
                 worker.id,
                 Connection {
                     incarnation: worker.incarnation,
+                    newest: None,
                     schedr_version: worker.schedr_version,
                     heard,
                     persisted: now,
@@ -1072,6 +1199,88 @@ impl MasterCore {
             .connections_commands_lost("the master restarted before the answer came")
             .await?;
         Ok(restored)
+    }
+
+    /// The highest connection `register`'s incarnation had registered before it ([`Self::register`]
+    /// raises it): what [`Self::registration_undone`] puts back.
+    #[must_use]
+    pub fn newest_before(&self, register: &pb::Register) -> Option<u64> {
+        self.connections
+            .get(&register.worker_id)
+            .filter(|known| known.incarnation == register.incarnation_id)
+            .and_then(|known| known.newest)
+    }
+
+    /// A registration accepted but never put in place (the master stopped leading meanwhile):
+    /// the worker not live, at the dispatcher too, nothing assigned to a stream that isn't there;
+    /// its incarnation's number back to `before` ([`Self::newest_before`]: agy's fifth review of
+    /// M5.3g, so a held older `Register` stays refused on this master, still running), not
+    /// raised by a connection never in place, so its next try isn't refused as no newer. Memory
+    /// only: the database's word is the next leader's.
+    pub fn registration_undone(&mut self, worker_id: &str, before: Option<u64>) {
+        if let Some(connection) = self.connections.get_mut(worker_id) {
+            connection.live = false;
+            connection.newest = before;
+        }
+        self.dispatcher.worker_disconnected(worker_id);
+    }
+
+    /// Whether this master knows `worker_id` (registered, or read back): only then does its
+    /// loss forget what was kept for it.
+    #[must_use]
+    pub fn knows(&self, worker_id: &str) -> bool {
+        self.connections.contains_key(worker_id)
+    }
+
+    /// Why `register` is refused whatever the worker's streams (its protocol, its ID, its size, or
+    /// a connection no newer than its incarnation's: decision 525).
+    ///
+    /// # Errors
+    ///
+    /// [`CoreError::Refused`] with the reason.
+    pub fn check(&self, register: &pb::Register) -> Result<(), CoreError> {
+        check_worker_version(PROTOCOL_VERSION, register.protocol)
+            .map_err(|e| CoreError::Refused(e.to_string()))?;
+        if register.worker_id.is_empty() {
+            return Err(CoreError::Refused(
+                "the worker sent no worker ID".to_owned(),
+            ));
+        }
+        if let Some(why) = self.settings.worker_report.oversized(register) {
+            return Err(CoreError::Refused(why));
+        }
+        if let Some(why) = self.stale(register) {
+            return Err(CoreError::Refused(why));
+        }
+        Ok(())
+    }
+
+    /// Whether `register` is a newer connection of the incarnation whose stream is live, to replace
+    /// it (decision 525, B301: an old stream whose end never reached the master).
+    #[must_use]
+    pub fn replaces(&self, register: &pb::Register) -> bool {
+        self.connections
+            .get(&register.worker_id)
+            .is_some_and(|known| {
+                known.live
+                    && known.incarnation == register.incarnation_id
+                    && known.newest.is_some_and(|n| register.connection > n)
+            })
+    }
+
+    /// Why `register` is refused as no newer than what its incarnation registered (decision 525,
+    /// B302: a `Register` held on its way, its journal older, taken as the truth).
+    fn stale(&self, register: &pb::Register) -> Option<String> {
+        let known = self.connections.get(&register.worker_id)?;
+        let registered = known.newest?;
+        (known.incarnation == register.incarnation_id && register.connection <= registered).then(|| {
+            format!(
+                "connection {} of worker `{}` is no newer than its connection {registered}, already \
+                 registered: a registration held on its way, or a worker older than protocol 2.3, \
+                 which numbers none (upgrade the workers with the master)",
+                register.connection, register.worker_id
+            )
+        })
     }
 
     /// Whether a worker has a live stream.
@@ -1092,22 +1301,19 @@ impl MasterCore {
         register: &pb::Register,
         now: Timestamp,
     ) -> Result<(pb::Registered, Vec<Outgoing>), CoreError> {
-        check_worker_version(PROTOCOL_VERSION, register.protocol)
-            .map_err(|e| CoreError::Refused(e.to_string()))?;
+        self.check(register)?;
         let worker_id = register.worker_id.as_str();
-        if worker_id.is_empty() {
-            return Err(CoreError::Refused(
-                "the worker sent no worker ID".to_owned(),
-            ));
-        }
-        if let Some(why) = self.settings.worker_report.oversized(register) {
-            return Err(CoreError::Refused(why));
-        }
-        if self.is_live(worker_id) {
+        if self.is_live(worker_id) && !self.replaces(register) {
             return Err(CoreError::Refused(format!(
                 "worker `{worker_id}` already has a live stream"
             )));
         }
+        // What its incarnation had registered, kept if this one fails half-way (agy's review of
+        // M5.3g: a failed first registration locked a worker sending no number out).
+        let before = self
+            .connections
+            .get(worker_id)
+            .map(|known| (known.incarnation.clone(), known.newest));
         let accepted = match self.accept(register, now).await {
             Ok((registered, mut outgoing)) => {
                 let triggers = self
@@ -1126,6 +1332,9 @@ impl MasterCore {
             // A registration that failed half-way (the database) leaves no live stream behind:
             // the worker's next attempt is accepted, or its lease runs out.
             connection.live = false;
+            connection.newest = before
+                .filter(|(incarnation, _)| *incarnation == connection.incarnation)
+                .and_then(|(_, newest)| newest);
         }
         accepted
     }
@@ -1235,6 +1444,7 @@ impl MasterCore {
             worker_id.to_owned(),
             Connection {
                 incarnation: register.incarnation_id.clone(),
+                newest: Some(register.connection),
                 schedr_version: register.schedr_version.clone(),
                 heard: (self.steady)(now),
                 persisted: now,

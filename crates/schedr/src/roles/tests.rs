@@ -1372,6 +1372,7 @@ fn the_hidden_settings_reach_the_roles() {
         ("SCHEDR_HIDDEN__MASTER__ASSIGNMENTS_PER_ROUND", "11"),
         ("SCHEDR_HIDDEN__CLIENT__STREAM_IDLE", "91s"),
         ("SCHEDR_HIDDEN__WORKER__REGISTER_TIMEOUT", "92s"),
+        ("SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT", "93s"),
         ("SCHEDR_HIDDEN__MASTER__EXPIRIES_PER_ROUND", "12"),
         ("SCHEDR_HIDDEN__MASTER__WAITING_REASONS_PER_ROUND", "13"),
         ("SCHEDR_HIDDEN__MASTER__PENDING_REASONS_PER_ROUND", "14"),
@@ -1520,7 +1521,7 @@ fn the_hidden_settings_reach_the_roles() {
         [50, 51, 52]
     );
     assert_eq!(master.samples.events_kept, 53);
-    assert_eq!(w.register, secs(92));
+    assert_eq!((w.register, w.unanswered), (secs(92), secs(93)));
 }
 
 /// The review of M5.1q: a shutdown ends the wait for the database even while a try hangs

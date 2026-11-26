@@ -32,7 +32,9 @@ the folder it starts in, so `--dag-path .` is that folder, a root named after it
   **webserver waits** for a schema it can use (`/readyz` not ready, checked every 5 s), so it
   can start before the migration. SQLite works for roles on one host with a local disk.
 - **Upgrade the master first**, then the webservers and workers (see
-  [Parsing and code versions](06-parsing.md#upgrades)).
+  [Parsing and code versions](06-parsing.md#upgrades)). From protocol 2.3 (1.3.0) the workers
+  follow at once: one older than 2.3 is refused after its first lost connection (see
+  [The protocol](15-protocol.md#registering-and-heartbeats)).
 - **Workers' `terminationGracePeriodSeconds`** should match `[worker]
   termination_grace_period`, so a draining worker has the time it expects.
 - **Probes** go to the ops port: liveness on `/healthz` for every role, readiness on `/readyz`

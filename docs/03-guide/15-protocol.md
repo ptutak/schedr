@@ -12,7 +12,7 @@ sequenceDiagram
     participant W as Worker
     participant M as Master
     W->>M: Control: Register
-    alt Compatible version and no live stream for this ID
+    alt Compatible version, and a connection newer than any of its process registered
         M-->>W: Registered
         W->>M: Warnings (current complete list)
         loop Heartbeat interval: 10 s default
@@ -20,12 +20,27 @@ sequenceDiagram
             M-->>W: HeartbeatAck (while leading)
         end
         Note over W,M: No worker message for 60 s: worker lost
-    else Incompatible version or duplicate live stream
+    else Incompatible version, or a connection no newer
         M-->>W: Registration refused
     end
 ```
 
-`Register` carries the worker's identity, roots, journal, slots and running trigger IDs, its
+`Register` carries which of its process's connections it is (`connection`, 1 and up, one more at
+each try; protocol 2.3, decision 525). Within one incarnation the master registers only a number
+higher than any it registered, which replaces that worker's stream if it is still live (one whose
+end never reached the master: B301); an equal or lower number is refused, live or not, so a
+`Register` held on its way and arriving late changes nothing (B302). A new master learns the number
+from the first it sees. A worker older than 2.3 sends 0 every time: it registers once, and after
+its first lost connection it is refused until it or the master restarts. **Upgrade the workers
+with the master.** Another incarnation (a restarted worker) is refused while the old one's stream
+lives, as before.
+
+A worker that hears nothing from the master on a registered stream (its heartbeats are answered as
+they arrive) for `SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT` (25 s, at most half the lease) leaves
+it and connects again (decision 526). It ends the connection only: the lease and the cutoff of
+its tasks count from the master's last word, as before.
+
+`Register` also carries the worker's identity, roots, journal, slots and running trigger IDs, its
 secret storages and default storage, and the extensions its plugins serve (protocol 2.2; see
 [Extensions](21-extensions.md)).
 `Registered` returns the timings, journal decisions, message size limit and script uses.

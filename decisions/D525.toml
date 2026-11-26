@@ -19,4 +19,5 @@ journal taken as the truth); the number stored with the worker; 0 keeping the li
 history = "JOURNAL.md#D525"
 step = "M5.3g"
 also = ["workers"]
-code = []
+code = ["crates/schedr-master/src/core.rs::replaces", "crates/schedr-master/src/core.rs::stale", "crates/schedr-agent/src/agent.rs::open_session"]
+checked = 2026-11-26

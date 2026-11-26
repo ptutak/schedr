@@ -11,6 +11,7 @@ fn messages_encode_and_decode() {
             running_triggers: Vec::new(),
             watcher_slots: 500,
             queue_depth: 4,
+            connection: 3,
             default_secret_storage: Some("vault".into()),
             extensions: vec![pb::ExtensionOffer {
                 name: "spark".into(),

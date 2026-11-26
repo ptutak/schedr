@@ -10,15 +10,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Then:** M5.3f, M5.3b, M5.3d, M5.3c, M5.3e.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 3; first: B301 (high/possible), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN42 (2026-11-26): What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (corrects D524)
+- DN41 (2026-11-26): The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (adds to D526)
 - D527 (2026-11-25): 1.3.0's scope; an extension task no one offers
 - D526 (2026-11-25): a worker leaves a connection whose heartbeats go unanswered
 - D525 (2026-11-25): connections are numbered in `Register`
-- D524 (2026-11-25): a worker leaves a master that accepts it and says nothing
-- D523 (2026-11-25): hot standby masters in the chart: `Recreate` kept, migrating when leading
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - R1.2.1 (2026-11-25): Release 1.2.1
 - R1.2 (2026-11-25): Release 1.2.0

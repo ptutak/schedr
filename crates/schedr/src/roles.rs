@@ -128,6 +128,7 @@ pub fn worker_timeouts(config: &Config) -> schedr_agent::attempt::WorkerTimeouts
         orphan_grace: config.timings.orphan_grace,
         reconnect_first: config.timings.reconnect_backoff_first,
         register: config.timings.register_timeout,
+        unanswered: config.timings.unanswered_timeout,
         reconnect_max: config.timings.reconnect_backoff_max,
         alive: config.timings.worker_alive_interval,
         deregister: config.timings.deregister_wait,

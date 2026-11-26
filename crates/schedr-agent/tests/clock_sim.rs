@@ -338,6 +338,7 @@ fn a_waiting_queue_keeps_the_rules(#[case] faults: Vec<(u64, master::Fault)>) {
             seed,
             faults: faults.clone(),
             queue: true,
+            slow_stops: false,
         };
         assert_eq!(master::simulate(&s, None), Ok(()), "seed {seed}");
     }
@@ -351,6 +352,7 @@ fn without_faults_every_run_ends_and_no_rule_breaks() {
         seed: 1,
         faults: vec![],
         queue: false,
+        slow_stops: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -394,6 +396,7 @@ fn an_assignment_started_as_its_worker_was_cut_off_isnt_run_again_beside_it() {
         seed: 14_284_326_171_064_715_806,
         faults: vec![cut(11_818, 20_494), cut(36_525, 22_733)],
         queue: false,
+        slow_stops: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -414,6 +417,7 @@ fn an_assignment_whose_worker_cant_report_isnt_started_again_beside_it() {
             cut(58_883, 0, 20_609, master::Way::Up),
         ],
         queue: false,
+        slow_stops: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -462,6 +466,7 @@ fn attempts_end_after_lags_drops_and_a_takeover() {
             (51_282, Drop { worker: 0 }),
         ],
         queue: false,
+        slow_stops: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }
@@ -530,6 +535,7 @@ fn a_moved_cleanup_given_back_to_the_worker_whose_result_is_on_its_way_runs_once
         seed: 611_699_805_573_473_486,
         faults: vec![cut(2_563, 1, 27_436), cut(15_662, 0, 15_934)],
         queue: false,
+        slow_stops: false,
     };
     assert_eq!(master::simulate(&s, None), Ok(()));
 }

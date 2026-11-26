@@ -33,6 +33,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | On | Title |
 |---|---|---|---|---|
+| DN42 | 2026-11-26 | claude | corrects D524 | What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace |
+| DN41 | 2026-11-26 | claude | adds to D526 | The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection |
 | DN40 | 2026-11-24 | user | corrects D513 | The Extensions page: a tab per extension, one version chosen, its deployments and workers under it |
 | DN39 | 2026-11-24 | user | adds to D517 | Every deployment's runs move by cursor: Newest, Previous, Next, Oldest |
 | DN38 | 2026-11-23 | user | adds to D280 | A frozen worker's try may outlive its cleanup's move: the cleanup runs beside it |

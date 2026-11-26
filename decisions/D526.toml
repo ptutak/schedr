@@ -15,4 +15,5 @@ loop is stuck); leaving it at the lease until the chaos on kind.
 history = "JOURNAL.md#D526"
 step = "M5.3g"
 also = ["protocol"]
-code = []
+code = ["crates/schedr-agent/src/agent.rs::unanswered_at"]
+checked = 2026-11-26

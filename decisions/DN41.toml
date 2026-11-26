@@ -1,0 +1,16 @@
+title = "The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection"
+date = 2026-11-26
+by = "claude"
+on = "D526"
+kind = "adds"
+summary = '''
+The worker's unanswered limit (D526) is never below two heartbeat intervals: a heartbeat as long
+as the limit would leave every healthy stream (agy's review of M5.3g). Each connection leaves at
+its own share of the limit, 0.8 to 1.0, picked as it opens from the clock, the worker's ID and the
+connection's number, applied after half the lease caps the limit, so workers whose master went
+quiet for all at once don't reconnect together. The limit: half the lease capping the configured
+one, times the share, at least two heartbeats, at most half the lease. Not chosen: no jitter (a
+reconnect storm after a master's stall); jitter after the cap (a cap below 80 % of the limit gave
+every worker the same moment).
+'''
+history = "JOURNAL.md#DN41"

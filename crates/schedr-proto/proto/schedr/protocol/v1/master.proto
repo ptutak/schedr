@@ -209,6 +209,11 @@ message Register {
   // The extensions it runs, each with the versions its plugin serves (decision 510; protocol
   // 2.2): a DAG asking for one no worker offers is warned about. None from an older worker.
   repeated ExtensionOffer extensions = 17;
+  // Which of its process's connections this is, 1 and up, one more at each try (decision 525;
+  // protocol 2.3): within an incarnation the master registers only a number higher than any it
+  // registered, which replaces the stream of a lower one; an equal or lower one (a `Register` held
+  // on its way, or a worker older than 2.3, which sends 0 each time) is refused.
+  uint64 connection = 18;
 }
 
 // An extension a worker's plugin serves (`[extensions.<name>]`, or found by discovery).
