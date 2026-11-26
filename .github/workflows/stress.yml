@@ -26,6 +26,10 @@ on:
         description: "Paired speed: how many pairs of runs per scenario"
         default: "3"
         type: string
+      chaos_seeds:
+        description: "Chaos on kind only, on these seeds (comma-separated, e.g. 2,7,11): to compare a change on the same schedules; empty for the usual run"
+        default: ""
+        type: string
 
 # One run at a time: the cap below is per run. A run waits for the one before it, never cancels
 # it; GitHub keeps one waiting, so a third started meanwhile replaces the second.
@@ -47,6 +51,7 @@ jobs:
     outputs:
       scenarios: ${{ steps.list.outputs.scenarios }}
       base: ${{ steps.base.outputs.sha }}
+      seeds: ${{ steps.seeds.outputs.seeds }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,13 +87,35 @@ jobs:
             echo "main unchanged since the last passing run ($last): the random chaos only"
             echo "only=^stress_21_random_chaos$" >> "$GITHUB_OUTPUT"
           fi
+      # The chaos runs' seeds: the ones asked for (then chaos alone runs), or the run's number
+        # (each night another schedule).
+      - name: The chaos seeds
+        id: seeds
+        env:
+          SEEDS: ${{ inputs.chaos_seeds }}
+          RUN: ${{ github.run_number }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys
+          given = os.environ.get("SEEDS", "").strip()
+          if given and not re.fullmatch(r"\d+(\s*,\s*\d+)*", given):
+              sys.exit(f"chaos_seeds must be numbers separated by commas, not {given!r}")
+          seeds = [int(s) for s in re.split(r"\s*,\s*", given)] if given else [int(os.environ["RUN"])]
+          print("seeds=" + json.dumps(seeds))
+          PY
       - name: The scenarios
         id: list
         # The filter through the environment, never pasted into the script.
         env:
           FILTER: ${{ inputs.filter || steps.changed.outputs.only }}
           BASE: ${{ inputs.base }}
+          CHAOS_SEEDS: ${{ inputs.chaos_seeds }}
         run: |
+          if [ -n "$CHAOS_SEEDS" ]; then
+            echo "chaos alone, seeds $CHAOS_SEEDS: no stress scenarios"
+            echo 'scenarios=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -n "$BASE" ] && [ -z "$FILTER" ]; then
             echo "::error::a paired run (base $BASE) needs a filter: every scenario in pairs takes many hours"
             exit 1
@@ -348,9 +375,15 @@ jobs:
   # run's number (each night another schedule) and printed; the record is uploaded every time: a
   # failure is read from it, the seed repeating the schedule but not the cluster's timing.
   chaos:
-    if: github.event_name == 'schedule' || inputs.filter == ''
+    needs: plan
+    if: github.event_name == 'schedule' || inputs.chaos_seeds != '' || (inputs.filter == '' && inputs.base == '')
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ${{ fromJSON(needs.plan.outputs.seeds) }}
+    name: chaos seed ${{ matrix.seed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -403,14 +436,14 @@ jobs:
           done
           echo "IMAGE=localhost/schedr:commit" >> "$GITHUB_ENV"
           echo "SERVER_IMAGE=localhost/schedr-server:commit" >> "$GITHUB_ENV"
-      - name: Chaos, seed ${{ github.run_number }}
+      - name: Chaos, seed ${{ matrix.seed }}
         env:
-          SEED: ${{ github.run_number }}
+          SEED: ${{ matrix.seed }}
         run: CONTAINER=docker python3 scripts/kind_chaos.py run --seed "$SEED"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: chaos-record-${{ github.run_number }}
+          name: chaos-record-${{ github.run_number }}-seed-${{ matrix.seed }}
           path: target/kind-chaos
           retention-days: 14
 
@@ -420,7 +453,7 @@ jobs:
   # (B234 came from 60). A failure prints the smallest scenario.
   # Not when chosen scenarios are run by hand (the user, 2026-11-24: "it runs every single time").
   simulator:
-    if: github.event_name == 'schedule' || inputs.filter == ''
+    if: github.event_name == 'schedule' || (inputs.filter == '' && inputs.chaos_seeds == '' && inputs.base == '')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
