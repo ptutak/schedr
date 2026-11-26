@@ -772,7 +772,17 @@ fn test_fails_at_once_when_its_root_cant_be_scanned() {
 /// M4.6b: a command and a Python task read secrets given with `--secret`; their values are
 /// masked in the logs and the stored output.
 fn secrets_dag() -> String {
-    let bin = BINARY;
+    secrets_dag_through(&format!("{BINARY} task-ctx"))
+}
+
+/// The secrets DAG, its commands calling the in-task CLI as `ctx` (`schedr task-ctx`, or the
+/// small `schedr-ctx` found on the task's `PATH`: decision 532).
+fn secrets_dag_through(ctx: &str) -> String {
+    let words = ctx
+        .split(' ')
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         r#"
 from schedr import CommandOperator, Dag, SecretPrefix, secrets, task, task_ctx
@@ -795,7 +805,7 @@ def missing() -> str:
 with Dag("ok"):
     CommandOperator(
         "cmd",
-        ["sh", "-c", '{bin} task-ctx secret get "etl/db#password"; echo; echo "env $PW"'],
+        ["sh", "-c", '{ctx} secret get "etl/db#password"; echo; echo "env $PW"'],
         env={{"PW": secrets["etl/db"]["password"]}},
         secrets=["etl/db#password"],
     )
@@ -808,11 +818,11 @@ with Dag("not_found"):
     missing()
 
 with Dag("cmd_denied"):
-    CommandOperator("read", ["{bin}", "task-ctx", "secret", "get", "etl/db#password"])
+    CommandOperator("read", [{words}, "secret", "get", "etl/db#password"])
 
 with Dag("cmd_ignored"):
     # A failed read the command gets past: the attempt succeeds (decision 168).
-    CommandOperator("read", ["sh", "-c", '{bin} task-ctx secret get "etl/db#x" || true'])
+    CommandOperator("read", ["sh", "-c", '{ctx} secret get "etl/db#x" || true'])
 "#
     )
 }
@@ -824,9 +834,12 @@ const SECRET_ARGS: [&str; 4] = [
     "tenants/a#token=token-of-a",
 ];
 
-#[test]
-fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
-    let dag = secrets_dag();
+/// Through `schedr task-ctx`, and the small `schedr-ctx` found on the task's `PATH` (M5.3c).
+#[rstest::rstest]
+#[case::schedr_task_ctx(None)]
+#[case::schedr_ctx(Some("schedr-ctx"))]
+fn secrets_are_read_by_commands_and_python_tasks_and_masked(#[case] small: Option<&str>) {
+    let dag = small.map_or_else(secrets_dag, secrets_dag_through);
     let local = Local::new(&[("secret_reads.py", dag.as_str())]);
     let mut args = vec!["--json"];
     args.extend(SECRET_ARGS);
@@ -855,9 +868,12 @@ fn secrets_are_read_by_commands_and_python_tasks_and_masked() {
     );
 }
 
-#[test]
-fn a_secret_read_that_fails_fails_the_task_with_its_kind() {
-    let dag = secrets_dag();
+/// Through `schedr task-ctx`, and the small `schedr-ctx` found on the task's `PATH` (M5.3c).
+#[rstest::rstest]
+#[case::schedr_task_ctx(None)]
+#[case::schedr_ctx(Some("schedr-ctx"))]
+fn a_secret_read_that_fails_fails_the_task_with_its_kind(#[case] small: Option<&str>) {
+    let dag = small.map_or_else(secrets_dag, secrets_dag_through);
     let local = Local::new(&[("secret_reads.py", dag.as_str())]);
     for (dag, kind) in [
         ("denied", "secret_denied"),

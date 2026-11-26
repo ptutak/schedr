@@ -264,7 +264,21 @@ subprocess.run(["schedr", "dag-ctx", "run", "get"], pass_fds=[fd])
 In Python, `from schedr.script import dag_ctx` reads the same values in the process that
 already has the descriptor.
 
-### `schedr task-ctx`
+### `schedr task-ctx` and `schedr-ctx`
+
+`schedr-ctx` takes `schedr task-ctx`'s commands, with the same arguments, output and exit
+codes. It is a small program on its own that starts in about a third of the time: 3.7 ms against
+10.5 ms a call, measured on a quiet machine. A script that calls the in-task CLI often, such as a
+loop reporting its progress, should call `schedr-ctx`:
+
+```sh
+schedr-ctx status copying --progress 0.5     # the same as: schedr task-ctx status copying ...
+```
+
+Both programs ship together (in the wheel and the images), and the worker puts its own folder
+first on every task's `PATH`, so the `schedr-ctx` a task finds belongs to the same build as the
+worker. `schedr task-ctx` keeps working unchanged. A worker older than 1.3.0 has no `schedr-ctx`:
+a script calling it fails with "not found" until the worker is upgraded.
 
 `schedr task-ctx` uses the same channel for [secrets](13-secrets.md),
 [connections](14-connections.md), [cleanup handles](15-cleanup.md), [resource

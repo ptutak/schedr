@@ -195,8 +195,9 @@ pub fn script_variables(request: &Request, run: &ShellRun) -> BTreeMap<String, S
     vars
 }
 
-/// The script's `PATH`: this program's folder first, so the `schedr task-ctx` it calls is this
-/// build, speaking its context's protocol; then the worker's.
+/// The script's `PATH`: this program's folder first, so the `schedr-ctx` and `schedr task-ctx` it
+/// calls are this build, speaking its context's protocol; then the worker's. Every task's too
+/// (decision 532).
 #[must_use]
 pub fn script_path(path: Option<&str>) -> String {
     let own = std::env::current_exe()

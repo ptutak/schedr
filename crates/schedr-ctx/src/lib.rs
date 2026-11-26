@@ -39,6 +39,12 @@ pub fn run(
         Ok(small) => match run_task_ctx(&small.command, env, VERSION, (&mut *out, &mut *err)) {
             Ok(()) => 0,
             Err(message) => {
+                // The one message naming the program: this one's (decision 532's edge case).
+                let message = message.replacen(
+                    "`schedr task-ctx` must be run inside",
+                    "`schedr-ctx` must be run inside",
+                    1,
+                );
                 let _ = writeln!(err, "error: {message}");
                 1
             }

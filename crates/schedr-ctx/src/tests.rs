@@ -784,7 +784,10 @@ fn schedr_ctx_outside_a_task_fails_as_schedr_task_ctx_does() {
     let (code, out, err) = small_run(&["status", "loading"], &BTreeMap::new());
     assert_eq!(code, 1);
     assert_eq!(out, "");
-    assert!(err.starts_with("error: "), "{err}");
+    assert!(
+        err.starts_with("error: `schedr-ctx` must be run inside a schedr task"),
+        "names the program run: {err}"
+    );
     assert!(err.contains("SCHEDR_CTX_FD"), "{err}");
 }
 

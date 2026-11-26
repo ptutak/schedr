@@ -4482,14 +4482,21 @@ fn the_scripts_event_is_delivered_and_listed(standalone: &Standalone, got: &Rece
     });
 }
 
-/// M5.2i6 (decision 519): `schedr extension shell` runs a script as an extension's plugin: the
-/// payload on its stdin, a declared secret, a handle and its cleanup, statuses, a link and a
-/// metric point through `schedr task-ctx`, its output set; a failing exit fails the attempt, and
-/// a cancel reaches the script, which asks why. A command task reports a status and a link too,
-/// and is refused a metric.
-#[test]
-fn a_shell_script_is_an_extensions_plugin_through_task_ctx() {
-    const DAG: &str = r#"
+/// `dag`'s command reported its status and its link through the in-task CLI.
+fn a_command_reports_a_status_and_a_link(standalone: &Standalone, dag: &str) {
+    let command = standalone.trigger(dag);
+    standalone.wait_for_state(&command, "success");
+    let attempt = &with_reports(standalone, &command, "report", 1);
+    assert_eq!(
+        attempt["statuses"][0]["phase"], "working",
+        "{dag}: {attempt}"
+    );
+    assert_eq!(attempt["statuses"][0]["progress"], 0.5, "{dag}: {attempt}");
+    assert_eq!(attempt["links"][0]["label"], "Docs", "{dag}: {attempt}");
+}
+
+/// The backup extension's DAGs and two command DAGs reporting through the in-task CLI.
+const SHELL_PLUGIN_DAGS: &str = r#"
 from schedr import CommandOperator, Dag, ExtensionTask, Notify
 
 for dag_id, payload in [("backups", {"source": "/data"}), ("slow_backups", {"slow": True}),
@@ -4504,7 +4511,22 @@ with Dag("reporting_command"):
     CommandOperator("report", ["sh", "-c", "{bin} task-ctx status working --progress 0.5"
                                " && {bin} task-ctx link Docs https://docs.example/x"
                                " && ! {bin} task-ctx extension metric x 1 2>&1"])
+
+# The same through the small program, by its name alone: the worker's folder is first on the
+# task's PATH (decision 532).
+with Dag("reporting_small"):
+    CommandOperator("report", ["sh", "-c", "schedr-ctx status working --progress 0.5"
+                               " && schedr-ctx link Docs https://docs.example/x"
+                               " && ! schedr-ctx extension metric x 1 2>&1"])
 "#;
+
+/// M5.2i6 (decision 519): `schedr extension shell` runs a script as an extension's plugin: the
+/// payload on its stdin, a declared secret, a handle and its cleanup, statuses, a link and a
+/// metric point through `schedr task-ctx`, its output set; a failing exit fails the attempt, and
+/// a cancel reaches the script, which asks why. A command task reports a status and a link too,
+/// and is refused a metric.
+#[test]
+fn a_shell_script_is_an_extensions_plugin_through_task_ctx() {
     let (base, got) = webhook_receiver();
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/extensions/backup/backup.sh")
@@ -4518,7 +4540,7 @@ with Dag("reporting_command"):
          \n[notifications.channels.ops]\ntype = \"webhook\"\nurl = \"{base}/ops\"\n",
         script.display()
     );
-    let dag = DAG.replace("{bin}", BINARY);
+    let dag = SHELL_PLUGIN_DAGS.replace("{bin}", BINARY);
     let standalone = Standalone::start_configured(
         &[("backups.py", dag.as_str())],
         None,
@@ -4529,7 +4551,7 @@ with Dag("reporting_command"):
     let (code, out, err) =
         standalone.secrets(None, &["set", "backup/target", "token=s3cret-token-99"]);
     assert_eq!(code, 0, "{out}{err}");
-    standalone.wait("the DAGs to be found", || standalone.dag_ids().len() == 4);
+    standalone.wait("the DAGs to be found", || standalone.dag_ids().len() == 5);
 
     let run = standalone.trigger("backups");
     standalone.wait_for_state(&run, "success");
@@ -4616,12 +4638,9 @@ fn a_shell_plugin_fails_and_stops_and_a_command_task_reports(standalone: &Standa
         logs(standalone.dir.path()).contains("stopped: cancel")
     });
 
-    let command = standalone.trigger("reporting_command");
-    standalone.wait_for_state(&command, "success");
-    let attempt = &with_reports(standalone, &command, "report", 1);
-    assert_eq!(attempt["statuses"][0]["phase"], "working", "{attempt}");
-    assert_eq!(attempt["statuses"][0]["progress"], 0.5, "{attempt}");
-    assert_eq!(attempt["links"][0]["label"], "Docs", "{attempt}");
+    for dag in ["reporting_command", "reporting_small"] {
+        a_command_reports_a_status_and_a_link(standalone, dag);
+    }
     assert!(
         logs(standalone.dir.path()).contains("a metric is an extension's"),
         "the refusal printed"

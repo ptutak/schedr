@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use pretty_assertions::assert_eq;
@@ -1673,4 +1674,25 @@ fn an_extensions_service_is_specified_from_its_config() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o700);
+}
+
+/// Decision 532: a task finds this worker's own `schedr-ctx` and `schedr` first on its `PATH`,
+/// its other variables as they were; a worker started with no `PATH` gives its folder alone.
+#[test]
+fn tasks_get_the_workers_folder_first_on_their_path() {
+    let own = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .display()
+        .to_string();
+    let env = BTreeMap::from([
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ("HOME".to_owned(), "/home/w".to_owned()),
+    ]);
+    let tasks = super::tasks_agent_env(&env);
+    assert_eq!(tasks["PATH"], format!("{own}:/usr/bin:/bin"));
+    assert_eq!(tasks["HOME"], "/home/w");
+    let bare = super::tasks_agent_env(&BTreeMap::new());
+    assert_eq!(bare["PATH"], own);
 }

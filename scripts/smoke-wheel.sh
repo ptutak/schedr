@@ -51,6 +51,15 @@ step "installing $(basename "$wheel") into a fresh venv"
 "$work/venv/bin/pip" install --quiet --disable-pip-version-check "$wheel"
 schedr=$work/venv/bin/schedr
 "$schedr" --version
+# The small in-task CLI beside it (M5.3c, decision 532): the same version, its own error outside
+# a task.
+ctx=$work/venv/bin/schedr-ctx
+[ -x "$ctx" ] || fail "no schedr-ctx beside schedr in the wheel"
+[ "$("$ctx" --version)" = "schedr-ctx $("$schedr" --version | awk '{print $2}')" ] \
+    || fail "schedr-ctx's version isn't schedr's: $("$ctx" --version)"
+if env -u SCHEDR_CTX_FD "$ctx" status loading 2>/dev/null; then
+    fail "schedr-ctx outside a task didn't fail"
+fi
 
 # A clean environment, as for a new user: the venv isn't activated, and only the system's
 # directories are on PATH, so the venv's Python is found next to the binary.

@@ -480,7 +480,7 @@ pub fn agent_settings(
                 .map(|(name, interpreter)| (name.clone(), interpreter.path.clone()))
                 .collect(),
             python,
-            agent_env: env.clone(),
+            agent_env: tasks_agent_env(env),
             pass_env: config.worker.pass_env.clone(),
             log_dir: data_dir.join("logs").join(file_name(&worker_id)),
             connection_dir: config
@@ -2502,4 +2502,16 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
     ))
     .await;
     Ok(())
+}
+
+/// The worker's environment as its tasks see it: its own program's folder first on `PATH`
+/// (decision 532), so the `schedr-ctx` and `schedr` a task finds are this worker's build, as a
+/// shell plugin's were already ([`crate::shell_plugin::script_path`]).
+fn tasks_agent_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut env = env.clone();
+    let path = crate::shell_plugin::script_path(env.get("PATH").map(String::as_str));
+    if !path.is_empty() {
+        env.insert("PATH".to_owned(), path);
+    }
+    env
 }

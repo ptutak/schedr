@@ -439,7 +439,9 @@ by side (the dummy and the Rust `hello-plugin`, which those targets build and co
 
 `schedr extension shell -- <script> [args]` makes any script an extension's plugin: it speaks the
 protocol with the worker and runs the script for each attempt; the script talks back through
-`schedr task-ctx`.
+`schedr-ctx`, `schedr task-ctx`'s commands in a small program that starts in a third of the time
+([The DAG context](../02-dags/06-context.md#schedr-task-ctx-and-schedr-ctx)). `schedr task-ctx`
+works the same, only slower to start.
 
 1. Write the script:
 
@@ -447,11 +449,11 @@ protocol with the worker and runs the script for each attempt; the script talks 
    #!/bin/sh
    set -eu
    payload=$(cat)                                   # the payload, JSON
-   schedr task-ctx status copying --progress 0.1
-   token=$(schedr task-ctx secret get "backup/target#token")
+   schedr-ctx status copying --progress 0.1
+   token=$(schedr-ctx secret get "backup/target#token")
    count=$(copy_files "$payload" "$token")          # the work
-   schedr task-ctx extension metric files_copied "$count" --label kind=data
-   schedr task-ctx extension output set "{\"files\": $count}"
+   schedr-ctx extension metric files_copied "$count" --label kind=data
+   schedr-ctx extension output set "{\"files\": $count}"
    ```
 
 2. Configure it as the extension's command, its metrics, panels and notifications beside it (a
@@ -472,11 +474,11 @@ The script gets:
 - **the run** as `SCHEDR_*` variables, as a command task does (`SCHEDR_DAG_ID`, `SCHEDR_RUN_ID`,
   `SCHEDR_TASK_ID`, `SCHEDR_TRY_NUMBER`, ...), with `SCHEDR_EXTENSION` and
   `SCHEDR_EXTENSION_VERSION`;
-- **its log**: its stdout and stderr; `schedr task-ctx log` writes a structured line;
+- **its log**: its stdout and stderr; `schedr-ctx log` writes a structured line;
 - **its end**: exit 0 succeeds, anything else fails the attempt ("the script exited with 3").
 
-It talks to the worker through `schedr task-ctx`, the folder of the `schedr` running it first
-on its `PATH`, so the commands are that build's:
+It talks to the worker through `schedr-ctx` (or `schedr task-ctx`), the folder of the `schedr`
+running it first on its `PATH`, so the commands are that build's:
 
 | Command | What it does |
 |---|---|
