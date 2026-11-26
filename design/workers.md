@@ -472,16 +472,13 @@ Each is one line; the reader's page has the diagrams.
 ### Registration
 
 - **The registration path keeps its structure: no single owner of a worker's registration** (D530):
-  A worker's registration keeps its present shape: its state in the core's connections, the hub's
-  streams and heard counters, and Arrivals, each under its own lock, the registration changing them
-  in steps; the invariants between them (a connection not live disconnects the dispatcher too, a
-  stream current only once numbered under the core's lock, a waiting registration's starts its own)
-  kept by single functions where the reviews showed two places (`MasterCore::not_live`,
-  `Arrivals::registered`, the `Registering` guard). Not chosen: one owner of a worker's registration
-  under the core's lock, hot paths reading an atomic stream number and a read-mostly map of senders
-  (Claude's option A after M5.3g's six reviews: in its naive form the readers, the heartbeat answers
-  and the deliveries would wait behind rounds, B6 and D258 undone; the user, 2026-11-26: not done,
-  for performance); an actor per worker (the core stays global); assertions of the invariants only.
+  Corrected by DN43: the registration path is restructured in 1.3.0 (M5.3i): one owner of a worker's
+  session under the core's lock, read without a lock from a published copy. First taken (the user,
+  2026-11-26) as: the path keeps its structure, its invariants each in one function
+  (`MasterCore::not_live`, `Arrivals::registered`, the `Registering` guard), for fear of the
+  performance of the naive form (everything under the core's lock). *Corrected by DN43:* The
+  registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a
+  published copy (M5.3i).
 
 ### From other topics
 

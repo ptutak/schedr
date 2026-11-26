@@ -3,42 +3,45 @@
 
 Start here, then read only what the step needs: `PLAN.md` (the step's row), `DECISIONS.md` and `design/<topic>.md`, `BUGS.md`. Reasons are in `JOURNAL.md` (`archive/PROJECT.md` before D367). The notes below come from `status.toml`: edit that, then `make records`.
 
-## Now (2026-11-25)
+## Now (2026-11-26)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.3f, The kind tests on CI, then chaos on kind. Done when: the workflow run by hand on a commit's own images; the chaos on kind a nightly job of the Stress workflow; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
-- **Then:** M5.3c, M5.3e, R1.3, M6.1, M6.2.
+- **Then:** M5.3i, M5.3c, M5.3e, R1.3, M6.1.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
 
 ## Recent
 
+- DN43 (2026-11-26): The registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a published copy (M5.3i) (corrects D530)
 - D530 (2026-11-26): the registration path keeps its structure
 - DN42 (2026-11-26): What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (corrects D524)
 - DN41 (2026-11-26): The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (adds to D526)
 - D527 (2026-11-25): 1.3.0's scope; an extension task no one offers
-- D526 (2026-11-25): a worker leaves a connection whose heartbeats go unanswered
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
 - M5.3d (2026-11-26): Extension tasks placed by the plugins workers offer, beside their queue
 
 ## In progress
 
-- M5.3h done: the Kind workflow passed three times on 1.2.1's images (the standby led 40, 44 and 38 s after the crash, limit 60). Next: M5.3g, its first test (what a stale journal accepted after a disconnect changes).
+- Seven points local, unpushed (M5.3g, M5.3b, M5.3d, M5.3f, M5.3g's sixth review with D530, the two review rules, M5.3i planned): make check running, then make docs, `undone.py --range`, the push. After it: Stress 1, 4, 5, 17-21, 17b, 17c, 23, 25 and the Kind workflow on CI; images rebuilt from the pushed commit and chaos on kind on chosen seeds (seed 2 aimed among them): M5.3i's before figures.
+- M5.3f: built and reviewed; left for done: the Kind workflow run by hand on a commit's images (after the push), a few more chaos seeds. Open, not blocking 1.3.0 unless the user says: the fuller record (per-fault metrics, logs streamed, a merged timeline), a replay mode, the other 12 faults.
+- Next steps to 1.3.0: M5.3i (the paired speed job first; invariants on design/workers.md first, every M5.3g finding checked against them; then build, review, stress and chaos before and after), M5.3c (measure first), M5.3e, R1.3.
 
 ## Waiting for the user
 
-- A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror: proposed, not planned.
+Nothing.
 
 ## Rules in force
 
-- Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag. M5.3g: a stale Register's damage, if found, logged and fixed in M5.3g.
+- Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag.
+- Review rules (the user, 2026-11-26, in AI_INSTRUCTIONS.md): before fixing a finding, find the similar places and fix the rule they keep in one place; after three rounds, findings less severe or fewer, else propose a better design and wait.
 - Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet): no fallbacks, redirects or old fields kept; released migrations and the protocol rules still hold.
 
 ## Colleagues
 
-agy reviewed M5.3a, B296 and the fixes after it (2026-11-25: 8, 9 and 7 findings, all confirmed).
+agy (2026-11-26): M5.3g six rounds (8, 5, 5, 5, 5, 3 findings, all fixed; the last three by the new rules), M5.3d (7, fixed), M5.3b (none) with M5.3f (9, fixed). Its weekly limit reset 2026-11-26 ~08:30 UTC (99.96 % left), a Thursday.
 
 Resume this session with:
 

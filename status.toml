@@ -1,22 +1,23 @@
 # STATUS.md's notes: only what the records can't show. `make records` writes STATUS.md from the
 # plan, decisions, questions, bugs, JOURNAL.md and this file. Rewrite it at each step's or
 # session's end (never append): what's half-done, what waits for the user, the rules in force.
-updated = 2026-11-25
+updated = 2026-11-26
 
 in_progress = [
-    "M5.3h done: the Kind workflow passed three times on 1.2.1's images (the standby led 40, 44 and 38 s after the crash, limit 60). Next: M5.3g, its first test (what a stale journal accepted after a disconnect changes).",
+    "Seven points local, unpushed (M5.3g, M5.3b, M5.3d, M5.3f, M5.3g's sixth review with D530, the two review rules, M5.3i planned): make check running, then make docs, `undone.py --range`, the push. After it: Stress 1, 4, 5, 17-21, 17b, 17c, 23, 25 and the Kind workflow on CI; images rebuilt from the pushed commit and chaos on kind on chosen seeds (seed 2 aimed among them): M5.3i's before figures.",
+    "M5.3f: built and reviewed; left for done: the Kind workflow run by hand on a commit's images (after the push), a few more chaos seeds. Open, not blocking 1.3.0 unless the user says: the fuller record (per-fault metrics, logs streamed, a merged timeline), a replay mode, the other 12 faults.",
+    "Next steps to 1.3.0: M5.3i (the paired speed job first; invariants on design/workers.md first, every M5.3g finding checked against them; then build, review, stress and chaos before and after), M5.3c (measure first), M5.3e, R1.3.",
 ]
 
-waiting = [
-    "A paired speed job on CI (base and new alternately on one runner), a Docker Hub mirror: proposed, not planned.",
-]
+waiting = []
 
 rules = [
-    "Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag. M5.3g: a stale Register's damage, if found, logged and fixed in M5.3g.",
+    "Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag.",
+    "Review rules (the user, 2026-11-26, in AI_INSTRUCTIONS.md): before fixing a finding, find the similar places and fix the rule they keep in one place; after three rounds, findings less severe or fewer, else propose a better design and wait.",
     "Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet): no fallbacks, redirects or old fields kept; released migrations and the protocol rules still hold.",
 ]
 
 colleagues = """
-agy reviewed M5.3a, B296 and the fixes after it (2026-11-25: 8, 9 and 7 findings, all confirmed)."""
+agy (2026-11-26): M5.3g six rounds (8, 5, 5, 5, 5, 3 findings, all fixed; the last three by the new rules), M5.3d (7, fixed), M5.3b (none) with M5.3f (9, fixed). Its weekly limit reset 2026-11-26 ~08:30 UTC (99.96 % left), a Thursday."""
 
 resume = "claude --resume d9e526b0-15b2-46f6-a593-f483ae56ad60"

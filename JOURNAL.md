@@ -3871,3 +3871,13 @@ do the restructure because as you said it would hit the performance" (Claude had
 form of A would; its split form was meant to cost the same). The sixth round's fixes instead keep
 each invariant in one function. The two review rules of the same day (step back before a fix; a
 design check after three rounds) came from this.
+
+### <a id="DN43"></a>2026-11-26: The registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a published copy (M5.3i) (decision note 43; corrects D530)
+
+The user, after Claude's comparison of now and after A (2026-11-26): "if it's faster it's worth it
+I think, I also understand that it's simpler and it needs a migration, so 1.3.0 could be a good
+place to do it." Claude's corrections, given then: no migration of the schema, protocol or
+configuration (the master's memory and code only); faster is an estimate (the hot paths do the same
+work or less, a registration a little more under the core's lock), shown only by stress before and
+after. Order, Claude's default unless overruled: the four reviewed steps (M5.3g, M5.3b, M5.3d,
+M5.3f) pushed first, their Stress runs on CI the "before" figures; then M5.3i, before R1.3.
