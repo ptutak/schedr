@@ -29,6 +29,34 @@ use crate::metrics::MasterMetrics;
 use crate::problems::{ProblemKind, Problems};
 use crate::session::{Session, Sessions};
 
+/// The core's lock held by `by` ([`Hub::core_for`]): how long, recorded when let go.
+struct Held<'a> {
+    guard: tokio::sync::MutexGuard<'a, MasterCore>,
+    by: &'static str,
+    since: std::time::Instant,
+    metrics: &'a MasterMetrics,
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = MasterCore;
+
+    fn deref(&self) -> &MasterCore {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for Held<'_> {
+    fn deref_mut(&mut self) -> &mut MasterCore {
+        &mut self.guard
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.metrics.core_lock_held(self.by, self.since.elapsed());
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -500,12 +528,18 @@ impl Hub {
         MasterServer::new(self.clone()).max_decoding_message_size(self.max_message_size)
     }
 
-    /// The core's lock, the wait for it recorded by who asked (`by`: M5.1a's profile).
-    async fn core_for(&self, by: &str) -> tokio::sync::MutexGuard<'_, MasterCore> {
+    /// The core's lock, the wait for it recorded by who asked (`by`: M5.1a's profile), and how
+    /// long it was held, when let go (M5.3e: who a slow round waited behind).
+    async fn core_for(&self, by: &'static str) -> Held<'_> {
         let asked = std::time::Instant::now();
-        let core = self.core.lock().await;
+        let guard = self.core.lock().await;
         self.metrics.core_lock_waited(by, asked.elapsed());
-        core
+        Held {
+            guard,
+            by,
+            since: std::time::Instant::now(),
+            metrics: &self.metrics,
+        }
     }
 
     /// Reads the worker registry back (see [`MasterCore::restore`]) at the hub's clock, the
@@ -1006,6 +1040,7 @@ impl Hub {
                 lock_wait_s = parts.lock_wait.as_secs_f64(),
                 unaccounted_s = parts.unaccounted(took).as_secs_f64(),
                 parts = parts.describe(),
+                held_by_others = parts.describe_held(),
                 "a slow tick"
             );
         }
@@ -1563,11 +1598,7 @@ impl Hub {
         }
     }
 
-    async fn served_core(
-        &self,
-        worker_id: &str,
-        stream: &Arc<Session>,
-    ) -> Option<tokio::sync::MutexGuard<'_, MasterCore>> {
+    async fn served_core(&self, worker_id: &str, stream: &Arc<Session>) -> Option<Held<'_>> {
         let core = self.core_for("turn").await;
         self.still_served(&core, worker_id, stream).then_some(core)
     }

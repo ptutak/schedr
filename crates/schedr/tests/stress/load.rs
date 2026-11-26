@@ -58,11 +58,20 @@ impl Size {
 }
 
 /// Settings every stress role gets: worker leases long enough for a loaded machine (a lost
-/// worker found within 20 s), the master's rounds every 200 ms.
+/// worker found within 20 s), the master's rounds every 200 ms, and a tick of 2 s or more
+/// logged with its parts (M5.3e: where a slow round's time goes; see [`slow_ticks`]).
 pub const ROLE_ENV: &[(&str, &str)] = &[
     ("SCHEDR_HIDDEN__MASTER__LEASE_TIMEOUT", "20s"),
     ("SCHEDR_HIDDEN__MASTER__TICK_INTERVAL", "200ms"),
+    ("SCHEDR_HIDDEN__MASTER__SLOW_TICK_LOG", "2s"),
 ];
+
+/// The master's "a slow tick" lines in `log` (M5.3e), each as it was logged.
+pub fn slow_ticks(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|line| line.contains("a slow tick"))
+        .collect()
+}
 
 /// A cluster under load: the roles, its database read directly, and the tasks' marks.
 pub struct Stress {
@@ -294,6 +303,22 @@ impl Stress {
             }
         }
         self.stages(report, master);
+        // Where the slow ticks' time went (M5.3e): counted, and each printed for the run's log.
+        let log = self
+            .cluster
+            .roles
+            .iter()
+            .filter(|role| role.name == master)
+            .map(|role| std::fs::read_to_string(&role.log).unwrap_or_default())
+            .collect::<String>();
+        let slow = slow_ticks(&log);
+        report.set(
+            "slow_ticks",
+            f64::from(u32::try_from(slow.len()).unwrap_or(u32::MAX)),
+        );
+        for line in &slow {
+            eprintln!("{master}: {line}");
+        }
     }
 
     /// Where a slot's time goes between two tasks (M5.2cB3), recorded without limits: one
@@ -631,4 +656,16 @@ impl Lcg {
         let high = usize::try_from(self.0 >> 33).unwrap();
         high % bound.max(1)
     }
+}
+
+/// M5.3e: only the master's slow-tick lines are taken, whole.
+#[test]
+fn the_slow_ticks_are_found_in_a_log() {
+    let log = "{\"fields\":{\"message\":\"a slow tick\",\"took_s\":2.4}}\n\
+               {\"fields\":{\"message\":\"master tick failed\"}}\n\
+               {\"fields\":{\"message\":\"a slow tick\",\"took_s\":3.1}}\n";
+    let slow = slow_ticks(log);
+    assert_eq!(slow.len(), 2);
+    assert!(slow[1].contains("3.1"));
+    assert_eq!(slow_ticks(""), Vec::<&str>::new());
 }

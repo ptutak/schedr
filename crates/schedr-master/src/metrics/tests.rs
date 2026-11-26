@@ -121,7 +121,8 @@ fn the_gauges_refresh_often_enough_for_a_scrape() {
 }
 
 /// M5.3e: a tick is broken down only while begun; its parts summed by name, the round's lock
-/// waits beside them (a turn's not), the rest unaccounted.
+/// waits beside them (a turn's not), the others' holds of the lock by holder, the rest
+/// unaccounted.
 #[test]
 fn a_tick_is_broken_down_into_its_parts_and_lock_waits() {
     let metrics = MasterMetrics::default();
@@ -133,7 +134,16 @@ fn a_tick_is_broken_down_into_its_parts_and_lock_waits() {
     metrics.round_part_done("assign", Duration::from_millis(100));
     metrics.core_lock_waited("round", Duration::from_millis(250));
     metrics.core_lock_waited("turn", Duration::from_secs(9));
+    metrics.core_lock_held("turn", Duration::from_millis(700));
+    metrics.core_lock_held("triggers", Duration::from_millis(200));
+    metrics.core_lock_held("turn", Duration::from_millis(100));
+    metrics.core_lock_held("round", Duration::from_secs(5));
     let parts = metrics.end_tick().unwrap();
+    assert_eq!(
+        parts.describe_held(),
+        "turn 0.80 s, triggers 0.20 s",
+        "others' holds summed, the round's own left out"
+    );
     assert_eq!(parts.parts["assign"], Duration::from_millis(400));
     assert_eq!(parts.lock_wait, Duration::from_millis(250));
     assert_eq!(parts.describe(), "results 1.20 s, assign 0.40 s");

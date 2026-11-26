@@ -613,6 +613,16 @@ impl MasterMetrics {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Records the core's lock held `took` by `by`: kept only for a tick being broken down, and
+    /// only another holder's, the round's own time being its parts.
+    pub fn core_lock_held(&self, by: &str, took: Duration) {
+        if by != "round"
+            && let Some(parts) = self.tick_parts().as_mut()
+        {
+            *parts.held.entry(by.to_owned()).or_default() += took;
+        }
+    }
+
     /// Records a wait of `took` for the core lock by `by`.
     pub fn core_lock_waited(&self, by: &str, took: Duration) {
         if by == "round"
@@ -1016,19 +1026,22 @@ pub struct TickParts {
     pub parts: std::collections::BTreeMap<String, Duration>,
     /// The round's waits for the core's lock.
     pub lock_wait: Duration,
+    /// The lock held by others (turns, triggers, streams, registrations) in holds that ended
+    /// during the tick, by holder: who the round waited behind.
+    pub held: std::collections::BTreeMap<String, Duration>,
 }
 
 impl TickParts {
     /// The parts as one line, the longest first: `results 1.20 s, assign 0.31 s, ...`.
     #[must_use]
     pub fn describe(&self) -> String {
-        let mut parts: Vec<_> = self.parts.iter().collect();
-        parts.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-        parts
-            .iter()
-            .map(|(name, took)| format!("{name} {:.2} s", took.as_secs_f64()))
-            .collect::<Vec<_>>()
-            .join(", ")
+        longest_first(&self.parts)
+    }
+
+    /// The others' holds of the lock as one line, the longest first: `turn 5.10 s, ...`.
+    #[must_use]
+    pub fn describe_held(&self) -> String {
+        longest_first(&self.held)
     }
 
     /// The time no part accounts for out of `tick` (outside the core's lock: the probe, the
@@ -1037,4 +1050,15 @@ impl TickParts {
     pub fn unaccounted(&self, tick: Duration) -> Duration {
         tick.saturating_sub(self.parts.values().sum::<Duration>() + self.lock_wait)
     }
+}
+
+/// `times` as one line, the longest first, names breaking ties: `a 1.20 s, b 0.31 s`.
+fn longest_first(times: &std::collections::BTreeMap<String, Duration>) -> String {
+    let mut times: Vec<_> = times.iter().collect();
+    times.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    times
+        .iter()
+        .map(|(name, took)| format!("{name} {:.2} s", took.as_secs_f64()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
