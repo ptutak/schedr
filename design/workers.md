@@ -527,18 +527,18 @@ The rest were tests (waits that pass on silence, timing) and the agent's limit a
   performance of the naive form (everything under the core's lock). *Corrected by DN43:* The
   registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a
   published copy (M5.3i).
-- **A worker's sessions published lock-free: one map copied on each change (arc-swap)** (D531,
-  planned (M5.3i)): The hot paths read a worker's session (M5.3i, DN43) from one map of sessions
-  published with `arc-swap` (a new dependency): a stream's reader loads the map without a lock and
-  compares its stream number; sending loads it and sends with no lock; the core's three writers
-  (registering a stream, ending a session, closing all), under the core's lock, copy the map, change
-  it and publish the copy. Readers may see the version before the latest: what a stream records is
-  tagged with its stream number and dropped with its session, and a send to an ended session's
-  sender fails harmlessly. The cost: a copy of the map per registration or stream end, largest in a
-  reconnect storm (N workers, N copies, under the core's lock), shown by stress 17b and 17c in the
-  paired job. Not chosen: each stream holding its own session with a current flag, and a map of
-  senders under a standard read-write lock (Claude's recommendation: no dependency, no copies; a
-  send waits briefly while a registration writes, and two places written together).
+- **A worker's sessions published lock-free: one map copied on each change (arc-swap)** (D531): The
+  hot paths read a worker's session (M5.3i, DN43) from one map of sessions published with `arc-swap`
+  (a new dependency): a stream's reader loads the map without a lock and compares its stream number;
+  sending loads it and sends with no lock; the core's three writers (registering a stream, ending a
+  session, closing all), under the core's lock, copy the map, change it and publish the copy.
+  Readers may see the version before the latest: what a stream records is tagged with its stream
+  number and dropped with its session, and a send to an ended session's sender fails harmlessly. The
+  cost: a copy of the map per registration or stream end, largest in a reconnect storm (N workers, N
+  copies, under the core's lock), shown by stress 17b and 17c in the paired job. Not chosen: each
+  stream holding its own session with a current flag, and a map of senders under a standard read-
+  write lock (Claude's recommendation: no dependency, no copies; a send waits briefly while a
+  registration writes, and two places written together).
 
 ### From other topics
 
