@@ -15,6 +15,12 @@ schema and protocol changed in place (decision 156).
   the workers with the master**; a worker older than 2.3 is refused after its first lost connection.
 - **A worker leaves a connection the master stopped answering** (decision 526) after 25 s, at most
   half the lease (`SCHEDR_HIDDEN__WORKER__UNANSWERED_TIMEOUT`), and connects again within its lease.
+- **Extension tasks go only to workers offering their extension at its version** (decision 527): no
+  queue of their own needed, and a rolling upgrade of a plugin routes each task to the workers still
+  serving its version. One nobody offers waits, its reason shown, and is `unschedulable` after
+  10 minutes (decision 529).
+- **A `cleanup_anywhere` cleanup runs at least once** (decision 528): let through, then its worker
+  lost, it is still moved; the guarantees page says so.
 - Scenarios 1 and 6 of the stress suite: the round's p99 limit 7 s.
 
 ## 1.2.1

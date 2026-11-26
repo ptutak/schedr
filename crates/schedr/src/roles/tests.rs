@@ -38,6 +38,8 @@ fn the_master_settings_come_from_the_config() {
     assert_eq!(settings.max_message_size, 16 << 20);
     assert_eq!(settings.heartbeat_interval, Duration::from_secs(10));
     assert_eq!(settings.parse_job_timeout, Duration::from_mins(10));
+    // Decision 529's wait, a hidden timing (agy's review of M5.3d: never checked).
+    assert_eq!(settings.unoffered_wait, Duration::from_mins(10));
 }
 
 #[test]

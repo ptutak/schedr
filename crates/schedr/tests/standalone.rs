@@ -3641,8 +3641,9 @@ fn dummy_plugin() -> String {
 }
 
 /// M5.2i (decision 510): an extension task runs in its plugin, its lines in the attempt's log and
-/// its output a downstream task's input; one asking for a version no worker serves is given back
-/// by the worker, no try counted, and ends unschedulable.
+/// its output a downstream task's input; one asking for a version no worker offers is never
+/// assigned (decision 527), no try counted, and ends unschedulable after the wait (decision 529:
+/// here half a second; agy's review of M5.3d found this test waiting the default 10 minutes).
 #[test]
 fn an_extension_task_runs_in_its_plugin_and_one_no_worker_serves_is_unschedulable() {
     const DAG: &str = r#"
@@ -3674,8 +3675,13 @@ with Dag("extended"):
 with Dag("unserved"):
     ExtensionTask("job", name="dummy", version="9.9", payload={"return": 1})
 "#;
-    let standalone =
-        Standalone::start_configured(&[("extended.py", DAG)], None, &[], &dummy_plugin(), &[]);
+    let standalone = Standalone::start_configured(
+        &[("extended.py", DAG)],
+        None,
+        &[],
+        &dummy_plugin(),
+        &[("SCHEDR_HIDDEN__MASTER__UNOFFERED_WAIT", "500ms")],
+    );
     standalone.wait("the DAGs to be found", || {
         let ids = standalone.dag_ids();
         ids.contains(&"extended".to_owned()) && ids.contains(&"unserved".to_owned())
@@ -3720,7 +3726,7 @@ with Dag("unserved"):
         task_states(&standalone.run(&run)) == [("job".to_owned(), "unschedulable".to_owned())]
     });
     let job = &standalone.run(&run)["tasks"][0];
-    assert_eq!(job["try_number"], 0, "a rejection is no try: {job}");
+    assert_eq!(job["try_number"], 0, "never assigned: no try: {job}");
 }
 
 /// M5.2i8 (decision 515, DN19, DN20): a plugin's declared event reaches a channel subscribed to

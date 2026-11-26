@@ -80,11 +80,11 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
-| D529 | 2026-11-26 | user | planned (M5.3d) | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
-| D528 | 2026-11-26 | user | planned (M5.3b) | cleanup | A cleanup let through is still moved after its worker is lost: at least once |
-| D527 | 2026-11-25 | user | planned (M5.3d) | assignment | An extension task no live worker offers waits with its reason, then ends unschedulable |
-| D526 | 2026-11-25 | user | planned (M5.3g) | workers | A worker leaves a connection whose heartbeats go unanswered, well before the lease |
-| D525 | 2026-11-25 | user | planned (M5.3g) | protocol | Connections are numbered: Register carries which connection of its process it is |
+| D529 | 2026-11-26 | user | built M5.3d | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
+| D528 | 2026-11-26 | user | built M5.3b | cleanup | A cleanup let through is still moved after its worker is lost: at least once |
+| D527 | 2026-11-25 | user | built M5.3d | assignment | An extension task no live worker offers waits with its reason, then ends unschedulable |
+| D526 | 2026-11-25 | user | built M5.3g | workers | A worker leaves a connection whose heartbeats go unanswered, well before the lease |
+| D525 | 2026-11-25 | user | built M5.3g | protocol | Connections are numbered: Register carries which connection of its process it is |
 | D524 | 2026-11-25 | user | built (B297 fixed) | workers | A worker leaves a master that accepts it and says nothing: connecting and registering have limits |
 | D523 | 2026-11-25 | user | built M5.3a | deployment | Hot standby masters in the chart: master.replicas with Recreate, migrating when leading |
 | D522 | 2026-11-24 | user | built M5.2k | triggers | A trigger has a cancel grace of its own, short; a lost worker's trigger restarts after it |

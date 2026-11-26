@@ -1,5 +1,6 @@
 use pretty_assertions::assert_eq;
 use schedr_model::DagId;
+use schedr_model::TaskInstanceState;
 use schedr_model::commands::CommandStatus;
 use schedr_model::runner::ParsedFile;
 use schedr_proto::convert::parsed_file_to_proto;
@@ -101,6 +102,37 @@ fn anywhere_file() -> ParsedFile {
         "run": "python", "retries": 0, "retry_delay_ms": 0, "anywhere": true
     });
     serde_json::from_value(file).unwrap()
+}
+
+/// [`dag_file`], `extract` an extension task of `spark` at `version`.
+fn extension_file(version: &str) -> ParsedFile {
+    let mut file = serde_json::to_value(dag_file()).unwrap();
+    file["dags"][0]["tasks"][0]["kind"] = json!("extension");
+    file["dags"][0]["tasks"][0]["name"] = json!("spark");
+    file["dags"][0]["tasks"][0]["version"] = json!(version);
+    serde_json::from_value(file).unwrap()
+}
+
+/// `worker`'s registration offering `spark` at `versions`.
+fn offering(worker: &str, versions: &[&str]) -> pb::Register {
+    pb::Register {
+        extensions: vec![pb::ExtensionOffer {
+            name: "spark".to_owned(),
+            versions: versions.iter().map(|v| (*v).to_owned()).collect(),
+        }],
+        ..register(worker, &format!("i-{worker}"), vec![])
+    }
+}
+
+/// `sync`'s one task instance: its state and waiting reason.
+async fn the_instance(core: &MasterCore) -> (TaskInstanceState, Option<String>) {
+    let runs = core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap();
+    let instances = core.db.run_instances(&runs[0].id).await.unwrap();
+    (instances[0].state, instances[0].queued_reason.clone())
 }
 
 fn message(outgoing: &Outgoing) -> &master_message::Message {
@@ -1223,6 +1255,67 @@ async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: 
         (worker, attempt_id)
     );
     go.go
+}
+
+#[tokio::test]
+async fn an_extension_task_goes_only_to_a_worker_offering_its_version() {
+    // Decision 527 (M5.3d): by its queue it went to w1 first, which gave it back
+    // (`EXTENSION_UNDEFINED`), then the next.
+    let mut core = with_dag_of(&extension_file("1.0")).await;
+    for (worker, versions) in [("w2", &["0.9"][..]), ("w3", &["1.0", "1.1"][..])] {
+        core.register(&offering(worker, versions), ts(NOW))
+            .await
+            .unwrap();
+    }
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let assigned: Vec<&str> = out
+        .iter()
+        .filter(|o| matches!(message(o), master_message::Message::AssignTask(_)))
+        .map(|o| o.worker_id.as_str())
+        .collect();
+    assert_eq!(assigned, ["w3"]);
+}
+
+#[tokio::test]
+async fn an_extension_task_nobody_offers_waits_then_is_unschedulable_until_one_does() {
+    // Decision 529: 10 minutes, its reason said meanwhile; a worker offering it queues it again.
+    let mut core = with_dag_of(&extension_file("2.0")).await;
+    core.register(&offering("w2", &["1.0"]), ts(NOW))
+        .await
+        .unwrap();
+    trigger(&mut core).await;
+    core.tick(ts(NOW)).await.unwrap();
+    let (state, reason) = the_instance(&core).await;
+    assert_eq!(state, TaskInstanceState::Queued);
+    assert_eq!(
+        reason.as_deref(),
+        Some("no worker of queue `default` offers `spark@2.0`")
+    );
+    // w2 alive all along: offering another version, it doesn't run the task.
+    for at in (30..=570).step_by(30) {
+        let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+        core.handle_in_round("w2", heartbeat, later(at))
+            .await
+            .unwrap();
+        core.tick(later(at)).await.unwrap();
+    }
+    assert_eq!(the_instance(&core).await.0, TaskInstanceState::Queued);
+    core.tick(later(601)).await.unwrap();
+    assert_eq!(
+        the_instance(&core).await.0,
+        TaskInstanceState::Unschedulable
+    );
+    core.register(&offering("w4", &["2.0"]), later(602))
+        .await
+        .unwrap();
+    let out = core.tick(later(603)).await.unwrap();
+    assert!(
+        out.iter()
+            .any(|o| o.worker_id == "w4"
+                && matches!(message(o), master_message::Message::AssignTask(_))),
+        "{out:?}"
+    );
 }
 
 #[tokio::test]
@@ -6054,4 +6147,128 @@ async fn a_registration_undone_restores_the_worker_as_it_was() {
     };
     assert!(core.check(&held).is_err(), "an older one still refused");
     assert!(core.check(&next).is_ok(), "its own retry isn't refused");
+}
+
+/// Agy's review of M5.3d: the worker offering the extension only behind on code (another of the
+/// queue current, offering nothing) read as "nobody offers it", the task unschedulable after
+/// the wait though its worker was only catching up.
+#[tokio::test]
+async fn an_offering_worker_behind_on_code_is_waited_for_as_code() {
+    let mut core = with_dag_of(&extension_file("1.0")).await;
+    core.register(&offering("w2", &["1.0"]), ts(NOW))
+        .await
+        .unwrap();
+    // w1 (offering nothing) moves on to h2; w2 stays on h1.
+    let changed = worker_message::Message::CodeVersionChanged(pb::CodeVersionChanged {
+        root: Some(root("h2")),
+    });
+    let out = core.handle_in_round("w1", changed, ts(NOW)).await.unwrap();
+    let master_message::Message::AssignParse(job) = message(&out[0]) else {
+        panic!("expected AssignParse: {out:?}")
+    };
+    let parsed = pb::ParseResult {
+        root: Some(root("h2")),
+        ..upload_of(&job.parse_job_id, &extension_file("1.0"))
+    };
+    core.upload(parsed, ts(NOW)).await.unwrap();
+    trigger(&mut core).await;
+    core.tick(ts(NOW)).await.unwrap();
+    let (state, reason) = the_instance(&core).await;
+    assert_eq!(state, TaskInstanceState::Queued, "{reason:?}");
+    let reason = reason.unwrap();
+    assert!(reason.contains("newest code"), "{reason}");
+}
+
+/// [`extension_file`] at `1.0`, its cleanup the plugin's, allowed to move.
+fn extension_anywhere_file() -> ParsedFile {
+    let mut file = serde_json::to_value(extension_file("1.0")).unwrap();
+    file["dags"][0]["tasks"][0]["cleanup"] = json!({
+        "run": "extension", "retries": 0, "retry_delay_ms": 0, "anywhere": true
+    });
+    serde_json::from_value(file).unwrap()
+}
+
+/// Agy's review of M5.3d: an extension task's moved cleanup went to any worker of its queue, one
+/// without the plugin refusing it again and again, never shown as having no worker.
+#[tokio::test]
+async fn an_extension_tasks_cleanup_moves_only_to_a_worker_offering_it() {
+    let mut core = with_dag_of(&extension_anywhere_file()).await;
+    let offers = pb::Register {
+        incarnation_id: "i1".to_owned(),
+        ..offering("w1", &["1.0"])
+    };
+    core.register(&offers, ts(NOW)).await.unwrap();
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let Some(master_message::Message::AssignTask(assign)) = out
+        .iter()
+        .map(message)
+        .find(|m| matches!(m, master_message::Message::AssignTask(_)))
+    else {
+        panic!("expected AssignTask: {out:?}")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
+    });
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    core.register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
+    let out = core.tick(later(125)).await.unwrap();
+    assert!(
+        !out.iter().any(|o| o.worker_id == "w2"),
+        "nothing for w2, which hasn't the plugin: {out:?}"
+    );
+    let attempt = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    let (state, reason) = the_instance(&core).await;
+    assert_eq!(
+        (
+            attempt.worker_id.as_str(),
+            attempt.cleanup_moves,
+            state,
+            reason.as_deref()
+        ),
+        // Moved off w1, waiting for a worker offering the plugin (decision 244).
+        (
+            "",
+            1,
+            TaskInstanceState::CleaningUp,
+            Some("no worker for the cleanup")
+        )
+    );
+}
+
+/// Agy's review of M5.3d: the wait of an extension task nobody offers, its run cancelled before
+/// the wait ended, was kept for the master's life (as B286's refusals were).
+#[tokio::test]
+async fn a_cancelled_unoffered_tasks_wait_is_forgotten() {
+    let mut core = with_dag_of(&extension_file("2.0")).await;
+    trigger(&mut core).await;
+    core.tick(ts(NOW)).await.unwrap();
+    assert_eq!(core.dispatcher().refusals_kept(), 1, "its wait kept");
+    let runs = core
+        .db
+        .dag_runs(&DagId::new("sync").unwrap(), None, 1)
+        .await
+        .unwrap();
+    let cancel = schedr_model::commands::Command::CancelRun {
+        run_id: runs[0].id.clone(),
+    };
+    core.db
+        .insert_command(&cancel, "anna", ts(NOW))
+        .await
+        .unwrap();
+    core.tick(later(1)).await.unwrap();
+    // Pruned once a minute.
+    core.tick(later(62)).await.unwrap();
+    assert_eq!(core.dispatcher().refusals_kept(), 0, "forgotten");
 }

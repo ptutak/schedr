@@ -315,3 +315,24 @@ fn a_workers_counts_are_its_last_heartbeats_and_say_whether_one_rose() {
     );
     assert!(workers.report_services("w1", named(&[("a", 2)])));
 }
+
+#[test]
+fn a_worker_offers_exactly_the_versions_it_registered() {
+    // Decision 527: matched exactly; a registration's offers replace the last ones.
+    let mut workers = Workers::new();
+    workers.register("w1", "i1", &[], 2);
+    workers.set_extensions(
+        "w1",
+        BTreeSet::from([
+            ("spark".to_owned(), "1.0".to_owned()),
+            ("spark".to_owned(), "1.1".to_owned()),
+        ]),
+    );
+    let worker = workers.get("w1").unwrap();
+    assert!(worker.offers(None), "nothing asked: any worker");
+    assert!(worker.offers(Some(("spark", "1.1"))));
+    assert!(!worker.offers(Some(("spark", "2.0"))));
+    assert!(!worker.offers(Some(("flink", "1.0"))));
+    workers.set_extensions("w1", BTreeSet::new());
+    assert!(!workers.get("w1").unwrap().offers(Some(("spark", "1.0"))));
+}

@@ -48,6 +48,10 @@ pub struct Worker {
     pub queue_depth: u32,
     /// Its slots for wait steps.
     pub watcher_slots: u32,
+    /// The extensions it offers, each with its versions (`Register.extensions`, decision 527):
+    /// by name, so a check allocates nothing (agy's review of M5.3d: looked up per worker per
+    /// waiting task, each round).
+    pub extensions: BTreeMap<String, BTreeSet<String>>,
     /// Its state.
     pub state: WorkerState,
     /// The attempts assigned to it and not finished, on its task slots.
@@ -84,6 +88,8 @@ pub struct Needs<'a> {
     pub code: Option<(&'a str, &'a BTreeSet<String>)>,
     /// The lowest schedr version that runs it, when known.
     pub version: Option<SchedrVersion>,
+    /// An extension task's extension and version: only a worker offering it (decision 527).
+    pub extension: Option<(&'a str, &'a str)>,
     /// A wait step: it takes a watcher slot.
     pub wait_step: bool,
     /// It may wait in a worker's queue past its slots (decision 509): an ordinary task's
@@ -99,6 +105,7 @@ impl<'a> Needs<'a> {
             queue,
             code: None,
             version: None,
+            extension: None,
             wait_step: false,
             may_queue: false,
         }
@@ -120,6 +127,16 @@ impl Worker {
     #[must_use]
     pub fn has_code(&self, code: Option<(&str, &BTreeSet<String>)>) -> bool {
         code.is_none_or(|(root, hashes)| self.roots.get(root).is_some_and(|h| hashes.contains(h)))
+    }
+
+    /// Whether it offers `extension` at its version (anything, when none is asked for).
+    #[must_use]
+    pub fn offers(&self, extension: Option<(&str, &str)>) -> bool {
+        extension.is_none_or(|(name, version)| {
+            self.extensions
+                .get(name)
+                .is_some_and(|versions| versions.contains(version))
+        })
     }
 
     /// Whether it serves `queue`.
@@ -215,6 +232,7 @@ impl Workers {
                 slots,
                 queue_depth: 0,
                 watcher_slots: DEFAULT_WATCHER_SLOTS,
+                extensions: BTreeMap::new(),
                 state: WorkerState::Active,
                 attempts: BTreeSet::new(),
                 wait_steps: BTreeSet::new(),
@@ -332,6 +350,14 @@ impl Workers {
             .filter(move |w| w.state == WorkerState::Active && !w.drained && w.serves(queue))
     }
 
+    /// Whether an active worker drained for maintenance serves `queue` offering `extension`.
+    #[must_use]
+    pub fn drained_offering(&self, queue: &str, extension: Option<(&str, &str)>) -> bool {
+        self.workers.values().any(|w| {
+            w.state == WorkerState::Active && w.drained && w.serves(queue) && w.offers(extension)
+        })
+    }
+
     /// Whether an active worker drained for maintenance serves `queue`.
     #[must_use]
     pub fn drained_serving(&self, queue: &str) -> bool {
@@ -343,8 +369,9 @@ impl Workers {
     /// The active workers that can run a task with `needs`: serving its queue, with its code
     /// and a recent enough version.
     pub fn eligible<'a>(&'a self, needs: Needs<'a>) -> impl Iterator<Item = &'a Worker> + 'a {
-        self.serving(needs.queue)
-            .filter(move |w| w.runs(needs.version) && w.has_code(needs.code))
+        self.serving(needs.queue).filter(move |w| {
+            w.runs(needs.version) && w.has_code(needs.code) && w.offers(needs.extension)
+        })
     }
 
     /// The worker to give a task with `needs` to, leaving out `excluded`; `None` when no
@@ -365,6 +392,17 @@ impl Workers {
                     .then(a.id.cmp(&b.id))
             })
             .map(|w| w.id.as_str())
+    }
+
+    /// `id` offers `extensions` (its registration's), all of them in place of what it offered.
+    pub fn set_extensions(&mut self, id: &str, extensions: BTreeSet<(String, String)>) {
+        if let Some(worker) = self.workers.get_mut(id) {
+            let mut by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for (name, version) in extensions {
+                by_name.entry(name).or_default().insert(version);
+            }
+            worker.extensions = by_name;
+        }
     }
 
     /// Every registered worker.

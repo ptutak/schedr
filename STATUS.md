@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-25)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.3g, Connections numbered: a worker's new one replaces its dead one (decisions D525, D526). Done when: a worker whose old connection never closed at the master is registered again by it at once, its tasks kept, and a `Register` held on its way and arriving late changes nothing, live or not; a worker whose link died both ways is registered again within its lease, its tasks kept; stress scenarios show each
-- **Then:** M5.3f, M5.3b, M5.3d, M5.3c, M5.3e.
+- **Next step:** M5.3f, The kind tests on CI, then chaos on kind. Done when: the workflow run by hand on a commit's own images; the chaos on kind a nightly job of the Stress workflow; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
+- **Then:** M5.3c, M5.3e, R1.3, M6.1, M6.2.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -20,8 +20,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D526 (2026-11-25): a worker leaves a connection whose heartbeats go unanswered
 - D525 (2026-11-25): connections are numbered in `Register`
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
-- R1.2.1 (2026-11-25): Release 1.2.1
-- R1.2 (2026-11-25): Release 1.2.0
+- M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
+- M5.3d (2026-11-26): Extension tasks placed by the plugins workers offer, beside their queue
 
 ## In progress
 

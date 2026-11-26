@@ -269,6 +269,9 @@ pub struct Timings {
     pub node_row_kept: Duration,
     /// How long the CLI and `schedr ui` wait to connect to a webserver. (`CLIENT__CONNECT_TIMEOUT`)
     pub client_connect_timeout: Duration,
+    /// How long an extension task no worker of its queue offers waits before it is
+    /// `unschedulable` (decision 529). (`MASTER__UNOFFERED_WAIT`)
+    pub unoffered_wait: Duration,
     /// How long a worker waits for a stream to open and the master to register it. (`WORKER__REGISTER_TIMEOUT`)
     pub register_timeout: Duration,
     /// How long a worker's registered stream may go unanswered before it opens another, at most
@@ -384,6 +387,7 @@ impl Default for Timings {
             code_retry_delay: Duration::from_secs(35),
             node_row_kept: Duration::from_hours(1),
             client_connect_timeout: Duration::from_secs(5),
+            unoffered_wait: Duration::from_mins(10),
             register_timeout: Duration::from_secs(10),
             unanswered_timeout: Duration::from_secs(25),
             client_stream_idle: Duration::from_mins(1),

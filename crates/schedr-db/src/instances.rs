@@ -542,6 +542,53 @@ impl Database {
         Ok(())
     }
 
+    /// Makes queued `instances` `unschedulable`, each with its reason: extension tasks no worker
+    /// offers (decisions 527 and 529). A worker's registration queues them again.
+    ///
+    /// # Errors
+    ///
+    /// [`DbError::Sqlx`] if a statement fails.
+    pub async fn set_unoffered(
+        &self,
+        instances: &[(String, String)],
+        now: Timestamp,
+    ) -> Result<(), DbError> {
+        // One statement per distinct reason and 500 instances, as the waiting reasons (B18;
+        // agy's review of M5.3d: one per instance).
+        let mut by_reason: std::collections::BTreeMap<&str, Vec<&str>> =
+            std::collections::BTreeMap::new();
+        for (instance_id, reason) in instances {
+            by_reason.entry(reason).or_default().push(instance_id);
+        }
+        if by_reason.is_empty() {
+            return Ok(());
+        }
+        let now = db_time(now);
+        in_tx!(self, |tx, backend| {
+            for (reason, instances) in &by_reason {
+                for chunk in instances.chunks(UPDATES_PER_STATEMENT) {
+                    let ids: Vec<String> = (3..chunk.len() + 3)
+                        .map(|n| format!("${n}{{uuid}}"))
+                        .collect();
+                    let text = format!(
+                        "UPDATE task_instances SET state = 'unschedulable', ready_at = NULL, \
+                         queued_reason = $1, updated_at = $2{{ts}} \
+                         WHERE state = 'queued' AND id IN ({})",
+                        ids.join(", ")
+                    );
+                    let mut update = crate::query::query(sql_text(backend, &text))
+                        .bind(*reason)
+                        .bind(&now);
+                    for id in chunk {
+                        update = update.bind(*id);
+                    }
+                    update.execute(&mut *tx).await?;
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Sets the waiting reasons of queued task instances (`(instance ID, reason)`): one
     /// statement per distinct reason and 500 instances, where it was one
     /// per instance (B18); most waiting tasks share a few reasons.

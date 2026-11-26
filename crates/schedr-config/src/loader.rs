@@ -646,6 +646,7 @@ fn timing_named<'a>(timings: &'a mut Timings, key: &str) -> Option<&'a mut std::
         "MASTER__CODE_RETRY_DELAY" => &mut timings.code_retry_delay,
         "MASTER__NODE_ROW_KEPT" => &mut timings.node_row_kept,
         "WORKER__REGISTER_TIMEOUT" => &mut timings.register_timeout,
+        "MASTER__UNOFFERED_WAIT" => &mut timings.unoffered_wait,
         "WORKER__UNANSWERED_TIMEOUT" => &mut timings.unanswered_timeout,
         "CLIENT__STREAM_IDLE" => &mut timings.client_stream_idle,
         "WORKER__MASTER_CONNECT_TIMEOUT" => &mut timings.master_connect_timeout,

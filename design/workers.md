@@ -339,15 +339,14 @@ Each is one line; the reader's page has the diagrams.
   connection dead without a word); a limit on the first registration alone. *Corrected by DN42:*
   What a left registration keeps: only for one that would have been accepted, of a known worker,
   with no stream live or one it would replace.
-- **A worker leaves a connection whose heartbeats go unanswered, well before the lease** (D526,
-  planned (M5.3g)): A worker whose heartbeats go unanswered for 25 s (a hidden timing, at most half
-  the lease) ends that connection and opens its next, which replaces the old one at the master
-  (decision 525). It ends a connection, never a task: the last word heard, the lease and the cutoff
-  stay as they are. What already waits on the connection is read before it is judged (a frozen
-  worker waking). The master needs no check of its own. Not chosen: HTTP/2 keepalive on both ends (a
-  second ping, answered while schedr's own loop is stuck); leaving it at the lease until the chaos
-  on kind. *Added to by DN41:* The unanswered limit: at least two heartbeats, a share of 80 to 100 %
-  per connection.
+- **A worker leaves a connection whose heartbeats go unanswered, well before the lease** (D526): A
+  worker whose heartbeats go unanswered for 25 s (a hidden timing, at most half the lease) ends that
+  connection and opens its next, which replaces the old one at the master (decision 525). It ends a
+  connection, never a task: the last word heard, the lease and the cutoff stay as they are. What
+  already waits on the connection is read before it is judged (a frozen worker waking). The master
+  needs no check of its own. Not chosen: HTTP/2 keepalive on both ends (a second ping, answered
+  while schedr's own loop is stuck); leaving it at the lease until the chaos on kind. *Added to by
+  DN41:* The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection.
 
 ### Drain
 
@@ -513,7 +512,7 @@ Each is one line; the reader's page has the diagrams.
 - A worker's waiting queue: ready tasks past its slots, given back when slower than the cluster (D509, `assignment`; built M5.2e)
 - Extensions: a task kind run by a plugin executable the open worker supervises (D510, `task-processes`; built M5.2i)
 - A worker may use the db secret storage by opting in, warned; one without a default storage refuses secrets loudly (D511, `secrets`; built M5.2h6)
-- Connections are numbered: Register carries which connection of its process it is (D525, `protocol`; planned (M5.3g))
+- Connections are numbered: Register carries which connection of its process it is (D525, `protocol`; built M5.3g)
 <!-- end of current -->
 
 ## Replaced

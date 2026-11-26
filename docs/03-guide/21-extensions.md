@@ -26,7 +26,6 @@ with Dag("nightly_spark"):
         version="1.0",                # the version its payload is written for, matched exactly
         payload={"job": "aggregate", "days": 7},
         returns=dict[str, int],       # the type of what the plugin returns
-        queue="spark",                # where workers with the plugin take tasks
         secrets=["spark/api#token"],  # what the plugin may read
         cleanup=True,                 # the plugin runs again after each attempt
     )
@@ -73,15 +72,20 @@ What discovery found and skipped is on the Extensions page too: a plugin skipped
 run, is listed by the name its file gives (`schedr-ext-broken` as `broken`), its page showing
 why.
 
-The worker announces what it has when it registers (`Register.extensions`). Routing stays by
-queue: give the plugin's workers a queue of their own (`[worker] queues`) and the package's tasks
-that queue.
+The worker announces what it has when it registers (`Register.extensions`), and the master gives
+an extension task only to a worker of its queue that offers its extension **at its exact version**
+(decision 527). So an extension task needs no queue of its own: `queue=` still says where it may
+run (`queue="gpu"` with `spark@1.0` needs both), the plugin says which workers can. During a rolling
+upgrade from 1.0 to 1.1, each task goes to the workers still serving its version.
 
-A worker given a task it has no plugin for, or whose plugin doesn't serve the task's exact
-version, gives it back with `EXTENSION_UNDEFINED`, and no try is counted. The master then tries
-another worker of the queue. Once every eligible worker has given it back, the task is
-`unschedulable`, with each worker's reason ("every eligible worker rejected it (w1: extension
-`spark` 2.0: this worker's plugin serves 1.0, 1.1)").
+A task whose version no live worker of its queue offers waits, its reason shown ("no worker of
+queue `default` offers `spark@2.0`"), and is `unschedulable` after 10 minutes
+(`SCHEDR_HIDDEN__MASTER__UNOFFERED_WAIT`, decision 529): long enough for the plugin's workers to be
+upgraded, short enough for a typo in the version. A worker registering queues it again.
+
+A worker can still give a task back with `EXTENSION_UNDEFINED`, no try counted: its plugin crashed,
+say, after it registered. The master then tries another worker; once every eligible worker has given
+it back, the task is `unschedulable`, with each worker's reason.
 
 ## How a plugin runs
 

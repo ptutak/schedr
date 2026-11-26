@@ -123,6 +123,8 @@ async fn with_run(dag: Dag) -> (Dispatcher, Database, String) {
         .register("w1", "i1", &[], 2, ts(NOW))
         .await
         .unwrap();
+    // It offers the extension of the tests' extension tasks (decision 527).
+    dispatcher.set_extensions("w1", spark_offer());
     (dispatcher, db, run_id)
 }
 
@@ -2461,6 +2463,11 @@ async fn code_missing_everywhere_for_the_code_wait_makes_the_task_unschedulable(
     );
 }
 
+/// `spark` at 1.0, as [`extension_dag`]'s task asks.
+fn spark_offer() -> BTreeSet<(String, String)> {
+    BTreeSet::from([("spark".to_owned(), "1.0".to_owned())])
+}
+
 /// `extract` an extension task of `spark`, then `load`.
 fn extension_dag() -> Dag {
     let mut value = serde_json::to_value(dag(0)).unwrap();
@@ -2517,6 +2524,7 @@ async fn a_task_unschedulable_for_its_extensions_service_runs_once_a_service_is_
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
+    dispatcher.set_extensions("w2", spark_offer());
     for worker in ["w1", "w2"] {
         dispatcher.report_services(worker, BTreeMap::from([("spark".to_owned(), 0)]));
     }
@@ -2653,6 +2661,7 @@ async fn unschedulable_for_spark() -> (Dispatcher, Database, String) {
         .register("w2", "i1", &[], 1, ts(NOW))
         .await
         .unwrap();
+    dispatcher.set_extensions("w2", spark_offer());
     let off = pb::RejectReason::ExtensionNotReady;
     let why = "extension `spark`: its service is restarting";
     let states = refused_by(

@@ -529,3 +529,52 @@ async fn outputs_are_stored_together_the_later_of_one_instance_kept() {
     );
     assert_eq!(db.output(b).await.unwrap(), Some(("SKIP".to_owned(), two)));
 }
+
+#[tokio::test]
+async fn unoffered_tasks_become_unschedulable_together_queued_ones_only() {
+    // Agy's review of M5.3d: one statement per reason and 500 instances, not per instance.
+    let (db, run_id) = with_run(RunState::Running).await;
+    let at = ts("2026-10-21T08:00:00Z");
+    let tasks: Vec<(TaskId, i32, TaskInstanceState)> = (0..3)
+        .map(|i| {
+            let state = if i == 2 {
+                TaskInstanceState::Running
+            } else {
+                TaskInstanceState::Queued
+            };
+            (id(&format!("t{i}")), -1, state)
+        })
+        .collect();
+    db.create_instances(&run_id, &tasks, at).await.unwrap();
+    let ids: Vec<String> = db
+        .run_tasks(&run_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .instances
+        .iter()
+        .map(|i| i.id.clone())
+        .collect();
+    let why = "no worker of queue `default` offers `spark@2.0`".to_owned();
+    let unoffered: Vec<(String, String)> = ids.iter().map(|id| (id.clone(), why.clone())).collect();
+    db.set_unoffered(&unoffered, at).await.unwrap();
+    db.set_unoffered(&[], at).await.unwrap();
+    let states: Vec<TaskInstanceState> = db
+        .run_tasks(&run_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .instances
+        .iter()
+        .map(|i| i.state)
+        .collect();
+    // The running one left as it is.
+    assert_eq!(
+        states,
+        [
+            TaskInstanceState::Unschedulable,
+            TaskInstanceState::Unschedulable,
+            TaskInstanceState::Running
+        ]
+    );
+}

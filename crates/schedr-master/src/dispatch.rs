@@ -247,6 +247,23 @@ impl AssignReads {
     }
 }
 
+/// How long an extension task no worker of its queue offers waits before it is `unschedulable`
+/// (decision 529; `SCHEDR_HIDDEN__MASTER__UNOFFERED_WAIT`).
+pub const DEFAULT_UNOFFERED_WAIT: Duration = Duration::from_mins(10);
+
+/// The waiting kind of an extension task no worker of its queue offers.
+const UNOFFERED: &str = "unoffered";
+
+/// An extension task's extension and version, which its worker must offer (decision 527).
+fn extension_of(task: &schedr_model::Task) -> Option<(&str, &str)> {
+    match &task.kind {
+        schedr_model::TaskKind::Extension { name, version, .. } => {
+            Some((name.as_str(), version.as_str()))
+        }
+        _ => None,
+    }
+}
+
 /// Why a moved cleanup waits, shown as `unschedulable` (decision 244).
 const NO_CLEANUP_WORKER: &str = "no worker for the cleanup";
 
@@ -480,6 +497,10 @@ pub struct Dispatcher {
     /// When refusals of tasks no longer waiting were last dropped (master time; B286).
     refusals_pruned: Option<Timestamp>,
     code_wait: SignedDuration,
+    /// How long an extension task no worker of its queue offers waits before it is
+    /// `unschedulable` (decision 529), and since when each has waited so, on the steady clock.
+    unoffered_wait: SignedDuration,
+    unoffered_since: BTreeMap<String, Timestamp>,
     /// Each root's accepted content hashes (its current code, and newer code whose parse is on
     /// its way) and the schedr version of its current parse: its tasks go to workers at one of
     /// those hashes and of at least that version.
@@ -580,6 +601,9 @@ pub struct Memory {
     /// `CancelAttempt`s queued for the next step: a rolled-back change queues none (B51).
     stops: Vec<Outgoing>,
     active: Active,
+    /// Rolled back with the round: a wait's end not written isn't forgotten (agy's review of
+    /// M5.3d: the 10 minutes started over).
+    unoffered_since: BTreeMap<String, Timestamp>,
 }
 
 /// What a write did to an attempt, for a commit cut off to be read back by.
@@ -601,6 +625,9 @@ struct Tally {
     /// Waiting reasons to write, `(instance ID, reason)`: at most [`REASONS_PER_ROUND`],
     /// written together at the step's end.
     reasons: Vec<(String, String)>,
+    /// Extension tasks no worker offered for the unoffered wait, to make `unschedulable` with
+    /// their reason (decisions 527 and 529), written with the reasons.
+    unoffered: Vec<(String, String)>,
     /// Each DAG version's tasks by ID (their places in its list), made once a step: a ready
     /// task is looked up, not searched for (B148).
     places: HashMap<String, HashMap<TaskId, usize>>,
@@ -640,6 +667,8 @@ struct Wants {
     root: String,
     queue: String,
     parse_version: String,
+    /// An extension task's extension and version (decision 527).
+    extension: Option<(String, String)>,
 }
 
 /// A refusal's kind, for [`Dispatcher::not_here`]: the code (or the extension's service) not
@@ -673,6 +702,9 @@ impl Dispatcher {
             wants: BTreeMap::new(),
             refusals_pruned: None,
             code_wait: SignedDuration::ZERO,
+            unoffered_wait: SignedDuration::try_from(DEFAULT_UNOFFERED_WAIT)
+                .unwrap_or(SignedDuration::MAX),
+            unoffered_since: BTreeMap::new(),
             current_code: BTreeMap::new(),
             connections: BTreeMap::new(),
             metrics: MasterMetrics::default(),
@@ -761,6 +793,7 @@ impl Dispatcher {
             wants: self.wants.clone(),
             stops: self.stops.clone(),
             active: self.active.clone(),
+            unoffered_since: self.unoffered_since.clone(),
         }
     }
 
@@ -799,6 +832,7 @@ impl Dispatcher {
         self.wants = memory.wants;
         self.stops = memory.stops;
         self.active = memory.active;
+        self.unoffered_since = memory.unoffered_since;
     }
 
     /// The attempts a `CancelAttempt` is queued for, sent at the next step (for the
@@ -932,6 +966,18 @@ impl Dispatcher {
     pub fn with_code_wait(mut self, code_wait: Duration) -> Self {
         self.code_wait = SignedDuration::try_from(code_wait).unwrap_or(SignedDuration::MAX);
         self
+    }
+
+    /// The dispatcher with another unoffered wait (see [`DEFAULT_UNOFFERED_WAIT`]).
+    #[must_use]
+    pub fn with_unoffered_wait(mut self, wait: Duration) -> Self {
+        self.unoffered_wait = SignedDuration::try_from(wait).unwrap_or(SignedDuration::MAX);
+        self
+    }
+
+    /// `worker` offers `extensions`, from its registration (decision 527).
+    pub fn set_extensions(&mut self, worker: &str, extensions: BTreeSet<(String, String)>) {
+        self.workers.set_extensions(worker, extensions);
     }
 
     /// The registered workers.
@@ -1193,6 +1239,10 @@ impl Dispatcher {
     fn eligible_for(&self, worker: &str, wants: &Wants) -> bool {
         let current = self.current_code.get(&wants.root);
         let needs = Needs {
+            extension: wants
+                .extension
+                .as_ref()
+                .map(|(n, v)| (n.as_str(), v.as_str())),
             queue: &wants.queue,
             code: current.map(|(hashes, _)| (wants.root.as_str(), hashes)),
             version: wants
@@ -1265,6 +1315,7 @@ impl Dispatcher {
             .keys()
             .chain(self.rejections.keys())
             .chain(self.wants.keys())
+            .chain(self.unoffered_since.keys())
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -1278,6 +1329,9 @@ impl Dispatcher {
         self.rejections
             .retain(|instance, _| waiting.contains(instance));
         self.wants.retain(|instance, _| waiting.contains(instance));
+        // A cancelled or removed task's wait goes too (agy's review of M5.3d, as B286).
+        self.unoffered_since
+            .retain(|instance, _| waiting.contains(instance));
         Ok(())
     }
 
@@ -1288,6 +1342,7 @@ impl Dispatcher {
             .keys()
             .chain(self.rejections.keys())
             .chain(self.wants.keys())
+            .chain(self.unoffered_since.keys())
             .collect::<BTreeSet<_>>()
             .len()
     }
@@ -2197,6 +2252,16 @@ impl Dispatcher {
         if let Err(error) = written {
             tracing::warn!(%error, "waiting reasons not written");
         }
+        // Not shown only: the instances' state. Not written, each is due again at once (agy's
+        // review of M5.3d: its wait started over).
+        let unoffered = Box::pin(db.atomically(db.set_unoffered(&tally.unoffered, now))).await;
+        if let Err(error) = unoffered {
+            tracing::warn!(%error, "unoffered extension tasks not made unschedulable");
+            for (instance_id, _) in &tally.unoffered {
+                self.unoffered_since
+                    .insert(instance_id.clone(), Timestamp::UNIX_EPOCH);
+            }
+        }
         let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
         Ok(())
@@ -2271,6 +2336,7 @@ impl Dispatcher {
             .await?;
         }
         self.db.set_queued_reasons(&tally.reasons, now).await?;
+        self.db.set_unoffered(&tally.unoffered, now).await?;
         let waiting: Vec<(&'static str, i64)> = tally.waiting.into_iter().collect();
         self.metrics.set_waiting(&waiting);
         Ok(())
@@ -2416,6 +2482,23 @@ impl Dispatcher {
         let Some(worker_id) = picked.map(str::to_owned) else {
             let (why, reason) = self.why_waiting(needs, &excluded);
             *tally.waiting.entry(why).or_default() += 1;
+            if why == UNOFFERED {
+                let since = *self
+                    .unoffered_since
+                    .entry(ready.instance_id.clone())
+                    .or_insert_with(|| (self.steady)(now));
+                // At most so many a round, as the waiting reasons: the rest in the next ones
+                // (agy's review of M5.3d).
+                if (self.steady)(now).duration_since(since) >= self.unoffered_wait
+                    && tally.unoffered.len() < self.rounds.waiting_reasons
+                {
+                    self.unoffered_since.remove(&ready.instance_id);
+                    tally.unoffered.push((ready.instance_id.clone(), reason));
+                    return Ok(None);
+                }
+            } else {
+                self.unoffered_since.remove(&ready.instance_id);
+            }
             // At most so many a round: the rest in the next ones (B18).
             if ready.queued_reason.as_deref() != Some(reason.as_str())
                 && tally.reasons.len() < self.rounds.waiting_reasons
@@ -2424,6 +2507,7 @@ impl Dispatcher {
             }
             return Ok(None);
         };
+        self.unoffered_since.remove(&ready.instance_id);
         let attempt_id = uuid::Uuid::now_v7().to_string();
         self.take_slot(task, (&worker_id, &attempt_id), now);
         self.active.assigned(&attempt_id, ready);
@@ -2788,7 +2872,10 @@ impl Dispatcher {
         // The workers that could run it: once each has rejected it, it is unschedulable.
         let task = run.as_ref().and_then(|run| run.dag.task(&attempt.task_id));
         let eligible: Option<Vec<String>> = run.as_ref().zip(task).map(|(run, task)| {
-            let needs = self.needs(&run.dag, &task.settings.queue, &run.parse_version);
+            let needs = Needs {
+                extension: extension_of(task),
+                ..self.needs(&run.dag, &task.settings.queue, &run.parse_version)
+            };
             self.workers.eligible(needs).map(|w| w.id.clone()).collect()
         });
         // Its extension, to forget a "service not ready" refusal once that service is back.
@@ -2797,6 +2884,7 @@ impl Dispatcher {
             _ => None,
         });
         let wants = run.as_ref().zip(task).map(|(run, task)| Wants {
+            extension: extension_of(task).map(|(n, v)| (n.to_owned(), v.to_owned())),
             root: run.dag.location.root.clone(),
             queue: task.settings.queue.clone(),
             parse_version: run.parse_version.clone(),
@@ -3155,6 +3243,7 @@ impl Dispatcher {
         let wait_step = matches!(task.kind, schedr_model::TaskKind::Sensor { .. });
         Needs {
             wait_step,
+            extension: extension_of(task),
             may_queue: !wait_step && !self.withdrawn.contains(&ready.instance_id),
             ..self.needs(&ready.dag, &task.settings.queue, &ready.parse_version)
         }
@@ -4096,7 +4185,12 @@ impl Dispatcher {
             let Some(task) = ready.dag.task(&ready.task_id) else {
                 continue;
             };
-            let needs = self.needs(&ready.dag, &task.settings.queue, &ready.parse_version);
+            // An extension task's cleanup is its plugin's: only a worker offering it can run it
+            // (agy's review of M5.3d), none showing as no worker for the cleanup.
+            let needs = Needs {
+                extension: extension_of(task),
+                ..self.needs(&ready.dag, &task.settings.queue, &ready.parse_version)
+            };
             // A worker that refused it may take it yet: it does when no other can.
             let refused: BTreeSet<String> = self
                 .rejections
@@ -4575,6 +4669,7 @@ impl Dispatcher {
             queue,
             code: current.map(|(hashes, _)| (root, hashes)),
             version,
+            extension: None,
             wait_step: false,
             may_queue: false,
         }
@@ -4597,6 +4692,30 @@ impl Dispatcher {
             return (
                 "no_worker",
                 format!("no active worker serves queue `{queue}`"),
+            );
+        }
+        // Those offering its extension first (agy's review of M5.3d): one behind on code or on
+        // schedr waits as that, never as unoffered because another of the queue, offering
+        // nothing, is current; and only they count as having rejected it.
+        let serving: Vec<_> = serving
+            .into_iter()
+            .filter(|w| w.offers(needs.extension))
+            .collect();
+        if let Some((name, version)) = needs.extension
+            && serving.is_empty()
+        {
+            if self.workers.drained_offering(queue, needs.extension) {
+                return (
+                    "drained",
+                    format!(
+                        "the workers of queue `{queue}` offering `{name}@{version}` are drained \
+                         (`schedr workers resume`)"
+                    ),
+                );
+            }
+            return (
+                UNOFFERED,
+                format!("no worker of queue `{queue}` offers `{name}@{version}`"),
             );
         }
         let recent: Vec<_> = serving

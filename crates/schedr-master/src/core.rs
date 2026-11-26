@@ -80,6 +80,9 @@ pub struct Settings {
     pub parse_job_timeout: Duration,
     /// How long a task's code may be missing on every eligible worker.
     pub code_wait: Duration,
+    /// How long an extension task no worker offers waits before it is `unschedulable`
+    /// (decision 529).
+    pub unoffered_wait: Duration,
     /// How long a task whose assignment fails on its own is set aside.
     pub set_aside: Duration,
     /// The least an `@sensor(wait_for=...)`'s call gets once handed its run (decision 353).
@@ -285,6 +288,7 @@ impl Default for Settings {
             sensor_max_wait: Duration::from_hours(24),
             parse_job_timeout: PARSE_JOB_TIMEOUT,
             code_wait: DEFAULT_CODE_WAIT,
+            unoffered_wait: crate::dispatch::DEFAULT_UNOFFERED_WAIT,
             set_aside: crate::dispatch::DEFAULT_SET_ASIDE,
             handed_call_min: crate::dispatch::DEFAULT_HANDED_CALL_MIN,
             cleanup_move_wait: Duration::from_secs(10),
@@ -1016,6 +1020,7 @@ impl MasterCore {
             .with_sensor_max_wait(settings.sensor_max_wait)
             .with_max_message_size(settings.max_message_size)
             .with_code_wait(settings.code_wait)
+            .with_unoffered_wait(settings.unoffered_wait)
             .with_set_aside(settings.set_aside, settings.read_back)
             .with_handed_call_min(settings.handed_call_min)
             .with_cleanup_move_wait(
@@ -1493,6 +1498,8 @@ impl MasterCore {
             .await?;
         self.dispatcher
             .set_watcher_slots(worker_id, register.watcher_slots);
+        self.dispatcher
+            .set_extensions(worker_id, offered_extensions(register));
         self.dispatcher
             .set_queue_depth(worker_id, register.queue_depth);
         // Failing, discovery's memory goes back as it was: the worker registers again with the

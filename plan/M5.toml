@@ -760,7 +760,8 @@ scope = '''
 done_when = '''
 a worker whose old connection never closed at the master is registered again by it at once, its tasks kept, and a `Register` held on its way and arriving late changes nothing, live or not; a worker whose link died both ways is registered again within its lease, its tasks kept; stress scenarios show each
 '''
-status = "planned"
+status = "done"
+done = 2026-11-26
 
 [[steps]]
 id = "M5.3f"
@@ -782,7 +783,8 @@ scope = '''
 done_when = '''
 the user's choice built and tested, the guarantees page saying it
 '''
-status = "planned"
+status = "done"
+done = 2026-11-26
 
 [[steps]]
 id = "M5.3d"
@@ -793,7 +795,8 @@ scope = '''
 done_when = '''
 an extension task assigned only to workers of its queue offering its name and version (a test with workers offering 1.0, 1.0 and 1.1, and none: each task to the right ones, no give-back); the user's choice for a task nobody serves built and said in its waiting reason; the guide's extensions page saying routing needs no queue of its own; stress 25 on CI unchanged or faster
 '''
-status = "planned"
+status = "done"
+done = 2026-11-26
 
 [[steps]]
 id = "M5.3c"
