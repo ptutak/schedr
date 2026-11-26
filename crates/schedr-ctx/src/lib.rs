@@ -10,6 +10,17 @@ pub mod cli;
 /// told the CLI is.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The process's environment as text (agy's review of M5.3c): a variable whose name or value
+/// isn't UTF-8 is left out, never a panic; the in-task CLI reads only its own variables.
+#[must_use]
+pub fn env_from(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> BTreeMap<String, String> {
+    vars.into_iter()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
 /// Exit code for wrong usage (unknown command, bad arguments), as `schedr`'s.
 pub const EXIT_USAGE: u8 = 2;
 
@@ -50,7 +61,8 @@ pub fn run(
             }
         },
         Err(error) => {
-            let shown = error.render().ansi().to_string();
+            // Plain text, as `schedr`'s (agy's review of M5.3c: no terminal codes in a log).
+            let shown = error.to_string();
             let _ = if error.use_stderr() {
                 err.write_all(shown.as_bytes())
             } else {

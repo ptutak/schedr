@@ -57,9 +57,13 @@ ctx=$work/venv/bin/schedr-ctx
 [ -x "$ctx" ] || fail "no schedr-ctx beside schedr in the wheel"
 [ "$("$ctx" --version)" = "schedr-ctx $("$schedr" --version | awk '{print $2}')" ] \
     || fail "schedr-ctx's version isn't schedr's: $("$ctx" --version)"
-if env -u SCHEDR_CTX_FD "$ctx" status loading 2>/dev/null; then
-    fail "schedr-ctx outside a task didn't fail"
-fi
+set +e
+outside=$(env -u SCHEDR_CTX_FD "$ctx" status loading 2>&1)
+code=$?
+set -e
+[ "$code" = 1 ] || fail "schedr-ctx outside a task exited $code, not 1: $outside"
+grep -q "must be run inside a schedr task" <<<"$outside" \
+    || fail "schedr-ctx outside a task said: $outside"
 
 # A clean environment, as for a new user: the venv isn't activated, and only the system's
 # directories are on PATH, so the venv's Python is found next to the binary.

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let env: BTreeMap<String, String> = std::env::vars().collect();
+    let env: BTreeMap<String, String> = schedr_ctx::env_from(std::env::vars_os());
     ExitCode::from(schedr_ctx::run(
         std::env::args_os(),
         &env,

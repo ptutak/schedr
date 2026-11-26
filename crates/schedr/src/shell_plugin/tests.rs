@@ -340,3 +340,38 @@ fn a_scripts_service_call_is_answered_or_told_why_not() {
     };
     assert!(reason.contains("no service"), "{reason}");
 }
+
+/// agy's review of M5.3c (rule P): the worker's folder joins a task's `PATH` only as an absolute
+/// path without `:` (a `:` would add an empty, current-directory entry), once, and with no
+/// `PATH` set the system's default stays after it.
+#[test]
+fn the_workers_folder_joins_path_only_as_a_safe_entry_and_once() {
+    use std::path::Path;
+    let own = Some(Path::new("/opt/schedr/bin"));
+    assert_eq!(
+        super::path_with(own, Some("/usr/bin:/bin")).as_deref(),
+        Some("/opt/schedr/bin:/usr/bin:/bin")
+    );
+    assert_eq!(
+        super::path_with(own, Some("/opt/schedr/bin:/usr/bin")).as_deref(),
+        Some("/opt/schedr/bin:/usr/bin"),
+        "first already: not twice"
+    );
+    assert_eq!(
+        super::path_with(own, None).as_deref(),
+        Some("/opt/schedr/bin:/usr/bin:/bin"),
+        "no PATH: the system's default kept reachable"
+    );
+    for odd in ["/tmp/a:b/bin", "relative/bin", ""] {
+        assert_eq!(
+            super::path_with(Some(Path::new(odd)), Some("/usr/bin")).as_deref(),
+            Some("/usr/bin"),
+            "{odd:?} not added"
+        );
+    }
+    assert_eq!(super::path_with(None, None), None, "nothing to set");
+    assert_eq!(
+        super::path_with(None, Some("/usr/bin")).as_deref(),
+        Some("/usr/bin")
+    );
+}

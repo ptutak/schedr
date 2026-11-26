@@ -199,14 +199,29 @@ pub fn script_variables(request: &Request, run: &ShellRun) -> BTreeMap<String, S
 /// calls are this build, speaking its context's protocol; then the worker's. Every task's too
 /// (decision 532).
 #[must_use]
-pub fn script_path(path: Option<&str>) -> String {
-    let own = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.display().to_string()));
+pub fn script_path(path: Option<&str>) -> Option<String> {
+    let exe = std::env::current_exe().ok();
+    path_with(exe.as_deref().and_then(std::path::Path::parent), path)
+}
+
+/// The system's default `PATH` (POSIX's `_CS_PATH` on Linux), kept after the worker's folder
+/// when the worker was started without one.
+const DEFAULT_PATH: &str = "/usr/bin:/bin";
+
+/// `path` with `own` first (agy's review of M5.3c): only an absolute folder whose name is text
+/// without `:` (one would split it, adding an empty entry, the current directory), not when it is
+/// first already; no `path`, the system's default after it; none to set, none.
+#[must_use]
+pub fn path_with(own: Option<&std::path::Path>, path: Option<&str>) -> Option<String> {
+    let own = own
+        .filter(|dir| dir.is_absolute())
+        .and_then(std::path::Path::to_str)
+        .filter(|dir| !dir.contains(':'));
     match (own, path) {
-        (Some(own), Some(path)) if !path.is_empty() => format!("{own}:{path}"),
-        (Some(own), _) => own,
-        (None, path) => path.unwrap_or_default().to_owned(),
+        (Some(own), Some(path)) if path.split(':').next() == Some(own) => Some(path.to_owned()),
+        (Some(own), Some(path)) if !path.is_empty() => Some(format!("{own}:{path}")),
+        (Some(own), _) => Some(format!("{own}:{DEFAULT_PATH}")),
+        (None, path) => path.map(str::to_owned),
     }
 }
 
@@ -246,7 +261,7 @@ fn run_script(
                     && name.as_str() != CTX_FD_ENV
             }))
             .envs(script_variables(request, run))
-            .env("PATH", script_path(env.get("PATH").map(String::as_str)))
+            .envs(script_path(env.get("PATH").map(String::as_str)).map(|path| ("PATH", path)))
             .env(CTX_FD_ENV, theirs.as_raw_fd().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())

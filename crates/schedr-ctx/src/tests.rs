@@ -808,3 +808,26 @@ fn schedr_ctx_refuses_a_wrong_command_as_wrong_usage() {
     assert_eq!(out, "");
     assert!(err.contains("nothing"), "{err}");
 }
+
+/// agy's review of M5.3c (rule Q): `schedr-ctx`'s usage errors are plain text, as `schedr`'s.
+#[test]
+fn schedr_ctx_errors_are_plain_text() {
+    let (code, _, err) = small_run(&["nothing"], &BTreeMap::new());
+    assert_eq!(code, EXIT_USAGE);
+    assert!(!err.contains('\x1b'), "no terminal codes: {err:?}");
+}
+
+/// agy's review of M5.3c (rule Q): a variable that isn't UTF-8 is left out of the environment
+/// read, not a panic; the others kept.
+#[test]
+fn the_environment_read_leaves_out_what_isnt_utf8() {
+    use std::os::unix::ffi::OsStringExt as _;
+    let vars = vec![
+        ("SCHEDR_CTX_FD".into(), "7".into()),
+        ("UNRELATED".into(), std::ffi::OsString::from_vec(vec![0xff])),
+        (std::ffi::OsString::from_vec(vec![0xfe]), "x".into()),
+    ];
+    let env = crate::env_from(vars);
+    assert_eq!(env.len(), 1, "{env:?}");
+    assert_eq!(env["SCHEDR_CTX_FD"], "7");
+}

@@ -1694,5 +1694,9 @@ fn tasks_get_the_workers_folder_first_on_their_path() {
     assert_eq!(tasks["PATH"], format!("{own}:/usr/bin:/bin"));
     assert_eq!(tasks["HOME"], "/home/w");
     let bare = super::tasks_agent_env(&BTreeMap::new());
-    assert_eq!(bare["PATH"], own);
+    assert_eq!(
+        bare["PATH"],
+        format!("{own}:/usr/bin:/bin"),
+        "the system's default kept"
+    );
 }

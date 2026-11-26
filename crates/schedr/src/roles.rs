@@ -2510,8 +2510,7 @@ pub async fn worker(config: &Config, env: &BTreeMap<String, String>) -> Result<(
 /// shell plugin's were already ([`crate::shell_plugin::script_path`]).
 fn tasks_agent_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut env = env.clone();
-    let path = crate::shell_plugin::script_path(env.get("PATH").map(String::as_str));
-    if !path.is_empty() {
+    if let Some(path) = crate::shell_plugin::script_path(env.get("PATH").map(String::as_str)) {
         env.insert("PATH".to_owned(), path);
     }
     env
