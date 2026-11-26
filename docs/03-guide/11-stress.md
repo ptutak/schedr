@@ -185,6 +185,16 @@ scenario (its result, tasks, tasks a second, run and start times, the longest ro
 wall time), then each scenario's every number folded under its name;
 `python3 scripts/stress_summary.py` prints the same after a local run. A scenario that fails
 also prints the logs of every process.
+
+**Paired speed** (M5.3i): two separate runs land on different machines, whose speed differs by
+some 10 %, more than many changes do. Given a `base` ref (and a filter), the workflow instead runs
+each scenario on that ref and on this one in turn on one machine, `pairs` times (3 by default),
+the order swapped each pair: `gh workflow run stress.yml -f filter='stress_01_throughput$' -f
+base=<ref>`. Its summary page shows, per metric, both medians, the median of the pairs' changes and
+the lowest and highest pair; a metric is called slower or faster only when every pair agrees and
+the change passes 5 %, and the job fails when a headline one (tasks a second, run and start times,
+the longest rounds, the wall time) is slower. `python3 scripts/stress_paired.py DIR` prints the
+same from a directory of `base/<n>/` and `new/<n>/` reports.
 With `STRESS_STATEMENTS=1`, Postgres loads `pg_stat_statements` and the run ends by writing
 `target/stress/statements.txt`: for each scenario's database its transactions and statements,
 then the statements run most often and those that took longest. Run one scenario at a time

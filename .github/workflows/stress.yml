@@ -18,6 +18,14 @@ on:
         description: "Only scenarios whose name matches (a regular expression); empty for all"
         default: ""
         type: string
+      base:
+        description: "Paired speed (M5.3i): a ref to compare with, each scenario run on it and on this one in turn on one runner; empty for a plain run. Needs a filter."
+        default: ""
+        type: string
+      pairs:
+        description: "Paired speed: how many pairs of runs per scenario"
+        default: "3"
+        type: string
 
 # One run at a time: the cap below is per run. A run waits for the one before it, never cancels
 # it; GitHub keeps one waiting, so a third started meanwhile replaces the second.
@@ -60,7 +68,12 @@ jobs:
         # The filter through the environment, never pasted into the script.
         env:
           FILTER: ${{ inputs.filter || steps.changed.outputs.only }}
+          BASE: ${{ inputs.base }}
         run: |
+          if [ -n "$BASE" ] && [ -z "$FILTER" ]; then
+            echo "::error::a paired run (base $BASE) needs a filter: every scenario in pairs takes many hours"
+            exit 1
+          fi
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, pathlib, re
           names = []
@@ -84,7 +97,7 @@ jobs:
 
   stress:
     needs: plan
-    if: needs.plan.outputs.scenarios != '[]'
+    if: needs.plan.outputs.scenarios != '[]' && inputs.base == ''
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -184,7 +197,7 @@ jobs:
   # scenario's report, and all of them in one artifact.
   summary:
     needs: [plan, stress]
-    if: always() && needs.plan.outputs.scenarios != '[]'
+    if: always() && needs.plan.outputs.scenarios != '[]' && inputs.base == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -200,6 +213,115 @@ jobs:
         with:
           name: stress-report-${{ github.run_id }}
           path: target/stress/
+          if-no-files-found: warn
+
+  # Paired speed (M5.3i, the user, 2026-11-26): each scenario run on the base ref and on this one
+  # in turn on one runner (the order swapped each pair), so the runner's own speed, some 10 %
+  # between machines, cancels out; scripts/stress_paired.py compares the pairs' reports.
+  paired:
+    needs: plan
+    if: needs.plan.outputs.scenarios != '[]' && inputs.base != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    name: paired ${{ matrix.scenario }}
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_PASSWORD: schedr
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      pgbouncer:
+        image: docker.io/edoburu/pgbouncer:v1.26.0-p0@sha256:b17551c776ef7e5769ef80b956d20f85e2fd25dd8912d31d58f782aad495b711
+        env:
+          DB_HOST: postgres
+          DB_USER: postgres
+          DB_PASSWORD: schedr
+          AUTH_TYPE: scram-sha-256
+          POOL_MODE: transaction
+          MAX_CLIENT_CONN: "1000"
+          DEFAULT_POOL_SIZE: "40"
+        ports:
+          - 6432:5432
+    env:
+      SCHEDR_TEST_POSTGRES_URL: postgres://postgres:schedr@127.0.0.1:5432/postgres
+      SCHEDR_TEST_PGBOUNCER: 127.0.0.1:6432
+      SCHEDR_STRESS_PROFILE: ${{ inputs.profile || 'quick' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: new
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base }}
+          path: base
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: stress-paired
+          workspaces: |
+            new -> target
+            base -> target
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest@0.9.149
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.5"
+          checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+      - name: Postgres with max_connections = 500
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_connections = 500"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
+      # Both built before any run, so a pair measures runs only; each with its own Python.
+      - name: Both builds
+        run: |
+          for side in base new; do
+            (cd "$side" && uv sync --python 3.14 && cargo nextest run -p schedr --test stress --no-run)
+          done
+      - name: ${{ matrix.scenario }} in pairs
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          PAIRS: ${{ inputs.pairs }}
+        run: |
+          report="${SCENARIO#stress_}.json"
+          for n in $(seq 1 "$PAIRS"); do
+            # Base first in odd pairs, new first in even ones: neither always runs on a warm machine.
+            if [ $((n % 2)) -eq 1 ]; then order="base new"; else order="new base"; fi
+            for side in $order; do
+              echo "::group::pair $n: $side"
+              (
+                cd "$side"
+                SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)') \
+                  cargo nextest run -p schedr --test stress --test-threads 1 --no-capture \
+                  -E "test(/(^|::)${SCENARIO}$/)"
+              ) || echo "::warning::${SCENARIO}: pair $n, $side failed (its report says why)"
+              mkdir -p "paired/$side/$n"
+              if [ -f "$side/target/stress/$report" ]; then
+                mv "$side/target/stress/$report" "paired/$side/$n/$report"
+              fi
+              echo "::endgroup::"
+            done
+          done
+          python3 new/scripts/stress_paired.py paired
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stress-paired-${{ matrix.scenario }}
+          path: paired/
           if-no-files-found: warn
 
   # Chaos on kind (M5.3f, scripts/kind_chaos.py): a kind cluster of three nodes on this commit's

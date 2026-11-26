@@ -43,7 +43,8 @@ a release; scenarios 17-21 for a change to the master's recovery (lost workers, 
 take-backs, moves), and grep the stress checks for assumptions it breaks. Up to 10 scenarios run at
 once, the longest first, and one run at a time: a second waits, a third replaces it, so several
 scenarios go in one filter. Locally only one quick scenario aimed at a feature. Compare CI runs
-with CI runs, several of them: they vary.
+with CI runs, several of them: they vary. A claim of speed (faster, no slower) comes from the paired
+job: `-f base=<ref>` with a filter, both builds in turn on one runner (docs/03-guide/11-stress.md).
 
 ## Rules of the code
 
