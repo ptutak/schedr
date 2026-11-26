@@ -3881,3 +3881,13 @@ configuration (the master's memory and code only); faster is an estimate (the ho
 work or less, a registration a little more under the core's lock), shown only by stress before and
 after. Order, Claude's default unless overruled: the four reviewed steps (M5.3g, M5.3b, M5.3d,
 M5.3f) pushed first, their Stress runs on CI the "before" figures; then M5.3i, before R1.3.
+
+### <a id="D531"></a>2026-11-26: a worker's sessions published lock-free (decision 531)
+
+Claude compared two ways for M5.3i's hot paths to read a worker's session without the core's
+lock: (1) each stream holding its session with a current flag, senders in a map under a standard
+read-write lock, no new dependency (recommended); (2) one map of sessions copied on each change
+and published lock-free with the `arc-swap` crate. The tables of what each does, its speed in
+common situations (steady load, a round's batch, a reconnect, a reconnect storm, a send during a
+registration) and its edge cases (a reader racing a replacement, a send to an ended session, a
+writer missing a part, a poisoned lock, memory) were in the conversation. The user: "Option 2".

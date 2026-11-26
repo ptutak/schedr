@@ -81,6 +81,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D531 | 2026-11-26 | user | planned (M5.3i) | workers | A worker's sessions published lock-free: one map copied on each change (arc-swap) |
 | D530 | 2026-11-26 | user | built M5.3g | workers | The registration path keeps its structure: no single owner of a worker's registration |
 | D529 | 2026-11-26 | user | built M5.3d | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
 | D528 | 2026-11-26 | user | built M5.3b | cleanup | A cleanup let through is still moved after its worker is lost: at least once |
@@ -1159,6 +1160,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### workers
 
+- D531: A worker's sessions published lock-free: one map copied on each change (arc-swap)
 - D530: The registration path keeps its structure: no single owner of a worker's registration
 - D526: A worker leaves a connection whose heartbeats go unanswered, well before the lease
 - D524: A worker leaves a master that accepts it and says nothing: connecting and registering have limits

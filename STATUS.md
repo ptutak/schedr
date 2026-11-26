@@ -14,11 +14,11 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 ## Recent
 
+- D531 (2026-11-26): a worker's sessions published lock-free
 - DN43 (2026-11-26): The registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a published copy (M5.3i) (corrects D530)
 - D530 (2026-11-26): the registration path keeps its structure
 - DN42 (2026-11-26): What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (corrects D524)
 - DN41 (2026-11-26): The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (adds to D526)
-- D527 (2026-11-25): 1.3.0's scope; an extension task no one offers
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
 - M5.3d (2026-11-26): Extension tasks placed by the plugins workers offer, beside their queue
