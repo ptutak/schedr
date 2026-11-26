@@ -10,7 +10,7 @@ approach) are in `plan/notes.md`. A step's decisions are those whose `step` name
 To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `done` with its
 `done` date and `commits` when it is committed), then `make records`.
 
-**Next:** M5.3f, The kind tests on CI, then chaos on kind.
+**Next:** M5.3i, A worker's session owned by the core: the registration path restructured.
 
 ## M0: Foundations
 
@@ -290,10 +290,10 @@ To change the plan: edit `plan/<milestone>.toml` (a step's `status` becomes `don
 | R1.2.1 | Release 1.2.1 | done 2026-11-25 |  |
 | M5.3h | One kind test on CI by hand, on 1.2.1's images | done 2026-11-26 |  |
 | M5.3g | Connections numbered: a worker's new one replaces its dead one | done 2026-11-26 | D525, D526, D530 |
-| M5.3f | The kind tests on CI, then chaos on kind | **next** |  |
+| M5.3f | The kind tests on CI, then chaos on kind | done 2026-11-26 |  |
 | M5.3b | A started cleanup's move, after its worker is lost | done 2026-11-26 | D528 |
 | M5.3d | Extension tasks placed by the plugins workers offer, beside their queue | done 2026-11-26 | D527, D529 |
-| M5.3i | A worker's session owned by the core: the registration path restructured | planned | D531 |
+| M5.3i | A worker's session owned by the core: the registration path restructured | **next** | D531 |
 | M5.3c | A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster | planned |  |
 | M5.3e | Scenario 24's long rounds investigated | planned |  |
 | R1.3 | Release 1.3.0 | planned |  |

@@ -6,8 +6,8 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 ## Now (2026-11-26)
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
-- **Next step:** M5.3f, The kind tests on CI, then chaos on kind. Done when: the workflow run by hand on a commit's own images; the chaos on kind a nightly job of the Stress workflow; a seeded chaos run on kind holding the guarantees over several seeds, shown to catch one broken on purpose (B296's fix taken out, say), in the same workflow
-- **Then:** M5.3i, M5.3c, M5.3e, R1.3, M6.1.
+- **Next step:** M5.3i, A worker's session owned by the core: the registration path restructured (decisions D531). Done when: the invariants on the design page and every M5.3g finding checked against them; the session one record, its three functions the only writers; the hub's `streams` and `heard` maps and Arrivals' parallel `*_on` calls gone; the existing tests passing unchanged, new tests restoring the snapshot at each failure point of a registration; the paired speed job built and used: stress 1 (throughput, the round's p99), 23 (bursts), 17b and 17c (reconnects), the new build against `origin/main` on one runner, no slower beyond the spread; chaos on kind (the user, 2026-11-26: "very good timing for core rework") on the same seeds before and after, seed 2 aimed among them: every guarantee held both times, the broken-cutoff build caught after too, and each record's figures side by side (runs finished, attempts `lost`, cleanups moved, a fault's end until every worker is back); its own review with the two review rules of 2026-11-26; kind-standby and chaos on kind on its images
+- **Then:** M5.3c, M5.3e, R1.3, M6.1, M6.2.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 2; first: B39 (low/possible), B38 (low/possible) (`BUGS.md`).
@@ -21,13 +21,12 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - DN41 (2026-11-26): The unanswered limit: at least two heartbeats, a share of 80 to 100 % per connection (adds to D526)
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
-- M5.3d (2026-11-26): Extension tasks placed by the plugins workers offer, beside their queue
+- M5.3f (2026-11-26): The kind tests on CI, then chaos on kind
 
 ## In progress
 
-- Seven points local, unpushed (M5.3g, M5.3b, M5.3d, M5.3f, M5.3g's sixth review with D530, the two review rules, M5.3i planned): make check running, then make docs, `undone.py --range`, the push. After it: Stress 1, 4, 5, 17-21, 17b, 17c, 23, 25 and the Kind workflow on CI; images rebuilt from the pushed commit and chaos on kind on chosen seeds (seed 2 aimed among them): M5.3i's before figures.
-- M5.3f: built and reviewed; left for done: the Kind workflow run by hand on a commit's images (after the push), a few more chaos seeds. Open, not blocking 1.3.0 unless the user says: the fuller record (per-fault metrics, logs streamed, a merged timeline), a replay mode, the other 12 faults.
-- Next steps to 1.3.0: M5.3i (the paired speed job first; invariants on design/workers.md first, every M5.3g finding checked against them; then build, review, stress and chaos before and after), M5.3c (measure first), M5.3e, R1.3.
+- M5.3i, building: pushed so far the paired speed job (calibration run 45814320439: main against itself, scenario 1, 3 pairs), the session invariants on design/workers.md, D531 (arc-swap, the user). Next: session.rs (draft in the job's scratchpad), the core's writer, the hub's maps gone, tests, agy's review, then paired stress 1, 23, 17b, 17c against origin/main and chaos seeds 2, 7, 11 against target/kind-chaos/baseline-dfa4bb5f.txt.
+- Then M5.3c (measure first), M5.3e, R1.3 (ask before the version commit and the tag). M5.3f done; its fuller record, replay and other 12 faults open.
 
 ## Waiting for the user
 
