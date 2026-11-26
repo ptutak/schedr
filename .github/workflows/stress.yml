@@ -171,7 +171,7 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
         run: |
           run() {
-            cargo nextest run -p schedr --test stress --test-threads 1 --no-capture \
+            cargo nextest run -p schedr --test stress --ignore-default-filter --test-threads 1 --no-capture \
               -E "test(/(^|::)${SCENARIO}$/)"
           }
           noisy() {
@@ -290,7 +290,7 @@ jobs:
       - name: Both builds
         run: |
           for side in base new; do
-            (cd "$side" && uv sync --python 3.14 && cargo nextest run -p schedr --test stress --no-run)
+            (cd "$side" && uv sync --python 3.14 && cargo nextest run -p schedr --test stress --ignore-default-filter --no-run)
           done
       - name: ${{ matrix.scenario }} in pairs
         env:
@@ -306,7 +306,7 @@ jobs:
               (
                 cd "$side"
                 SCHEDR_TEST_PYTHON=$(uv run python -c 'import sys; print(sys.executable)') \
-                  cargo nextest run -p schedr --test stress --test-threads 1 --no-capture \
+                  cargo nextest run -p schedr --test stress --ignore-default-filter --test-threads 1 --no-capture \
                   -E "test(/(^|::)${SCENARIO}$/)"
               ) || echo "::warning::${SCENARIO}: pair $n, $side failed (its report says why)"
               mkdir -p "paired/$side/$n"

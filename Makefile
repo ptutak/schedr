@@ -595,7 +595,7 @@ comma := ,
 
 stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<filter>)
 	@set -e; \
-	cargo nextest run -p schedr --test stress $(STRESS_CARGO) --no-run; \
+	cargo nextest run -p schedr --test stress --ignore-default-filter $(STRESS_CARGO) --no-run; \
 	sync -f .; \
 	net=schedr-stress-$$$$; pg=schedr-stress-pg-$$$$; bouncer=schedr-stress-bouncer-$$$$; \
 	$(CONTAINER) network create $$net >/dev/null; \
@@ -619,7 +619,7 @@ stress:          ## Run the stress suite (STRESS_PROFILE=quick|full, STRESS=<fil
 	export SCHEDR_STRESS_PROFILE=$(STRESS_PROFILE); \
 	test -x "$$SCHEDR_TEST_PYTHON"; \
 	$(if $(STRESS_TMPFS),TMPDIR=$$(mktemp -d /dev/shm/schedr-stress.XXXXXX); export TMPDIR;) \
-	rc=0; cargo nextest run -p schedr --test stress $(STRESS_CARGO) --test-threads 1 --no-fail-fast \
+	rc=0; cargo nextest run -p schedr --test stress --ignore-default-filter $(STRESS_CARGO) --test-threads 1 --no-fail-fast \
 		--no-capture $(if $(STRESS),-E 'test(/$(STRESS)/)') || rc=$$?; \
 	$(if $(STRESS_STATEMENTS),mkdir -p target/stress; \
 		$(CONTAINER) exec -i $$pg psql -q -U postgres -d postgres \

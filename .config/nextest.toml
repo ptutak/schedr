@@ -1,0 +1,28 @@
+# nextest's configuration: a plain `cargo nextest run` runs what it can and says what it can't.
+#
+# The stress suite runs only when asked for (`make stress`, the Stress workflow; they pass
+# `--ignore-default-filter`). The integration tests need a Python with schedr installed and an
+# administrative Postgres URL, which `make test-integration` provides; without them a run stops
+# once, saying so, instead of failing every test that needs them (2026-11-26).
+experimental = ["setup-scripts"]
+
+[profile.default]
+default-filter = "not binary(stress)"
+
+[scripts.setup.needs-python]
+command = "python3 scripts/test_env.py SCHEDR_TEST_PYTHON"
+# Shown when it fails: what to run instead.
+capture-stderr = true
+
+[scripts.setup.needs-postgres]
+command = "python3 scripts/test_env.py SCHEDR_TEST_POSTGRES_URL"
+# Shown when it fails: what to run instead.
+capture-stderr = true
+
+[[profile.default.scripts]]
+filter = "(package(schedr-agent) & (binary(fork) | binary(runner) | binary(watchers))) | (package(schedr) & (binary(interpreter) | binary(local) | binary(roles) | binary(standalone) | binary(stress)))"
+setup = "needs-python"
+
+[[profile.default.scripts]]
+filter = "(package(schedr-db) & binary(postgres)) | (package(schedr) & (binary(lease) | binary(roles) | binary(standalone) | binary(stress)))"
+setup = "needs-postgres"

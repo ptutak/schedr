@@ -29,8 +29,9 @@ Where something has one home, this file points there: pins and versions in `Carg
   check (`make upgrade-check`), wheels and their smoke tests (`make smoke`, `make smoke-musl`;
   aarch64 and macOS on CI only), the sdist. Run the ones a step touches.
 - **While working:** `cargo clippy --keep-going --workspace --all-targets -- -D warnings`,
-  `cargo nextest run -p <crate> -E 'not binary(stress)' --no-fail-fast`, the touched Python tests.
-  Without the filter, `-p schedr` runs the stress suite.
+  `cargo nextest run -p <crate> --no-fail-fast`, the touched Python tests. The stress suite runs
+  only with `--ignore-default-filter` (`.config/nextest.toml`); integration tests without their
+  variables stop the run once, saying what to run.
 - **By hand, the integration tests need** `SCHEDR_TEST_PYTHON=$(pyenv prefix)/bin/python` and
   `SCHEDR_TEST_POSTGRES_URL`; `make test-integration` starts the services (podman) and sets both.
 - **Generated, after a change to:** the API or DAG JSON, `make schema`; `Cargo.lock`,
