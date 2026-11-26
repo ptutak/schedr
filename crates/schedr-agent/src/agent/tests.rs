@@ -4270,6 +4270,12 @@ fn silent_master(anywhere: bool) -> Vec<pb::MasterMessage> {
     silent_master_leased(anywhere, 50)
 }
 
+/// A lease the first task or trigger starts within on a loaded machine, for the tests whose
+/// cutoff must stop it running: at 300 ms a loaded `make check` (load 13) still journaled it at
+/// the cutoff, so it was never started (decision 281) and the stop the test waited for never
+/// came (2026-11-26).
+const STARTS_BEFORE_CUTOFF_MS: u64 = 1500;
+
 /// As [`silent_master`], with a lease of `lease_ms`: one long enough for a loaded machine to
 /// handle the `Registered` before the assignment behind it comes past the lease (decision
 /// 281: then never started).
@@ -4295,7 +4301,7 @@ async fn a_master_gone_silent_stops_a_task_whose_cleanup_may_move() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
     let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
-    let script = silent_master_leased(true, 300);
+    let script = silent_master_leased(true, STARTS_BEFORE_CUTOFF_MS);
     against_script_with(2, Start::With(vec![]), script, done, |agent| {
         agent.executor.stops = seen_stops;
     })
@@ -4310,7 +4316,7 @@ async fn a_master_gone_silent_stops_a_trigger_with_no_gated_task_beside_it() {
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
     let done = move |_: &[pb::WorkerMessage]| !stopped.lock().unwrap().is_empty();
-    let mut script = silent_master_leased(false, 300);
+    let mut script = silent_master_leased(false, STARTS_BEFORE_CUTOFF_MS);
     script.truncate(1);
     script.push(assign_trigger("t1", "found"));
     against_script_with(2, Start::With(vec![]), script, done, |agent| {
@@ -4326,7 +4332,7 @@ async fn a_stuck_fetch_of_inputs_doesnt_hold_up_the_stop_or_the_heartbeats() {
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
     // A lease of several heartbeats: since decision 281 the stream ends at the lease, and the
     // last heartbeats before it may go with it.
-    let mut script = silent_master_leased(true, 300);
+    let mut script = silent_master_leased(true, STARTS_BEFORE_CUTOFF_MS);
     let mut other = assign(
         "a2",
         &task_json(&json!({"kind": "python"})),
@@ -4368,7 +4374,7 @@ async fn an_assignment_behind_a_fetch_cut_off_by_the_lease_is_not_started() {
     // cutoff, journaling and launching the assignment behind it.
     let stops = Arc::new(Mutex::new(Vec::new()));
     let (seen_stops, stopped) = (Arc::clone(&stops), Arc::clone(&stops));
-    let mut script = silent_master_leased(true, 300);
+    let mut script = silent_master_leased(true, STARTS_BEFORE_CUTOFF_MS);
     let mut fetching = assign(
         "a2",
         &task_json(&json!({"kind": "python"})),
