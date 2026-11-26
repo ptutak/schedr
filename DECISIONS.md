@@ -81,6 +81,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D532 | 2026-11-26 | user | planned (M5.3c) | task-context | Scripts get schedr-ctx's speed by calling it: the worker's folder first on every task's PATH |
 | D531 | 2026-11-26 | user | built M5.3i | workers | A worker's sessions published lock-free: one map copied on each change (arc-swap) |
 | D530 | 2026-11-26 | user | built M5.3g | workers | The registration path keeps its structure: no single owner of a worker's registration |
 | D529 | 2026-11-26 | user | built M5.3d | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
@@ -1017,6 +1018,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### task-context
 
+- D532: Scripts get schedr-ctx's speed by calling it: the worker's folder first on every task's PATH
 - D356: Tasks call schedr’s REST API through their agent
 - D315: Async in-task calls use an a prefix
 - D148: The context channel accepts callers by protocol version

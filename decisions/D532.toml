@@ -1,0 +1,20 @@
+title = "Scripts get schedr-ctx's speed by calling it: the worker's folder first on every task's PATH"
+date = 2026-11-26
+by = "user"
+status = "active"
+topic = "task-context"
+section = "The in-task CLI"
+summary = '''
+`schedr-ctx` (M5.3c) takes `schedr task-ctx`'s arguments and gives the same output and exit
+codes; a script gets its start (3.65 ms against 10.5 ms) by calling it. `schedr task-ctx` stays,
+the same commands, at its own start. The worker puts its own program's folder first on every
+task's `PATH` (as it did for shell plugins), so the `schedr-ctx` a task finds is the worker's
+build, beside its `schedr`; the guide's examples, the shell plugin's docs and the example DAGs
+call `schedr-ctx`. "No script changes" meant the arguments and output, not the program's name.
+Not chosen: a small `schedr` first on tasks' `PATH` running `task-ctx` itself and the real
+`schedr` for anything else (every script faster unedited, but a second `schedr` on `PATH`, a
+double start for the other commands, one program handing over to the other, which M5.3c's decision of 2026-11-25 ruled out).
+'''
+history = "JOURNAL.md#D532"  # <a id="D532"></a> starts its JOURNAL.md entry
+step = "M5.3c"
+code = ["crates/schedr-ctx/src/lib.rs::run", "crates/schedr/src/ctx_main.rs"]

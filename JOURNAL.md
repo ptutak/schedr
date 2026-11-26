@@ -3903,3 +3903,13 @@ registration is undone by one function (`registration_undone` with `BeforeRegist
 connection's incarnation and number) on every failing exit, not a full snapshot: restoring the
 dispatcher's entry and the session would bring back a stream the registration had replaced and
 ended. Claude laid out both with their situations; the user: "ok, so it's already fixed, keep it".
+
+### <a id="D532"></a>2026-11-26: scripts call `schedr-ctx` for its speed (decision 532)
+
+M5.3c's measurement passed its threshold: `schedr-ctx` 3.65 ms a call, `schedr task-ctx` 10.5 ms
+(0.35). Its decided design said "the same arguments, output and exit codes, so no script
+changes", while only a call to `schedr-ctx` starts the small program. Claude laid out two ways
+with their situations (an existing script, a new one, the user CLI from a task, a shell plugin,
+`dags test`, debugging which `schedr` runs, an older worker during an upgrade, a pip install) and
+edge cases: scripts opt in by calling `schedr-ctx`, the worker's folder first on tasks' `PATH`; or a
+small `schedr` first on `PATH` handing anything but `task-ctx` to the real one. The user: "1".
