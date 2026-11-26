@@ -21,8 +21,8 @@ cleanup waits at the same barrier in the fork server's child (`ForkRequest.barri
 2.2. Not chosen: a recheck of the gate just before
 the spawn (B255's window only narrowed, a freeze can fall between any two instructions); the
 deadline checked in the new process alone (the master's `Kill` noticed late); the process asked
-before it waits (its wait could start after the answer). Open (step M5.3b): a cleanup let
-through, then its worker lost, still moves after the lease and the move wait.
+before it waits (its wait could start after the answer). A cleanup let through, then its
+worker lost, still moves after the lease and the move wait: at least once (decision 528).
 '''
 history = "JOURNAL.md#D504"
 step = "B255"

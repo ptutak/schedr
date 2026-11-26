@@ -1226,6 +1226,48 @@ async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: 
 }
 
 #[tokio::test]
+async fn a_cleanup_let_through_still_moves_once_its_worker_is_lost() {
+    // Decision 528 (M5.3b): at least once. w1 was let through, then lost: it may have died at the
+    // cleanup's start, so the cleanup moves after the lease and the move wait, though it may
+    // overlap one still running on w1 (a frozen worker).
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
+    });
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
+    let start = worker_message::Message::CleanupStart(pb::CleanupStart {
+        attempt_id: attempt_id.clone(),
+        rest: false,
+    });
+    let out = core.handle_in_round("w1", start, ts(NOW)).await.unwrap();
+    let master_message::Message::CleanupGo(go) = message(&out[0]) else {
+        panic!("expected CleanupGo: {out:?}")
+    };
+    assert!(go.go, "w1 let through");
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    core.register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
+    core.tick(later(125)).await.unwrap();
+    let moved = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!((moved.worker_id.as_str(), moved.cleanup_moves), ("w2", 1));
+    assert!(may_start(&mut core, "w2", &attempt_id, false).await);
+}
+
+#[tokio::test]
 async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_owed() {
     // Codex's review of B255: a worker told `Kill` was let through on the rest it was owed
     // nothing of, and one owed a rest was refused once the attempt had ended.
