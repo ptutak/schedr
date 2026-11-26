@@ -35,6 +35,7 @@ Nothing.
 
 ## Rules in force
 
+- Until 1.3.0 (the user, 2026-11-26, "go on until release 1.3.0"): M5.3c's docs on two pages (the context page and the shell plugin's), the other examples keep `schedr task-ctx`; M5.3e fixes a cause inside the design (test first, review, checks, push), one needing a design change is written up with options and waits; R1.3 prepared to all but the version (changelog, upgrade check, full Stress and the kind workflow on CI, pushed), then ask before the version commit and the tag.
 - Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag.
 - Review rules (the user, 2026-11-26, in AI_INSTRUCTIONS.md): before fixing a finding, find the similar places and fix the rule they keep in one place; after three rounds, findings less severe or fewer, else propose a better design and wait.
 - Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet): no fallbacks, redirects or old fields kept; released migrations and the protocol rules still hold.
