@@ -83,6 +83,15 @@ I talk only to you. You design, write all code, docs and records, and decide wha
   your hypothesis, nor another colleague's findings.
 - **Findings are claims.** Reproduce or read each before acting; report confirmed, rejected and
   why. A confirmed one outside the step becomes a bug.
+- **Before fixing a finding, step back** (the user, 2026-11-26, after M5.3g's six review rounds
+  bred fixes of fixes): find every other place doing what the finding broke, name the rule they
+  must all keep (an invariant), and fix that rule, kept in one place, before the spot. A proposed
+  fix is the reviewer's view of one spot. No general rule found: say so, then fix the spot.
+- **After three rounds, look at the design** (the user, 2026-11-26): from round to round the
+  findings should get less severe, fewer, or both. If after three rounds they don't, with the
+  first rule applied, the design is likely the problem: step back to the solution's shape. A
+  better design that costs no performance and likely breeds fewer bugs: pause, propose it (the
+  Decisions table) and wait, instead of fixing the round.
 - Important choices they meet (anything I see or depend on, scope, a new dependency, anything hard
   to undo) come to me; small ones you decide, saying so.
 - UI-only steps may share one review. Steps touching the protocol, migrations or the master don't.
