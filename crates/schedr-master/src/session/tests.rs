@@ -69,8 +69,8 @@ fn a_session_is_taken_out_only_by_its_own_number() {
     assert!(!sessions.has("w1"));
     assert!(writer.remove("w1", None).is_none(), "none left");
     assert!(
-        !current.is_ended(),
-        "taken out, not replaced: its own server ends it"
+        current.is_ended(),
+        "taken out, it ends (agy's review of M5.3i)"
     );
 }
 
@@ -189,4 +189,37 @@ fn a_session_replaced_out_ends_and_is_gone() {
         tonic::Code::Aborted
     );
     assert!(writer.replace_out("w1").is_none());
+}
+
+/// agy's second review of M5.3i: nothing is sent on a session after its end (it would queue
+/// behind the end's status, never read, yet count as sent) or once it is stuck.
+#[test]
+fn nothing_is_sent_after_a_sessions_end_or_once_it_is_stuck() {
+    let (ended, mut stream) = session("w1", 1);
+    ended.end(Status::aborted("replaced"));
+    assert_eq!(
+        ended.send(stamped()),
+        Err(mpsc::error::TrySendError::Closed(()))
+    );
+    assert!(stream.try_recv().unwrap().is_err(), "only the end's status");
+    assert!(stream.try_recv().is_err(), "nothing behind it");
+    let (stuck, _stream) = session("w2", 2);
+    stuck.mark_stuck();
+    assert_eq!(
+        stuck.send(stamped()),
+        Err(mpsc::error::TrySendError::Closed(()))
+    );
+}
+
+/// A session ends once: a second end queues no second status.
+#[test]
+fn a_session_ends_once() {
+    let (session, mut stream) = session("w1", 1);
+    session.end(Status::aborted("replaced"));
+    session.end(Status::unavailable("stopping"));
+    assert_eq!(
+        stream.try_recv().unwrap().unwrap_err().code(),
+        tonic::Code::Aborted
+    );
+    assert!(stream.try_recv().is_err());
 }

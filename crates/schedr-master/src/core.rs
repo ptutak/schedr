@@ -574,10 +574,10 @@ struct Arrived {
     registering_starts: BTreeMap<(String, String), usize>,
 }
 
-/// A worker's connection as it was before a registration ([`MasterCore::before_registration`]):
-/// its incarnation and newest connection number, if it had one.
+/// A worker's connection as it was before a registration ([`MasterCore::before_registration`]),
+/// if it had one: what an undone registration puts back.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BeforeRegistration(Option<(String, Option<u64>)>);
+pub struct BeforeRegistration(Option<Connection>);
 
 /// A worker's `Register` waiting for the lock ([`Arrivals::registering`]): handled once dropped,
 /// the starts its journal reports going with it unless [kept](Self::keep).
@@ -1231,28 +1231,35 @@ impl MasterCore {
     /// it): what [`Self::registration_undone`] puts back.
     #[must_use]
     pub fn before_registration(&self, worker_id: &str) -> BeforeRegistration {
-        BeforeRegistration(
-            self.connections
-                .get(worker_id)
-                .map(|known| (known.incarnation.clone(), known.newest)),
-        )
+        BeforeRegistration(self.connections.get(worker_id).cloned())
     }
 
     /// The one undo of a registration (M5.3i), whichever way it failed: half-way at the
     /// database, accepted but the master no longer leading, or closing before its session was
     /// put in place. The worker not live, at the dispatcher and in its sessions too, nothing
-    /// assigned to a stream that isn't there; its incarnation's number back to what it was
-    /// (agy's fifth review of M5.3g: a held older `Register` stays refused on this master), or
-    /// none for an incarnation it didn't have before, so its next try isn't refused as no newer.
-    /// Memory only: the database's word is the next leader's.
+    /// assigned to a stream that isn't there; its connection put back as it was (agy's review of
+    /// M5.3i: keeping the new incarnation erased the old one's number, so a held older `Register`
+    /// of it was accepted), not live. A worker it didn't know stays as the registration left it:
+    /// unknown before the database's write (the registration records the connection only after
+    /// it), known and not live after it, so its lease ends it. Memory only: the database's word
+    /// is the next leader's.
     pub fn registration_undone(&mut self, worker_id: &str, before: &BeforeRegistration) {
         self.not_live(worker_id);
-        if let Some(connection) = self.connections.get_mut(worker_id) {
-            connection.newest = before
-                .0
-                .as_ref()
-                .filter(|(incarnation, _)| *incarnation == connection.incarnation)
-                .and_then(|(_, newest)| *newest);
+        match &before.0 {
+            Some(connection) => {
+                self.connections.insert(
+                    worker_id.to_owned(),
+                    Connection {
+                        live: false,
+                        ..connection.clone()
+                    },
+                );
+            }
+            None => {
+                if let Some(connection) = self.connections.get_mut(worker_id) {
+                    connection.newest = None;
+                }
+            }
         }
     }
 
@@ -1478,21 +1485,6 @@ impl MasterCore {
     ) -> Result<(pb::Registered, Vec<Outgoing>), CoreError> {
         let worker_id = register.worker_id.as_str();
         self.reconcile(register, now).await?;
-        self.connections.insert(
-            worker_id.to_owned(),
-            Connection {
-                incarnation: register.incarnation_id.clone(),
-                newest: Some(register.connection),
-                schedr_version: register.schedr_version.clone(),
-                heard: (self.steady)(now),
-                persisted: now,
-                live: true,
-                secret_storages: Some(crate::validate::WorkerStorages::of(register)),
-                extensions: offered_extensions(register),
-                watcher_hosts: Vec::new(),
-                usage_at: None,
-            },
-        );
         let protocol = register
             .protocol
             .as_ref()
@@ -1519,6 +1511,23 @@ impl MasterCore {
                 now,
             )
             .await?;
+        // Only once its row is written: failing before, a worker this master didn't know stays
+        // unknown (agy's review of M5.3i), nothing kept for it that nothing would forget.
+        self.connections.insert(
+            worker_id.to_owned(),
+            Connection {
+                incarnation: register.incarnation_id.clone(),
+                newest: Some(register.connection),
+                schedr_version: register.schedr_version.clone(),
+                heard: (self.steady)(now),
+                persisted: now,
+                live: true,
+                secret_storages: Some(crate::validate::WorkerStorages::of(register)),
+                extensions: offered_extensions(register),
+                watcher_hosts: Vec::new(),
+                usage_at: None,
+            },
+        );
         self.record_node(register).await?;
         self.dispatcher
             .register(

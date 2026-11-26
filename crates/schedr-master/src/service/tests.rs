@@ -2772,10 +2772,11 @@ async fn an_old_stream_of_a_worker_neither_changes_nor_disconnects_its_new_one()
         async move { db.workers().await.unwrap()[0].state }
     };
     // The old stream's message is dropped, and its end changes nothing (given time to be
-    // handled: without the fix this fails well within it).
-    old.send(wrap(worker_message::Message::Draining(pb::Draining {})))
-        .await
-        .unwrap();
+    // handled: without the fix this fails well within it). Taken out, it may be closed already
+    // (M5.3i: a session taken out ends at once).
+    let _ = old
+        .send(wrap(worker_message::Message::Draining(pb::Draining {})))
+        .await;
     drop(old);
     drop(old_stream);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -2847,7 +2848,8 @@ async fn a_replaced_stream_gets_no_more_heartbeat_answers() {
             }
         }
     };
-    old.send(beat(1)).await.unwrap();
+    // Closed already, or let go at this heartbeat (M5.3i: a session taken out ends at once).
+    let _ = old.send(beat(1)).await;
     // Unanswered, and let go at that heartbeat (Grok's review: a quiet 500 ms passed too).
     assert_eq!(
         acked(&mut old_stream).await,
@@ -2950,10 +2952,10 @@ async fn an_open_stream_of_a_worker_taken_for_lost_changes_nothing_and_ends() {
         async move { db.workers().await.unwrap()[0].state }
     };
     assert_eq!(state().await, schedr_model::WorkerState::Lost);
-    to_master
+    // Ended with its loss already (M5.3i), or at this message.
+    let _ = to_master
         .send(wrap(worker_message::Message::Draining(pb::Draining {})))
-        .await
-        .unwrap();
+        .await;
     // The stream ends: the worker registers again and its journal is reconciled.
     let ended = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -3876,10 +3878,13 @@ async fn a_master_closing_while_it_leads_lets_nothing_in() {
     }
 }
 
-/// M5.3i: a registration while the sessions close (the master stopping) is refused and undone:
-/// not live, no session left open for the graceful shutdown to wait for.
+/// M5.3i: a registration once the sessions close (the master stopping) is refused before it
+/// registers: not live, no session left open for the graceful shutdown to wait for. (One racing
+/// the close between its checks and `SessionWriter::install` is undone by the same function as
+/// the other failing exits; the race itself is `session::tests::a_registration_racing_the_close_
+/// is_closed_or_refused_never_left_open`, agy's review of M5.3i.)
 #[tokio::test]
-async fn a_registration_while_the_sessions_close_is_refused_and_undone() {
+async fn a_registration_once_the_sessions_close_is_refused_before_it_registers() {
     let (hub, _db, client) = connected().await;
     hub.sessions.close_all(&Status::unavailable("stopping"));
     let (to_master, outbound) = mpsc::channel(16);
@@ -3894,4 +3899,115 @@ async fn a_registration_while_the_sessions_close_is_refused_and_undone() {
     let core = core.lock().await;
     assert!(!core.is_live("w1"));
     assert!(!hub.sessions.has("w1"), "no session left open");
+}
+
+/// agy's review of M5.3i (rule B): a stuck stream's reader records nothing; reading the start
+/// it stops, so its stream ends (no fixed sleep: agy's second review).
+#[tokio::test]
+async fn a_stuck_streams_reader_records_nothing() {
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let session = hub.sessions.current("w1").unwrap();
+    session.mark_stuck();
+    old.send(wrap(started_msg("a9"))).await.unwrap();
+    until("its reader read it and stopped", || session.is_ended()).await;
+    assert!(
+        !hub.arrivals.start_waiting("a9"),
+        "a stuck stream's start counts for nothing"
+    );
+    drop(old);
+}
+
+/// agy's review of M5.3i (rule A): a silent stuck stream is taken out by `disconnect_stuck`,
+/// which ends it and disconnects its worker.
+#[tokio::test]
+async fn a_silent_stuck_stream_is_ended_by_the_core() {
+    let (hub, _db, mut client) = connected().await;
+    let (old, outbound) = mpsc::channel(16);
+    old.send(register(PROTOCOL_VERSION)).await.unwrap();
+    let mut stream = client
+        .control(ReceiverStream::new(outbound))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        next(&mut stream).await,
+        master_message::Message::Registered(_)
+    ));
+    let id = {
+        let session = hub.sessions.current("w1").unwrap();
+        session.mark_stuck();
+        session.id()
+    };
+    assert!(
+        hub.core().lock().await.is_live("w1"),
+        "nothing else took it out"
+    );
+    hub.clone().disconnect_stuck("w1".to_owned(), id).await;
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Ok(Some(_)) = stream.message().await {}
+    })
+    .await;
+    assert!(ended.is_ok(), "the stream taken out ends");
+    assert!(!hub.core().lock().await.is_live("w1"));
+    drop(old);
+}
+
+/// agy's second review of M5.3i: an assignment delivered to a session that has just ended is
+/// unsent, so the master knows it never started there.
+#[tokio::test]
+async fn an_assignment_to_a_session_just_ended_is_unsent() {
+    let (hub, _db, mut client) = connected().await;
+    let (_live, _stream) = live_w1(&mut client).await;
+    let session = hub.sessions.current("w1").unwrap();
+    // Its end racing the delivery: ended, still found in the map.
+    session.end(Status::aborted("replaced"));
+    hub.deliver(vec![Outgoing {
+        worker_id: "w1".to_owned(),
+        message: pb::MasterMessage {
+            message: Some(master_message::Message::AssignTask(pb::AssignTask {
+                attempt_id: "a-lost".to_owned(),
+                ..pb::AssignTask::default()
+            })),
+            clock: None,
+        },
+    }]);
+    assert!(
+        hub.arrivals.never_started("w1", "a-lost"),
+        "never sent, so surely never started"
+    );
+}
+
+/// agy's review of M5.3i (rule D): once the master closes, a stream's end waiting behind its
+/// results queues nothing holding its session.
+#[tokio::test]
+async fn a_stream_ending_while_the_master_closes_queues_nothing() {
+    let (hub, _db, mut client) = connected().await;
+    let (_live, _stream) = live_w1(&mut client).await;
+    let session = hub.sessions.current("w1").unwrap();
+    hub.queue_results("w1", &session, &mut vec![finished_msg("a1")]);
+    hub.close_streams();
+    let core = hub.core();
+    let mut core = core.lock().await;
+    // As `serve_stream` would, its results still waiting: here, the queue emptied by closing.
+    hub.queued_results().push(QueuedResult {
+        worker_id: "w1".to_owned(),
+        stream: Arc::clone(&session),
+        message: Some(finished_msg("a2")),
+    });
+    hub.stream_ended(&mut core, "w1", &session).await;
+    assert!(
+        hub.queued_results().iter().all(|r| r.message.is_some()),
+        "no end queued while closing"
+    );
 }

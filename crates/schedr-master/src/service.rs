@@ -1257,21 +1257,28 @@ impl Hub {
         if results.is_empty() {
             return;
         }
-        let mut queue = self.queued_results();
-        // Closing: nothing more queued, the queue holding its stream's sender would keep the
-        // stream open (Codex's review of M5.2c). Asked under the queue's lock, which
-        // `close_streams` empties it under after setting this: one or the other.
-        if *self.closing.borrow() {
-            results.clear();
-            return;
-        }
-        queue.extend(results.drain(..).map(|message| QueuedResult {
+        let queued = results.drain(..).map(|message| QueuedResult {
             worker_id: worker_id.to_owned(),
             stream: stream.clone(),
             message: Some(message),
-        }));
+        });
+        self.enqueue(|queue| queue.extend(queued));
+    }
+
+    /// The one way into the round's queue: `change` applied under the queue's lock, unless the
+    /// master closes (nothing more queued: the queue holding a stream's session would keep the
+    /// stream open, Codex's review of M5.2c, agy's review of M5.3i). Asked under the queue's
+    /// lock, which `close_streams` empties it under after setting it: one or the other. The
+    /// round woken. Whether it was queued.
+    fn enqueue(&self, change: impl FnOnce(&mut Vec<QueuedResult>)) -> bool {
+        let mut queue = self.queued_results();
+        if *self.closing.borrow() {
+            return false;
+        }
+        change(&mut queue);
         drop(queue);
         self.finished.notify_one();
+        true
     }
 
     fn queued_results(&self) -> std::sync::MutexGuard<'_, Vec<QueuedResult>> {
@@ -1398,11 +1405,12 @@ impl Hub {
         self.metrics.round_part_done("results", began.elapsed());
         if !handling.back.is_empty() {
             // What a failed batch left unhandled: first in the next round, which is woken.
-            let mut queue = self.queued_results();
-            let later = std::mem::take(&mut *queue);
-            queue.extend(handling.back);
-            queue.extend(later);
-            self.finished.notify_one();
+            let back = std::mem::take(&mut handling.back);
+            self.enqueue(|queue| {
+                let later = std::mem::take(queue);
+                queue.extend(back);
+                queue.extend(later);
+            });
         }
         drop(core);
         self.deliver(handling.outgoing);
@@ -1519,13 +1527,20 @@ impl Hub {
     /// A stream's end, under the core's lock: the worker disconnected now, or once the round has
     /// handled what it queued before its end (M5.2cB), so that, a `Deregister`, still counts.
     async fn stream_ended(&self, core: &mut MasterCore, worker_id: &str, stream: &Arc<Session>) {
-        if self.results_waiting(worker_id) {
-            self.queued_results().push(QueuedResult {
-                worker_id: worker_id.to_owned(),
-                stream: stream.clone(),
-                message: None,
-            });
-            self.finished.notify_one();
+        // Behind its results, under one look at the queue; closing, nothing queued and nothing
+        // written (the master is stopping: its lease given back).
+        let mut behind = false;
+        let open = self.enqueue(|queue| {
+            behind = queue.iter().any(|r| r.worker_id == worker_id);
+            if behind {
+                queue.push(QueuedResult {
+                    worker_id: worker_id.to_owned(),
+                    stream: stream.clone(),
+                    message: None,
+                });
+            }
+        });
+        if !open || behind {
             return;
         }
         if let Err(error) = core.disconnected(worker_id, (self.clock)()).await {
@@ -2225,6 +2240,13 @@ impl HeartbeatAcks {
         }
     }
 
+    /// Whether its session is still its worker's current one.
+    fn is_current(&self) -> bool {
+        self.session
+            .upgrade()
+            .is_some_and(|session| self.sessions.is_current(&session))
+    }
+
     /// Master time now (a message's arrival).
     fn steady_now(&self) -> Timestamp {
         (self.clocks.1)((self.clocks.0)())
@@ -2246,7 +2268,11 @@ async fn read_stream(
                 // Superseded by a newer registration (replaced, or taken out of the hub and
                 // registered again): what it still brings is no sign of life and starts
                 // nothing (agy's second review of M5.3g).
-                if !arrivals.arrived_on(&worker_id, acks.stream_id, acks.steady_now()) {
+                // Not current any more (replaced, stuck or taken out): it records nothing, under
+                // the sessions' word first and Arrivals' lock then (agy's review of M5.3i).
+                if !acks.is_current()
+                    || !arrivals.arrived_on(&worker_id, acks.stream_id, acks.steady_now())
+                {
                     return;
                 }
                 // A heartbeat is answered whatever it carries; its numbers count when stamped.

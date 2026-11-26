@@ -119,10 +119,13 @@ impl Session {
         &self,
         mut message: pb::MasterMessage,
     ) -> Result<u64, mpsc::error::TrySendError<()>> {
-        let mut last = self
-            .numbers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = self.numbers();
+        // Nothing after its end, which it would queue behind and never be read, yet count as
+        // sent (agy's second review of M5.3i); nor once stuck. Under the numbering lock, which
+        // its end takes too: one comes before the other.
+        if self.is_ended() || self.is_stuck() {
+            return Err(mpsc::error::TrySendError::Closed(()));
+        }
         let number = *last + 1;
         if let Some(clock) = message.clock.as_mut() {
             clock.sequence = number;
@@ -141,8 +144,20 @@ impl Session {
     /// Ends the stream with `status` (unnumbered: no message), its serving and reading
     /// stopped.
     pub fn end(&self, status: Status) {
-        self.ended.send_replace(true);
+        // Under the numbering lock, as every send (see `send`); ended once, one status queued.
+        let _numbers = self.numbers();
+        if self.ended.send_replace(true) {
+            return;
+        }
         let _ = self.sender.try_send(Err(status));
+    }
+
+    /// The numbering lock: a leaf (nothing taken or awaited under it), shared by sending and
+    /// ending.
+    fn numbers(&self) -> std::sync::MutexGuard<'_, u64> {
+        self.numbers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -241,23 +256,43 @@ impl SessionWriter {
     /// Takes `worker_id`'s session out as replaced by a newer connection (decision 525): it
     /// ends, for its worker too if it still hears it, and its serving and reading stop.
     pub fn replace_out(&mut self, worker_id: &str) -> Option<Arc<Session>> {
-        let old = self.remove(worker_id, None)?;
-        old.end(Status::aborted(
-            "a newer connection of this worker replaced this stream",
-        ));
-        Some(old)
+        self.take_out(
+            worker_id,
+            None,
+            Status::aborted("a newer connection of this worker replaced this stream"),
+        )
     }
 
-    /// Takes `worker_id`'s session out, if it is `id`'s (any with `None`): the one taken out.
-    /// Its stream ends once its own server lets its sender go.
+    /// Takes `worker_id`'s session out, if it is `id`'s (any with `None`): the one taken out,
+    /// ended (agy's review of M5.3i: a session taken out without its end left its stream open
+    /// and its reader going), so its worker connects again.
     pub fn remove(&mut self, worker_id: &str, id: Option<u64>) -> Option<Arc<Session>> {
+        self.take_out(
+            worker_id,
+            id,
+            Status::unavailable("this master no longer serves this stream: connect again"),
+        )
+    }
+
+    /// The one way a session leaves the map: taken out if it is `id`'s, and ended with `status`.
+    fn take_out(
+        &mut self,
+        worker_id: &str,
+        id: Option<u64>,
+        status: Status,
+    ) -> Option<Arc<Session>> {
         // A stuck one too: it is still in the map, for the core to take out.
         let current = self.sessions.table.load().get(worker_id).cloned()?;
         if id.is_some_and(|id| id != current.id) {
             return None;
         }
-        // Closing meanwhile took it out already.
-        self.publish(|table| table.remove(worker_id)).ok().flatten()
+        // Closing meanwhile took it out already (and ended it).
+        let taken = self
+            .publish(|table| table.remove(worker_id))
+            .ok()
+            .flatten()?;
+        taken.end(status);
+        Some(taken)
     }
 
     /// A changed copy of the map published, unless the master closes: what `change` returned.

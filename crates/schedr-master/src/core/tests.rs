@@ -6368,3 +6368,55 @@ async fn the_same_incarnation_failing_half_way_gets_its_number_back() {
     assert!(core.check(&older).is_err(), "an older one still refused");
     assert!(core.check(&next).is_ok(), "its own retry isn't refused");
 }
+
+/// agy's review of M5.3i: a new incarnation failing half-way, after it took the worker's
+/// connection in the core, must leave the old incarnation's number: an older, held `Register`
+/// of the old incarnation stays refused (rule C: an undone registration leaves the connection as
+/// it was).
+#[tokio::test]
+async fn a_new_incarnation_failing_half_way_leaves_the_old_ones_number() {
+    let mut core = with_dag_of(&dag_file()).await;
+    let first = pb::Register {
+        connection: 5,
+        ..register("w1", "i1", vec![])
+    };
+    core.register(&first, later(1)).await.unwrap();
+    core.disconnected("w1", later(2)).await.unwrap();
+    refuse_roots(&core).await;
+    let newer = pb::Register {
+        connection: 1,
+        roots: vec![root("h9")],
+        ..register("w1", "i2", vec![])
+    };
+    assert!(core.register(&newer, later(3)).await.is_err());
+    let held = pb::Register {
+        connection: 3,
+        ..register("w1", "i1", vec![])
+    };
+    assert!(
+        core.check(&held).is_err(),
+        "the old incarnation's held one still refused"
+    );
+    assert!(
+        core.check(&newer).is_ok(),
+        "the new one's retry isn't refused"
+    );
+}
+
+/// agy's review of M5.3i: a worker this master didn't know, its first registration failing,
+/// stays unknown (rule C): nothing would ever forget what was kept for it.
+#[tokio::test]
+async fn an_unknown_worker_failing_its_first_registration_stays_unknown() {
+    let mut core = with_dag_of(&dag_file()).await;
+    refuse(&core, "workers", "w9").await;
+    assert!(!core.knows("w9"));
+    assert!(
+        core.register(&register("w9", "i1", vec![]), later(1))
+            .await
+            .is_err()
+    );
+    assert!(
+        !core.knows("w9"),
+        "a failed first registration leaves it unknown"
+    );
+}
