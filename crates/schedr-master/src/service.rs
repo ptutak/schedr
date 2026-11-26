@@ -134,6 +134,10 @@ impl std::fmt::Debug for WorkerIdentity {
 #[derive(Debug, Clone)]
 pub struct Hub {
     core: Arc<Mutex<MasterCore>>,
+    /// Control calls dropped before they finished, for tests: a test of the path a worker
+    /// leaving takes waits for it instead of sleeping (agy's sixth review of M5.3g).
+    #[cfg(test)]
+    calls_dropped: Arc<std::sync::atomic::AtomicUsize>,
     /// Each worker's current stream. Held only briefly (a send never waits), so the core's
     /// lock, which can be held while waiting for it, never waits on a slow worker; a delivery
     /// goes out whole under it, one after another.
@@ -282,6 +286,8 @@ impl Hub {
             core: Arc::new(Mutex::new(core)),
             streams: Arc::new(Mutex::new(BTreeMap::new())),
             closing: Arc::new(watch::channel(false).0),
+            #[cfg(test)]
+            calls_dropped: Arc::default(),
             steady: core_steady,
             epoch: 0,
             heard: Arc::default(),
@@ -2444,11 +2450,13 @@ impl Master for Hub {
         // Not waited for once the master stops: a stream that never sends `Register` would
         // keep tonic's graceful shutdown waiting (B219).
         let mut closing = self.closing.subscribe();
+        // Closing first, as every wait racing it (agy's sixth review of M5.3g).
         let first = tokio::select! {
-            first = inbound.message() => first?,
+            biased;
             _ = closing.wait_for(|closing| *closing) => {
                 return Err(Status::unavailable(STOPPING));
             }
+            first = inbound.message() => first?,
         }
         .ok_or_else(|| Status::invalid_argument("the stream ended before `Register`"))?;
         let Some(worker_message::Message::Register(register)) = first.message else {
@@ -2469,6 +2477,8 @@ impl Master for Hub {
         // slow master): stopped half-way, the worker would stay live with no stream behind it,
         // refused from then on (B171). Finished, its stream's end disconnects it as usual.
         let (caller, _waiting) = oneshot::channel();
+        #[cfg(test)]
+        let _counted = CountOnDrop(Arc::clone(&self.calls_dropped));
         tokio::spawn(self.clone().open_stream(register, inbound, caller))
             .await
             .map_err(|e| Status::internal(format!("the registration failed: {e}")))?
@@ -2486,10 +2496,11 @@ impl Master for Hub {
         let mut closing = self.closing.subscribe();
         loop {
             let part = tokio::select! {
-                part = parts.message() => part?,
+                biased;
                 _ = closing.wait_for(|closing| *closing) => {
                     return Err(Status::unavailable(STOPPING));
                 }
+                part = parts.message() => part?,
             };
             let Some(part) = part else { break };
             upload
@@ -2655,4 +2666,15 @@ fn lock_slow(
 ) -> std::sync::MutexGuard<'_, Option<std::time::Instant>> {
     last.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Counts its drop, for [`Hub::calls_dropped`].
+#[cfg(test)]
+struct CountOnDrop(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(test)]
+impl Drop for CountOnDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }

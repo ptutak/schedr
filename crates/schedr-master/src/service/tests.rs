@@ -3706,6 +3706,43 @@ fn register_running(connection: u64, attempts: &[&str]) -> pb::WorkerMessage {
     message
 }
 
+/// As [`register_running`], of incarnation `incarnation`.
+fn register_running_as(incarnation: &str, connection: u64, attempts: &[&str]) -> pb::WorkerMessage {
+    let mut message = register_running(connection, attempts);
+    if let Some(worker_message::Message::Register(register)) = &mut message.message {
+        register.incarnation_id = incarnation.to_owned();
+    }
+    message
+}
+
+/// `message` (a `Register` of `w1` whose journal runs `attempt`) waiting for the core's lock,
+/// its worker leaving meanwhile: the master sees the call dropped before the lock is let go,
+/// so the left path runs, not inferred after a sleep (agy's sixth review of M5.3g); returns once
+/// it was handled.
+async fn left_while_waiting(
+    hub: &Hub,
+    client: &MasterClient<Channel>,
+    message: pb::WorkerMessage,
+    attempt: &str,
+) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let core = hub.core();
+    let busy = core.lock().await;
+    let dropped = hub.calls_dropped.load(SeqCst);
+    let mut left_client = client.clone();
+    let left =
+        tokio::spawn(async move { left_client.control(tokio_stream::iter(vec![message])).await });
+    until("it waits", || hub.arrivals.start_waiting(attempt)).await;
+    left.abort();
+    let _ = left.await;
+    until("the master saw it leave", || {
+        hub.calls_dropped.load(SeqCst) > dropped
+    })
+    .await;
+    drop(busy);
+    until("handled", || hub.arrivals.registrations_waiting("w1") == 0).await;
+}
+
 /// `w1` registered and live on a stream numbered high: its stream, and the way to it.
 async fn live_w1(
     client: &mut MasterClient<Channel>,
@@ -3764,23 +3801,15 @@ async fn a_refused_registration_leaves_the_live_streams_start() {
 async fn a_left_registration_keeps_no_start_beside_a_live_stream() {
     let (hub, _db, mut client) = connected().await;
     let (_live, _stream) = live_w1(&mut client).await;
-    let core = hub.core();
-    let busy = core.lock().await;
-    let mut left_client = client.clone();
-    let left = tokio::spawn(async move {
-        left_client
-            .control(tokio_stream::iter(vec![register_running(1, &["a_stale"])]))
-            .await
-    });
-    until("the left one waits", || {
-        hub.arrivals.start_waiting("a_stale")
-    })
+    // Another incarnation, admissible but beside the live one: refused, it keeps nothing (agy's
+    // sixth review: the stale number used before was refused earlier, by `check`).
+    left_while_waiting(
+        &hub,
+        &client,
+        register_running_as("i2", 1, &["a_stale"]),
+        "a_stale",
+    )
     .await;
-    left.abort();
-    let _ = left.await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    drop(busy);
-    until("its start gone", || !hub.arrivals.start_waiting("a_stale")).await;
     assert!(
         !hub.arrivals.start_waiting("a_stale"),
         "nothing kept beside the live stream"
@@ -3799,19 +3828,11 @@ async fn a_left_stale_registration_keeps_no_start() {
         core.try_lock().is_ok_and(|core| !core.is_live("w1"))
     })
     .await;
-    let busy = core.lock().await;
-    let mut left_client = client.clone();
-    let left = tokio::spawn(async move {
-        left_client
-            .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
-            .await
-    });
-    until("the stale one waits", || hub.arrivals.start_waiting("a1")).await;
-    left.abort();
-    let _ = left.await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    drop(busy);
-    until("its start gone", || !hub.arrivals.start_waiting("a1")).await;
+    left_while_waiting(&hub, &client, register_running(1, &["a1"]), "a1").await;
+    assert!(
+        !hub.arrivals.start_waiting("a1"),
+        "a stale one keeps nothing"
+    );
 }
 
 /// Agy's fourth review of M5.3g: a newer `Register` its worker left while it waited (its old
@@ -3821,21 +3842,7 @@ async fn a_left_stale_registration_keeps_no_start() {
 async fn a_left_newer_registration_keeps_its_starts() {
     let (hub, _db, mut client) = connected().await;
     let (_live, _stream) = live_w1(&mut client).await;
-    let core = hub.core();
-    let busy = core.lock().await;
-    let mut left_client = client.clone();
-    let left = tokio::spawn(async move {
-        left_client
-            .control(tokio_stream::iter(vec![register_running(2_000, &["a1"])]))
-            .await
-    });
-    until("the newer one waits", || hub.arrivals.start_waiting("a1")).await;
-    left.abort();
-    let _ = left.await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    drop(busy);
-    // Its guard gone, what remains is what it kept (agy's fifth review of M5.3g).
-    until("handled", || hub.arrivals.registrations_waiting("w1") == 0).await;
+    left_while_waiting(&hub, &client, register_running(2_000, &["a1"]), "a1").await;
     assert!(hub.arrivals.start_waiting("a1"), "kept for its next try");
 }
 
@@ -3844,23 +3851,28 @@ async fn a_left_newer_registration_keeps_its_starts() {
 #[tokio::test]
 async fn a_left_registration_of_an_unknown_worker_keeps_nothing() {
     let (hub, _db, client) = connected().await;
-    let core = hub.core();
-    let busy = core.lock().await;
-    let mut left_client = client.clone();
-    let left = tokio::spawn(async move {
-        left_client
-            .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
-            .await
-    });
-    until("it waits", || hub.arrivals.start_waiting("a1")).await;
-    left.abort();
-    let _ = left.await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    drop(busy);
-    until("handled", || hub.arrivals.registrations_waiting("w1") == 0).await;
+    left_while_waiting(&hub, &client, register_running(1, &["a1"]), "a1").await;
     assert!(
         !hub.arrivals.start_waiting("a1"),
         "nothing kept for an unknown worker"
     );
-    drop(client);
+    assert!(
+        !hub.core().lock().await.knows("w1"),
+        "it left before registering"
+    );
+}
+
+/// Agy's sixth review of M5.3g: a master stopping while it still leads let a waiting call in
+/// about half the time (an unbiased select); closing comes first.
+#[tokio::test]
+async fn a_master_closing_while_it_leads_lets_nothing_in() {
+    let (hub, _db, _client) = connected().await;
+    assert!(
+        hub.leading_unless_closing().await,
+        "leading, not closing: in"
+    );
+    hub.closing.send_replace(true);
+    for _ in 0..50 {
+        assert!(!hub.leading_unless_closing().await, "closing first");
+    }
 }

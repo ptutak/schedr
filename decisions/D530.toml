@@ -1,0 +1,22 @@
+title = "The registration path keeps its structure: no single owner of a worker's registration"
+date = 2026-11-26
+by = "user"
+status = "active"
+topic = "workers"
+section = "Registration"
+summary = '''
+A worker's registration keeps its present shape: its state in the core's connections, the hub's
+streams and heard counters, and Arrivals, each under its own lock, the registration changing them
+in steps; the invariants between them (a connection not live disconnects the dispatcher too, a
+stream current only once numbered under the core's lock, a waiting registration's starts its own)
+kept by single functions where the reviews showed two places (`MasterCore::not_live`,
+`Arrivals::registered`, the `Registering` guard). Not chosen: one owner of a worker's
+registration under the core's lock, hot paths reading an atomic stream number and a read-mostly
+map of senders (Claude's option A after M5.3g's six reviews: in its naive form the readers, the
+heartbeat answers and the deliveries would wait behind rounds, B6 and D258 undone; the user,
+2026-11-26: not done, for performance); an actor per worker (the core stays global); assertions
+of the invariants only.
+'''
+history = "JOURNAL.md#D530"  # <a id="D530"></a> starts its JOURNAL.md entry
+step = "M5.3g"
+code = ["crates/schedr-master/src/core.rs::not_live", "crates/schedr-master/src/core.rs::Registering", "crates/schedr-master/src/service.rs::open_stream"]

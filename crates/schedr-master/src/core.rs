@@ -1223,11 +1223,22 @@ impl MasterCore {
     /// raised by a connection never in place, so its next try isn't refused as no newer. Memory
     /// only: the database's word is the next leader's.
     pub fn registration_undone(&mut self, worker_id: &str, before: Option<u64>) {
+        self.not_live(worker_id);
         if let Some(connection) = self.connections.get_mut(worker_id) {
-            connection.live = false;
             connection.newest = before;
         }
+    }
+
+    /// The one way a worker's connection goes not live: the core and the dispatcher together
+    /// (agy's sixth review of M5.3g: a third place left the worker connected at the dispatcher,
+    /// rounds picking a worker with no stream). Whether it was live. Memory only.
+    fn not_live(&mut self, worker_id: &str) -> bool {
+        let was = self
+            .connections
+            .get_mut(worker_id)
+            .is_some_and(|connection| std::mem::replace(&mut connection.live, false));
         self.dispatcher.worker_disconnected(worker_id);
+        was
     }
 
     /// Whether this master knows `worker_id` (registered, or read back): only then does its
@@ -1331,15 +1342,15 @@ impl MasterCore {
             }
             Err(error) => Err(error),
         };
-        if accepted.is_err()
-            && let Some(connection) = self.connections.get_mut(worker_id)
-        {
+        if accepted.is_err() {
             // A registration that failed half-way (the database) leaves no live stream behind:
             // the worker's next attempt is accepted, or its lease runs out.
-            connection.live = false;
-            connection.newest = before
-                .filter(|(incarnation, _)| *incarnation == connection.incarnation)
-                .and_then(|(_, newest)| newest);
+            self.not_live(worker_id);
+            if let Some(connection) = self.connections.get_mut(worker_id) {
+                connection.newest = before
+                    .filter(|(incarnation, _)| *incarnation == connection.incarnation)
+                    .and_then(|(_, newest)| newest);
+            }
         }
         accepted
     }
@@ -2046,11 +2057,7 @@ impl MasterCore {
     ///
     /// [`CoreError::Db`] if the registry can't be written.
     pub async fn disconnected(&mut self, worker_id: &str, now: Timestamp) -> Result<(), CoreError> {
-        if let Some(connection) = self.connections.get_mut(worker_id)
-            && connection.live
-        {
-            connection.live = false;
-            self.dispatcher.worker_disconnected(worker_id);
+        if self.not_live(worker_id) {
             self.db
                 .set_worker_state(worker_id, WorkerState::Disconnected, now)
                 .await?;

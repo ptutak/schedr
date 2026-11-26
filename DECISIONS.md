@@ -80,6 +80,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D530 | 2026-11-26 | user | built M5.3g | workers | The registration path keeps its structure: no single owner of a worker's registration |
 | D529 | 2026-11-26 | user | built M5.3d | assignment | An extension task nobody offers ends unschedulable after 10 minutes, a hidden timing |
 | D528 | 2026-11-26 | user | built M5.3b | cleanup | A cleanup let through is still moved after its worker is lost: at least once |
 | D527 | 2026-11-25 | user | built M5.3d | assignment | An extension task no live worker offers waits with its reason, then ends unschedulable |
@@ -1157,6 +1158,7 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### workers
 
+- D530: The registration path keeps its structure: no single owner of a worker's registration
 - D526: A worker leaves a connection whose heartbeats go unanswered, well before the lease
 - D524: A worker leaves a master that accepts it and says nothing: connecting and registering have limits
 - D512: One task's fault never fails another: no shared-loop extensions or tasks; wait steps stay our API, no lifecycle built on them

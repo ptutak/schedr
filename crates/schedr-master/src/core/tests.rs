@@ -6272,3 +6272,35 @@ async fn a_cancelled_unoffered_tasks_wait_is_forgotten() {
     core.tick(later(62)).await.unwrap();
     assert_eq!(core.dispatcher().refusals_kept(), 0, "forgotten");
 }
+
+/// Agy's sixth review of M5.3g: a registration failing half-way, after the dispatcher had taken
+/// the worker as connected, left it so with no stream: rounds picked a worker nobody could reach.
+/// The rule: a connection goes not live in one place, which tells the dispatcher too.
+#[tokio::test]
+async fn a_registration_failing_half_way_leaves_the_worker_disconnected_everywhere() {
+    let mut core = with_dag_of(&dag_file()).await;
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    // A root it reports anew is recorded after the dispatcher's registration: refused.
+    let db = core.db.clone();
+    let schedr_db::Pool::Sqlite(pool) = db.pool() else {
+        unreachable!("the tests' database is SQLite")
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_roots BEFORE INSERT ON root_hashes \
+         BEGIN SELECT RAISE(ABORT, 'refused by the test'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let newer = pb::Register {
+        roots: vec![root("h9")],
+        ..register("w1", "i1", vec![])
+    };
+    let again = core.register(&newer, later(1)).await;
+    assert!(again.is_err(), "{again:?}");
+    assert!(!core.is_live("w1"));
+    assert!(
+        !core.dispatcher().worker("w1").unwrap().connected,
+        "not live in the core, not connected at the dispatcher"
+    );
+}

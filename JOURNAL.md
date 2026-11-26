@@ -3860,3 +3860,14 @@ waiting registration's own (its `Registering` guard), kept past it only as the s
 Tests: `a_refused_registration_leaves_the_live_streams_start`,
 `a_left_registration_keeps_no_start_beside_a_live_stream`, `a_left_stale_registration_keeps_no_start`,
 `a_left_newer_registration_keeps_its_starts`, `a_left_registration_of_an_unknown_worker_keeps_nothing`.
+
+### <a id="D530"></a>2026-11-26: the registration path keeps its structure (decision 530)
+
+After M5.3g's six rounds of agy's review (28 findings in the registration path, rounds 2 to 5 mostly
+in the previous round's fixes), Claude proposed restructuring the path (option A: one owner of a
+worker's registration under the core's lock, hot paths on an atomic stream number and a read-mostly
+map of senders), B (an actor per worker) and C (assertions only). The user, 2026-11-26: "we don't
+do the restructure because as you said it would hit the performance" (Claude had said the naive
+form of A would; its split form was meant to cost the same). The sixth round's fixes instead keep
+each invariant in one function. The two review rules of the same day (step back before a fix; a
+design check after three rounds) came from this.
