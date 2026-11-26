@@ -46,8 +46,27 @@ jobs:
     timeout-minutes: 10
     outputs:
       scenarios: ${{ steps.list.outputs.scenarios }}
+      base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history for a paired run: its base may be a short commit ID.
+          fetch-depth: ${{ inputs.base != '' && '0' || '1' }}
+      # A paired run's base as a full commit ID: checkout fetches a short one as a branch's
+      # name and finds nothing (run 45814320439). A short ID, a branch or a tag all work.
+      - name: The paired run's base
+        id: base
+        if: inputs.base != ''
+        env:
+          BASE: ${{ inputs.base }}
+        run: |
+          sha=$(git rev-parse --verify --quiet "${BASE}^{commit}" || git rev-parse --verify --quiet "origin/${BASE}^{commit}" || true)
+          if [ -z "$sha" ]; then
+            echo "::error::base $BASE names no commit, branch or tag of this repository"
+            exit 1
+          fi
+          echo "base $BASE is $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       # Nightly: when main is where the last passing run left it, only the random chaos runs,
       # with a fresh seed (M4.8z: a new seed each night).
       - name: Changed since the last passing run?
@@ -263,7 +282,7 @@ jobs:
           path: new
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.base }}
+          ref: ${{ needs.plan.outputs.base }}
           path: base
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
