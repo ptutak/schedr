@@ -149,19 +149,31 @@ async fn a_removal_of_files_never_written_is_no_error() {
 #[tokio::test]
 async fn another_attempts_request_doesnt_wait_for_a_group_in_flight() {
     // Two groups at once: a2, handed in while a1's group is on a slow disk, is written beside
-    // it, not after it (one stall's time for both, not two). The stall long beside the bound's
-    // slack: at 300 ms against 500, a loaded `make check` took 673 ms (2026-11-23).
+    // it, not after it. Told by the gap between their reports, not the whole run's time (a
+    // loaded `make check` stretched that past its bound, 1.703 s against 1.7, 2026-11-26): one
+    // after the other, a2 comes a whole stall after a1; beside it, within a small part of one.
     let stall = Duration::from_secs(1);
-    let (_dir, journal, writer, _reported) = writer(stall);
-    let began = Instant::now();
+    let dir = tempfile::TempDir::new().unwrap();
+    let journal = Journal::new(dir.path().join("journal"));
+    let when: Arc<Mutex<Vec<(String, Instant)>>> = Arc::default();
+    let seen = Arc::clone(&when);
+    let writer = Writer::start(
+        journal.clone(),
+        move |w: Written<&'static str>| {
+            seen.lock().unwrap().push((w.attempt_id, Instant::now()));
+        },
+        stall,
+    );
     writer.submit("a1", Op::Write(Box::new(finished("a1"))), "first");
     tokio::time::sleep(Duration::from_millis(30)).await;
     writer.submit("a2", Op::Write(Box::new(finished("a2"))), "second");
     writer.flush().await;
     assert_eq!(ids(&journal), ["a1", "a2"]);
+    let when = when.lock().unwrap().clone();
+    let at = |id: &str| when.iter().find(|(i, _)| *i == id).unwrap().1;
+    let gap = at("a2").saturating_duration_since(at("a1"));
     assert!(
-        began.elapsed() < Duration::from_millis(1700),
-        "beside it, not after it: {:?}",
-        began.elapsed()
+        gap < stall / 2,
+        "beside it, not after it: a2 reported {gap:?} after a1"
     );
 }
