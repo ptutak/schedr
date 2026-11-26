@@ -121,6 +121,8 @@ I talk only to you. You design, write all code, docs and records, and decide wha
 
 - **Local commits need no asking:** one per finished piece; the reviewed state and the review's
   fixes apart. Staging only within a piece. Not committed: experiments, debug code, stray files.
+- **The agent's skill repositories** (`~/.claude/skills/<name>`) are committed and pushed at once
+  after each change, without asking (the user, 2026-11-26); this repository waits for my word.
 - **Squash per point before the push** (a step, a set of fixes), one message listing the pieces:
   `M2.1: <what>, <what>; <what>`, then the co-author trailer. `git branch backup/<point>` before
   a squash, reset or large revert.
@@ -141,6 +143,8 @@ I talk only to you. You design, write all code, docs and records, and decide wha
 - Report what happened: passed, failed (with output), skipped. One status line now and then in
   long work.
 - A side question: handle it fully, then return to the plan. Propose extra work, don't do it.
+- What I say is what I mean (the user, 2026-11-26): a remark or an observation isn't an
+  instruction. Before acting on what it seems to imply, ask in one line.
 - Markdown in chat, no `<ul>` or `<li>`.
 
 ## Code I value
