@@ -2,7 +2,8 @@ name: Stress
 
 # The stress suite (crates/schedr/tests/stress, PLAN.md 2.10b): nightly when main changed since
 # the last passing run, and by hand (any profile). Not on each push: see ci.yml. Beside it,
-# the clock simulator (decision 446) with many more scenarios than a push runs.
+# the clock simulator (decision 446) with many more scenarios than a push runs, and chaos on
+# kind (M5.3f).
 on:
   schedule:
     - cron: "17 2 * * *"
@@ -200,6 +201,78 @@ jobs:
           name: stress-report-${{ github.run_id }}
           path: target/stress/
           if-no-files-found: warn
+
+  # Chaos on kind (M5.3f, scripts/kind_chaos.py): a kind cluster of three nodes on this commit's
+  # images, a seeded schedule of faults under load, checked on guarantees only. The seed is the
+  # run's number (each night another schedule) and printed; the record is uploaded every time: a
+  # failure is read from it, the seed repeating the schedule but not the cluster's timing.
+  chaos:
+    if: github.event_name == 'schedule' || inputs.filter == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+      # Ours, not whatever the runner's image has: kind's release names its node image by digest
+      # (kindest/node v1.37.0), and kubectl is of the same minor.
+      - name: kind and kubectl
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/bin/kind" \
+            https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/bin/kubectl" \
+            https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl
+          sha256sum --check --strict <<SUMS
+          aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/bin/kind
+          c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4  $RUNNER_TEMP/bin/kubectl
+          SUMS
+          chmod +x "$RUNNER_TEMP/bin/kind" "$RUNNER_TEMP/bin/kubectl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # This commit's: its CI run's wheel and docs, as the release workflow builds its images.
+      - name: This commit's CI run
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A push's run of this repository only: a pull request's builds another tree (agy's
+          # review of M5.3f).
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=10" \
+            -q "[.workflow_runs[] | select(.head_repository.full_name == \"$GITHUB_REPOSITORY\")][0].id // empty")
+          [ -n "$run" ] || { echo "no passing CI run of a push of $GITHUB_SHA"; exit 1; }
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+          run-id: ${{ steps.ci.outputs.run }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-site
+          path: site
+          run-id: ${{ steps.ci.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: This commit's images
+        run: |
+          scripts/docs-dist.sh site
+          for image in schedr schedr-server; do
+            docker build -q -f "images/$image/Dockerfile" -t "localhost/$image:commit" .
+          done
+          echo "IMAGE=localhost/schedr:commit" >> "$GITHUB_ENV"
+          echo "SERVER_IMAGE=localhost/schedr-server:commit" >> "$GITHUB_ENV"
+      - name: Chaos, seed ${{ github.run_number }}
+        env:
+          SEED: ${{ github.run_number }}
+        run: CONTAINER=docker python3 scripts/kind_chaos.py run --seed "$SEED"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: chaos-record-${{ github.run_number }}
+          path: target/kind-chaos
+          retention-days: 14
+
 
   # The clock simulator's master side with 600 fresh scenarios every night, whether main changed
   # or not (each push runs the same dozen): the faults that break a rule need rare timings
