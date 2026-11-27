@@ -38,14 +38,13 @@ with Dag(
 
 ## Status
 
-**1.2.1 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
+**1.3.0 is the current release** (`pip install schedr`; `CHANGELOG.md`). 1.0.0, the first
 stable one, brought M1 to M4B of `PLAN.md`: standalone and distributed, the fork server, the
 web UI and the native API. 1.1.0 added M5.1: a faster master (34-67 % more tasks a second in
 the stress suite than 1.0.0) and metrics in the web UI. 1.2.0 adds M5.2: a faster master again
 (107-112 tasks a second in the stress suite's throughput scenario on CI's runner) and
 extensions, task kinds run by a plugin in any language, with a Kubernetes plugin; 1.2.1 gives every connection between
-its processes a time limit, and the chart hot standby masters. 1.3.0rc1, its release candidate on
-TestPyPI, brings M5.3: a worker's new connection replaces one that died without a word,
+its processes a time limit, and the chart hot standby masters. 1.3.0 brings M5.3: a worker's new connection replaces one that died without a word,
 extension tasks placed by the plugins workers offer at their version, a `cleanup_anywhere`
 cleanup that runs once a worker is lost, and `schedr-ctx`, a small program for scripts in a task;
 it adds a migration and protocol 2.3 (upgrade the workers with the master). Within 1.x the database schema changes
@@ -146,8 +145,8 @@ Wheels for Linux x86_64 (glibc and musl), Linux aarch64 and macOS arm64; each ca
 the package: standalone and workers, the base for your own image), `ghcr.io/ptutak/schedr-slim`
 (the same without the task libraries and connection clients) and
 `ghcr.io/ptutak/schedr-server` (the binary alone: master, webserver and UI), on Debian
-(glibc), tagged with the version (`1.2.1`) and its series (`1.2`); the same on Alpine add
-`-alpine` (`1.2.1-alpine`). There is no `latest`: a deployment names the version it runs.
+(glibc), tagged with the version (`1.3.0`) and its series (`1.3`); the same on Alpine add
+`-alpine` (`1.3.0-alpine`). There is no `latest`: a deployment names the version it runs.
 
 ## Trying it
 
