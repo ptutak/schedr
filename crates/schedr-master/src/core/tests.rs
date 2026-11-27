@@ -6682,3 +6682,19 @@ async fn a_cut_off_commit_is_read_back_about_its_hold() {
     assert!(super::start_landed(&hold(0))(Some(&given)));
     assert!(super::refusal_landed("w1", &hold(0))(Some(&given)));
 }
+
+/// B305 (fixed by decision 535): a late `Finished` of an attempt's earlier hold, read on the stream
+/// after its moved cleanup was assigned there, doesn't erase that assignment's record: they are
+/// two IDs, so the master still tells the cleanup never started.
+#[test]
+fn an_earlier_holds_late_finished_leaves_the_moved_cleanups_assignment_known() {
+    let arrivals = Arrivals::default();
+    let stream = arrivals.new_stream("w1");
+    arrivals.assigned("w1", stream, &hold("a1_1"), 4);
+    arrivals.answered_on("w1", stream, &hold("a1"));
+    arrivals.read("w1", stream, 4);
+    assert!(
+        arrivals.never_started("w1", &hold("a1_1")),
+        "the moved cleanup's assignment is still known, and never started"
+    );
+}

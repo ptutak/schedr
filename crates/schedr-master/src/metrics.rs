@@ -409,6 +409,9 @@ pub struct MasterMetrics {
     /// The tick being broken down, while one is (`slow_tick_log`, M5.3e): its parts' times and
     /// its waits for the core's lock.
     tick_parts: std::sync::Arc<std::sync::Mutex<Option<TickParts>>>,
+    /// Whether a tick is being broken down: checked before `tick_parts` is locked, so with the
+    /// log off (the default) no round part or lock release takes that lock (the user, 2026-11-27).
+    tick_on: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// From a task's start on its worker to the master recording it.
     pub start_recorded: Histogram,
     /// How long the core lock was waited for, by who waited.
@@ -491,6 +494,7 @@ impl Default for MasterMetrics {
     fn default() -> Self {
         Self {
             tick_parts: std::sync::Arc::default(),
+            tick_on: std::sync::Arc::default(),
             // 1 ms to about 16 s, each bucket √2 times the last: fine enough for scenario 14
             // to tell a round's p99 one step worse from two (M2.5.2).
             tick_duration: Histogram::new(exponential_buckets(0.001, std::f64::consts::SQRT_2, 29)),
@@ -599,12 +603,27 @@ impl MasterMetrics {
     /// Starts breaking a tick down ([`Self::end_tick`]).
     pub fn begin_tick(&self) {
         *self.tick_parts() = Some(TickParts::default());
+        self.tick_on
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// The tick's parts since [`Self::begin_tick`]; none if it wasn't begun.
     #[must_use]
     pub fn end_tick(&self) -> Option<TickParts> {
+        if !self
+            .tick_on
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return None;
+        }
         self.tick_parts().take()
+    }
+
+    /// The tick being broken down, if one is: with none, no lock is taken.
+    fn tick_breakdown(&self) -> Option<std::sync::MutexGuard<'_, Option<TickParts>>> {
+        self.tick_on
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then(|| self.tick_parts())
     }
 
     fn tick_parts(&self) -> std::sync::MutexGuard<'_, Option<TickParts>> {
@@ -617,7 +636,8 @@ impl MasterMetrics {
     /// only another holder's, the round's own time being its parts.
     pub fn core_lock_held(&self, by: &str, took: Duration) {
         if by != "round"
-            && let Some(parts) = self.tick_parts().as_mut()
+            && let Some(mut breakdown) = self.tick_breakdown()
+            && let Some(parts) = breakdown.as_mut()
         {
             *parts.held.entry(by.to_owned()).or_default() += took;
         }
@@ -626,7 +646,8 @@ impl MasterMetrics {
     /// Records a wait of `took` for the core lock by `by`.
     pub fn core_lock_waited(&self, by: &str, took: Duration) {
         if by == "round"
-            && let Some(parts) = self.tick_parts().as_mut()
+            && let Some(mut breakdown) = self.tick_breakdown()
+            && let Some(parts) = breakdown.as_mut()
         {
             parts.lock_wait += took;
         }
@@ -637,7 +658,9 @@ impl MasterMetrics {
 
     /// Records a part of a round that took `took`.
     pub fn round_part_done(&self, part: &str, took: Duration) {
-        if let Some(parts) = self.tick_parts().as_mut() {
+        if let Some(mut breakdown) = self.tick_breakdown()
+            && let Some(parts) = breakdown.as_mut()
+        {
             *parts.parts.entry(part.to_owned()).or_default() += took;
         }
         self.round_part

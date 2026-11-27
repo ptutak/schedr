@@ -55,13 +55,6 @@ step touches their code or the user schedules them.
 |---|---|---|---|---|---|
 | 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
 | 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
-| 3 | B305: a stale Finished erases the stream's record of a later assignment of the same attempt, so the master can't tell that assignment never started (Suspected) | 1 | low | rare | reliability |
-
-## B305: a stale Finished erases the stream's record of a later assignment of the same attempt, so the master can't tell that assignment never started (Suspected)
-
-- **Rating:** severity **low**, probability **rare**, reliability (score 1): The stream reader calls `Arrivals::answered_on` for every `Finished` it reads (`service.rs`), removing the attempt from the stream's `assigned`. A late `Finished` from the task's own run, read after the same worker was assigned that attempt's moved cleanup, erases that assignment's record: `never_started` then answers not known (it may run there), so a cleanup assignment the worker never got waits for the worker's own answer or its loss instead of moving at once. The safe side: a delay, never a cleanup skipped or run twice.
-- **Found:** agy's review of B304's fix (finding 3, rated critical there); read by Claude: `answered_on` only removes, and `never_started` is `false` when the record is gone.
-- **A fix:** remove the record for a `Finished` only when it can close the assignment, or only on `Started` and `Rejected`.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 
