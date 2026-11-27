@@ -221,6 +221,7 @@ async fn an_instance_is_assigned_once_with_the_next_try_number() {
             map_index: -1,
             result_kept: false,
             cleanup_moves: 0,
+            cleanup_holder: 0,
             moving: false,
         }
     );
@@ -1037,6 +1038,19 @@ async fn a_flush_of_reports_keeps_only_its_workers_attempts_and_trims_as_one_by_
             .await
             .unwrap(),
         (0, 0)
+    );
+    // Nor those of a hold that isn't its current one (decision 535; agy's fifth review of
+    // B304), its own worker's or not.
+    let mut later_hold = status("w1", 998);
+    later_hold.attempt_id = format!("{attempt}_1");
+    let mut later_link = link("w1", "l0");
+    later_link.attempt_id = format!("{attempt}_1");
+    assert_eq!(
+        db.add_attempt_reports(&[later_hold], &[later_link])
+            .await
+            .unwrap(),
+        (0, 0),
+        "hold 1 isn't the current hold"
     );
     let (stored, links) = db.attempt_reports(&attempt).await.unwrap();
     assert_eq!(stored.len(), usize::try_from(MAX_STATUSES).unwrap());

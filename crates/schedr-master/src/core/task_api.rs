@@ -2,6 +2,7 @@
 //! through the API's own router as the task's identity, on an allow-list of routes, so a task
 //! needs no URL or token and reaches nothing else.
 
+use schedr_model::hold::HoldId;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -307,8 +308,12 @@ impl MasterCore {
                 refusal("a trigger can't send notifications; a task can"),
             ));
         }
-        let attempt = self.db.attempt(&call.attempt_id).await?;
-        let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id && a.status.is_none())
+        // A moved cleanup's process calls under its hold's ID, and only the current hold's
+        // counts (decision 535).
+        let hold = HoldId::parse(&call.attempt_id);
+        let attempt = self.db.attempt(hold.attempt()).await?;
+        let Some(attempt) =
+            attempt.filter(|a| a.worker_id == worker_id && a.hold() == hold && a.status.is_none())
         else {
             return Ok((403, refusal("no open attempt of this worker makes it")));
         };
@@ -412,10 +417,11 @@ impl MasterCore {
             });
             return Ok(holds.then(|| format!("trigger:{}", call.trigger_dag_id)));
         }
-        let Some(attempt) = self.db.attempt(&call.attempt_id).await? else {
+        let hold = HoldId::parse(&call.attempt_id);
+        let Some(attempt) = self.db.attempt(hold.attempt()).await? else {
             return Ok(None);
         };
-        if attempt.worker_id != worker_id || attempt.status.is_some() {
+        if attempt.worker_id != worker_id || attempt.hold() != hold || attempt.status.is_some() {
             return Ok(None);
         }
         let dag = self

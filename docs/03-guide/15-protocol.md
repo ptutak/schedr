@@ -52,6 +52,12 @@ answers with the cluster's slow-equals (`slow_equals_ms`, see
 [The waiting queue](05-workers.md#the-waiting-queue)).
 
 Each `JournalEntry.handles` in `Register` counts the handles in that attempt's worker journal.
+Every message about an attempt names one hold of it. The task's own run is the attempt's ID; a
+moved cleanup is assigned under `<attempt>_<n>`, its `n`th holder (each worker it is given to
+gets the next number), and the worker uses that ID for everything about it, as for any attempt.
+Only the attempt's current hold counts: what an earlier hold sends is acknowledged and ignored,
+whatever it says, and the rest of the handles (`CLEAN_REST`) is the task's own run's (decision
+535).
 `running_triggers` in `Register` and `Heartbeat` lists trigger instance IDs so the master
 can reconcile them with its assignments.
 A `JournalDecision` can answer `CLEAN_REST` (`ATTEMPT_DECISION_CLEAN_REST`) with
@@ -532,7 +538,7 @@ that names it.
 | `TaskEnded` | Worker as cleanup begins | Keep task result, mark cleaning up | Yes, for open attempt | [`[worker] cleanup_timeout`](14-timings.md#public-timing-keys) |
 | `HandlesAdded` | Worker as each handle is journaled; all again on `Continue` | Store handles from the assigned worker for a possible moved cleanup; first at each position stands, up to 1 MiB per attempt | Yes | — |
 | `AttemptReported` | Worker as a running attempt reports a status or a link (protocol 2.2, decision 513), masked and bounded | Keep it with the attempt while it is open and this worker's: a status appended (at most 100, the first and the latest kept), a link set by its label (at most 10, http or https) | A status sent again is kept twice; a link replaces itself | — |
-| `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck` | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |
+| `Finished` | Worker after attempt and cleanup | Store result and reply with `FinishedAck`; only from the attempt's current hold (its ID) | Yes, stored result is acknowledged again | [`SCHEDR_HIDDEN__MASTER__HEARTBEAT_INTERVAL`](14-timings.md#fixed-timings) governs resend |
 | `Draining` | Worker on shutdown | Stop assignments, mark draining | Yes | [`[worker] termination_grace_period`](14-timings.md#public-timing-keys) |
 | `Deregister` | Worker after drain | Mark offline | Yes | [`SCHEDR_HIDDEN__WORKER__DEREGISTER_WAIT`](14-timings.md#fixed-timings) |
 | `Warnings` | Worker after registration and on change | Replace warnings | Yes | — |
@@ -540,7 +546,7 @@ that names it.
 | `TriggerPoked` | Worker when a poke's error state changes; otherwise its reports ride the heartbeat (`Heartbeat.pokes`) | Keep the call time, last error and consecutive failures | Yes | — |
 | `TriggerStopped` | Worker when a trigger ends, including on the next stream if disconnected | Free its slot; record `struck` and `code_hash`; a failure can start it again after a wait | Yes | — |
 | `ConnectionJobDone` | Worker after connection check or test | Store reports if job is still open | Late or already settled answer is dropped | [`[webserver] connection_test_timeout`](14-timings.md#public-timing-keys) plus job allowance |
-| `CleanupStart` | Worker when a `cleanup_anywhere` cleanup's try waits at its barrier (protocol 2.2) | Answer `CleanupGo`: `go` while the attempt is open and the cleanup is this worker's; for a `rest` (B169), while this worker owes it, the attempt ended or not | Yes: read only | The process waits half the worker lease, counted from before the question |
+| `CleanupStart` | Worker when a `cleanup_anywhere` cleanup's try waits at its barrier (protocol 2.2) | Answer `CleanupGo`: `go` while the attempt is open and the cleanup is this worker's, asked as its current hold; for a `rest` (B169), while this worker owes it, the attempt ended or not | Yes: read only | The process waits half the worker lease, counted from before the question |
 | `ApiCall` | Worker for a task's or trigger's `schedr.api` request (its body and key masked with the secrets it read); all unanswered again on a new stream | Check the attempt (or trigger instance) is open on this worker and the route is on the allow-list, then run it through the REST router as the task, outside the core's lock, on the fenced database; answer `ApiAnswer` | Yes: every call carries an `Idempotency-Key` (the task's, or one made for it) | The agent gives up after a minute (503 naming the key); over `[grpc] max_message_size` it answers 413 itself |
 
 ### Master to worker on `Control`

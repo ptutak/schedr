@@ -53,16 +53,15 @@ step touches their code or the user schedules them.
 
 | # | Bug | Score | Severity | Probability | Kind |
 |---|---|---|---|---|---|
-| 1 | B304: a lost try's cleanup that may move never ran in chaos seed 7 on M5.3i (its try left with no worker) | 3 | high | rare | correctness |
-| 2 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
-| 3 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 1 | B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7) | 2 | low | possible | usability |
+| 2 | B38: an edge between two tasks outside a group can be drawn through its box (after 1.0.0, in M7, with B39) | 2 | low | possible | usability |
+| 3 | B305: a stale Finished erases the stream's record of a later assignment of the same attempt, so the master can't tell that assignment never started (Suspected) | 1 | low | rare | reliability |
 
-## B304: a lost try's cleanup that may move never ran in chaos seed 7 on M5.3i (its try left with no worker)
+## B305: a stale Finished erases the stream's record of a later assignment of the same attempt, so the master can't tell that assignment never started (Suspected)
 
-- **Rating:** severity **high**, probability **rare**, correctness (score 3): A try of a task whose cleanup may move (`cleanup_anywhere`) ran, was stopped by its worker's cutoff during dropped packets to that worker, and was set lost; its cleanup never ran anywhere, and the master's record of the try has no worker (lost tries otherwise keep theirs). Seen once: chaos on kind, seed 7, on M5.3i's `d2227ae6` (Stress run 45861804673, attempt 2); seeds 2 and 11 passed, and seed 7 passed on the baseline `dfa4bb5f` (locally).
-- **Found:** chaos seed 7 on CI (record artifact `chaos-record-60-seed-7`): `t00` try 1 started 19:16:32 on `schedr-worker-0` during the aimed packet drop on it (19:15:19-19:17:35), its process ended 19:17:33 (the cutoff), the master set it lost 19:17:35 with `worker_id` empty; the master logged "a queued message of a replaced stream dropped" for `schedr-worker-0` at 19:17:36. Try 2 ran on `schedr-worker-1`, its cleanup ran; try 1's never did ("t00: try 1's cleanup never ran").
-- **Cause:** not known yet. M5.3i changed the path a replaced or taken-out stream's queued messages take; an older path may be hit by this timing only.
-- **A fix:** after the cause.
+- **Rating:** severity **low**, probability **rare**, reliability (score 1): The stream reader calls `Arrivals::answered_on` for every `Finished` it reads (`service.rs`), removing the attempt from the stream's `assigned`. A late `Finished` from the task's own run, read after the same worker was assigned that attempt's moved cleanup, erases that assignment's record: `never_started` then answers not known (it may run there), so a cleanup assignment the worker never got waits for the worker's own answer or its loss instead of moving at once. The safe side: a delay, never a cleanup skipped or run twice.
+- **Found:** agy's review of B304's fix (finding 3, rated critical there); read by Claude: `answered_on` only removes, and `never_started` is `false` when the record is gone.
+- **A fix:** remove the record for a `Finished` only when it can close the assignment, or only on `Started` and `Rejected`.
 
 ## B39: sibling groups on different layers make the run graph far too wide (partly fixed; the rest after 1.0.0, in M7)
 

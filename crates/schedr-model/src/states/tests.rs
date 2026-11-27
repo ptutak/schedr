@@ -108,3 +108,12 @@ fn worker_states_have_their_schema_names(
     assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
     assert_eq!(state.is_gone(), gone);
 }
+
+/// B304: only a cleanup that ran (succeeded or failed) stands for one.
+#[test]
+fn a_cleanup_ran_only_when_it_succeeded_or_failed() {
+    assert!(CleanupResult::Ok.ran());
+    assert!(CleanupResult::Failed.ran());
+    assert!(!CleanupResult::NotNeeded.ran());
+    assert!(!CleanupResult::WorkerLost.ran());
+}

@@ -3003,7 +3003,7 @@ async fn a_worker_that_stops_reading_holds_up_no_delivery() {
 async fn a_refused_registration_keeps_no_start_of_its_journal() {
     let (hub, _db, mut client) = connected().await;
     // `a0`'s start known before (a `Started` that couldn't be stored): it stays.
-    hub.arrivals.start_arrived("w1", "a0");
+    hub.arrivals.start_arrived("w1", &hold("a0"));
     let mut old = register(pb::ProtocolVersion { major: 9, minor: 0 });
     if let Some(worker_message::Message::Register(register)) = old.message.as_mut() {
         register.journal = ["a0", "a1"]
@@ -3019,8 +3019,8 @@ async fn a_refused_registration_keeps_no_start_of_its_journal() {
         .await
         .unwrap_err();
     assert_eq!(status.code(), tonic::Code::FailedPrecondition);
-    assert!(!hub.arrivals.start_waiting("a1"));
-    assert!(hub.arrivals.start_waiting("a0"));
+    assert!(!hub.arrivals.start_waiting(&hold("a1")));
+    assert!(hub.arrivals.start_waiting(&hold("a0")));
 }
 
 #[tokio::test]
@@ -3039,7 +3039,7 @@ async fn a_start_known_but_not_stored_goes_once_the_worker_registers_without_it(
     let master_message::Message::AssignTask(assign) = next(&mut stream).await else {
         panic!("expected AssignTask")
     };
-    hub.arrivals.start_arrived("w1", &assign.attempt_id);
+    hub.arrivals.start_arrived("w1", &hold(&assign.attempt_id));
     drop(to_master);
     drop(stream);
     for _ in 0..100 {
@@ -3635,10 +3635,10 @@ async fn a_dropped_message_of_a_replaced_stream_leaves_the_new_streams_start() {
         stream: replaced,
         message: Some(started_msg("a1")),
     });
-    hub.arrivals.start_arrived("w1", "a1");
+    hub.arrivals.start_arrived("w1", &hold("a1"));
     Box::pin(hub.round_results((hub.clock)())).await.unwrap();
     assert!(
-        hub.arrivals.start_waiting("a1"),
+        hub.arrivals.start_waiting(&hold("a1")),
         "the new stream's start kept"
     );
     drop((old, new));
@@ -3675,7 +3675,7 @@ async fn a_superseded_streams_reader_records_nothing() {
     let _ = old.send(wrap(started_msg("a9"))).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
-        !hub.arrivals.start_waiting("a9"),
+        !hub.arrivals.start_waiting(&hold("a9")),
         "a superseded stream's start counts for nothing"
     );
     assert!(hub.sessions.has("w1"), "the new stream in place");
@@ -3733,7 +3733,7 @@ async fn left_while_waiting(
     let mut left_client = client.clone();
     let left =
         tokio::spawn(async move { left_client.control(tokio_stream::iter(vec![message])).await });
-    until("it waits", || hub.arrivals.start_waiting(attempt)).await;
+    until("it waits", || hub.arrivals.start_waiting(&hold(attempt))).await;
     left.abort();
     let _ = left.await;
     until("the master saw it leave", || {
@@ -3782,16 +3782,19 @@ async fn a_refused_registration_leaves_the_live_streams_start() {
             .control(tokio_stream::iter(vec![register_running(1, &["a1"])]))
             .await
     });
-    until("the stale one waits", || hub.arrivals.start_waiting("a1")).await;
+    until("the stale one waits", || {
+        hub.arrivals.start_waiting(&hold("a1"))
+    })
+    .await;
     // The live stream reports the same attempt's start while the stale one waits.
-    hub.arrivals.start_arrived("w1", "a1");
+    hub.arrivals.start_arrived("w1", &hold("a1"));
     drop(busy);
     stale
         .await
         .unwrap()
         .expect_err("no newer than the live connection");
     assert!(
-        hub.arrivals.start_waiting("a1"),
+        hub.arrivals.start_waiting(&hold("a1")),
         "the live stream's start kept"
     );
 }
@@ -3812,7 +3815,7 @@ async fn a_left_registration_keeps_no_start_beside_a_live_stream() {
     )
     .await;
     assert!(
-        !hub.arrivals.start_waiting("a_stale"),
+        !hub.arrivals.start_waiting(&hold("a_stale")),
         "nothing kept beside the live stream"
     );
 }
@@ -3831,7 +3834,7 @@ async fn a_left_stale_registration_keeps_no_start() {
     .await;
     left_while_waiting(&hub, &client, register_running(1, &["a1"]), "a1").await;
     assert!(
-        !hub.arrivals.start_waiting("a1"),
+        !hub.arrivals.start_waiting(&hold("a1")),
         "a stale one keeps nothing"
     );
 }
@@ -3844,7 +3847,10 @@ async fn a_left_newer_registration_keeps_its_starts() {
     let (hub, _db, mut client) = connected().await;
     let (_live, _stream) = live_w1(&mut client).await;
     left_while_waiting(&hub, &client, register_running(2_000, &["a1"]), "a1").await;
-    assert!(hub.arrivals.start_waiting("a1"), "kept for its next try");
+    assert!(
+        hub.arrivals.start_waiting(&hold("a1")),
+        "kept for its next try"
+    );
 }
 
 /// Agy's fifth review of M5.3g: a left `Register` of a worker this master doesn't know kept its
@@ -3854,7 +3860,7 @@ async fn a_left_registration_of_an_unknown_worker_keeps_nothing() {
     let (hub, _db, client) = connected().await;
     left_while_waiting(&hub, &client, register_running(1, &["a1"]), "a1").await;
     assert!(
-        !hub.arrivals.start_waiting("a1"),
+        !hub.arrivals.start_waiting(&hold("a1")),
         "nothing kept for an unknown worker"
     );
     assert!(
@@ -3922,7 +3928,7 @@ async fn a_stuck_streams_reader_records_nothing() {
     old.send(wrap(started_msg("a9"))).await.unwrap();
     until("its reader read it and stopped", || session.is_ended()).await;
     assert!(
-        !hub.arrivals.start_waiting("a9"),
+        !hub.arrivals.start_waiting(&hold("a9")),
         "a stuck stream's start counts for nothing"
     );
     drop(old);
@@ -3983,7 +3989,7 @@ async fn an_assignment_to_a_session_just_ended_is_unsent() {
         },
     }]);
     assert!(
-        hub.arrivals.never_started("w1", "a-lost"),
+        hub.arrivals.never_started("w1", &hold("a-lost")),
         "never sent, so surely never started"
     );
 }
@@ -4010,4 +4016,9 @@ async fn a_stream_ending_while_the_master_closes_queues_nothing() {
         hub.queued_results().iter().all(|r| r.message.is_some()),
         "no end queued while closing"
     );
+}
+
+/// `id`'s hold, as a worker names it (decision 535).
+fn hold(id: &str) -> schedr_model::hold::HoldId {
+    schedr_model::hold::HoldId::parse(id)
 }

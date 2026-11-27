@@ -1,0 +1,25 @@
+title = "A worker back while its own cleanup still waits to move gets it back, whatever handles it holds"
+date = 2026-11-27
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "cleanup"
+section = "Moving and disconnection"
+summary = '''
+A worker that registers again while its own attempt's `cleanup_anywhere` cleanup waits to move
+(lost with it, no other worker given it yet) and still holds the attempt unfinished gets it back
+(`take_back`, as decision 308 did only for handles the master never got): told `Continue`, its
+cleanup let through at its barrier, run there with every handle it holds. Extends decision 308;
+`Kill` stays for a cleanup already another worker's. Why (B304, found by chaos seed 7): told
+`Kill`, the worker reported the refused cleanup not needed (decision 504) for a try still open;
+taken as the cleanup's end it closed the try with no worker running it, and ignored, every place
+where a worker's report settles its attempt (the stream's assignments, adoption on registration,
+a batch's repeats) had to learn to ignore it (agy's two reviews). Kept beside it: a cleanup
+report stands for a cleanup waiting to move, or for the rest of its handles, only if it ran
+(`cleanup_ran`). Not chosen: ignoring a report that didn't run the cleanup wherever a moved
+cleanup ends (option B: new state in three intricate places, the fixes breeding fixes); the agent
+reporting a refused cleanup as nothing (option C: changes decision 504 and the agent, the master
+still to handle the stale report).
+'''
+history = "JOURNAL.md#D533"  # <a id="D533"></a> starts its JOURNAL.md entry
+step = "B304"
+code = ["crates/schedr-master/src/core.rs::journal_decision", "crates/schedr-master/src/dispatch.rs::cleanup_ran"]

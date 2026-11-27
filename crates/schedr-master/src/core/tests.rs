@@ -1017,27 +1017,30 @@ fn an_unsent_assignment_never_started_on_its_worker_until_it_is_sent() {
     // Grok's review of B240: a send that didn't leave is proof for that worker only, and a
     // later real send (to it again, a moved cleanup say) needs the echo once more.
     let arrivals = Arrivals::default();
-    arrivals.unsent("w1", "a1");
-    assert!(arrivals.never_started("w1", "a1"));
-    assert!(!arrivals.never_started("w2", "a1"), "another worker's");
-    let stream = arrivals.new_stream("w1");
-    arrivals.assigned("w1", stream, "a1", 3);
+    arrivals.unsent("w1", &hold("a1"));
+    assert!(arrivals.never_started("w1", &hold("a1")));
     assert!(
-        !arrivals.never_started("w1", "a1"),
+        !arrivals.never_started("w2", &hold("a1")),
+        "another worker's"
+    );
+    let stream = arrivals.new_stream("w1");
+    arrivals.assigned("w1", stream, &hold("a1"), 3);
+    assert!(
+        !arrivals.never_started("w1", &hold("a1")),
         "sent now: not handled yet"
     );
     arrivals.read("w1", stream, 3);
-    assert!(arrivals.never_started("w1", "a1"));
-    arrivals.unsent("w1", "a2");
+    assert!(arrivals.never_started("w1", &hold("a1")));
+    arrivals.unsent("w1", &hold("a2"));
     arrivals.forget("w1");
     assert!(
-        !arrivals.never_started("w1", "a2"),
+        !arrivals.never_started("w1", &hold("a2")),
         "forgotten with its worker"
     );
-    arrivals.unsent("w1", "a3");
+    arrivals.unsent("w1", &hold("a3"));
     let _ = arrivals.new_stream("w1");
     assert!(
-        !arrivals.never_started("w1", "a3"),
+        !arrivals.never_started("w1", &hold("a3")),
         "its registration decided it"
     );
 }
@@ -1054,7 +1057,7 @@ async fn a_lost_workers_unstarted_attempt_it_said_it_had_handled_is_taken_back_a
     };
     let arrivals = core.arrivals();
     let stream = arrivals.new_stream("w1");
-    arrivals.assigned("w1", stream, &assign.attempt_id, 4);
+    arrivals.assigned("w1", stream, &hold(&assign.attempt_id), 4);
     arrivals.read("w1", stream, 4);
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
@@ -1077,7 +1080,7 @@ async fn a_lost_workers_attempt_not_known_unstarted_may_have_run_and_ends_lost()
     };
     let arrivals = core.arrivals();
     let stream = arrivals.new_stream("w1");
-    arrivals.assigned("w1", stream, &assign.attempt_id, 4);
+    arrivals.assigned("w1", stream, &hold(&assign.attempt_id), 4);
     arrivals.read("w1", stream, 3);
     core.disconnected("w1", ts(NOW)).await.unwrap();
     core.tick(later(61)).await.unwrap();
@@ -1171,6 +1174,16 @@ fn running(attempt_id: &str, handles: u32) -> Vec<pb::JournalEntry> {
     }]
 }
 
+/// `message` (a `Finished`) as from the attempt's hold `holder`, under that hold's ID
+/// (decision 535).
+fn held(mut message: worker_message::Message, holder: u32) -> worker_message::Message {
+    if let worker_message::Message::Finished(finished) = &mut message {
+        finished.attempt_id =
+            schedr_model::hold::HoldId::new(&finished.attempt_id, holder).to_string();
+    }
+    message
+}
+
 fn finished_with_cleanup(
     attempt_id: &str,
     status: pb::AttemptStatus,
@@ -1233,11 +1246,17 @@ async fn a_waiting_cleanup_goes_back_to_its_worker_holding_handles_the_master_la
     );
 }
 
-/// The master's answer to `worker` asking whether `attempt_id`'s cleanup (only its `rest`, if
-/// said) may start (B255, decision 504).
-async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: bool) -> bool {
+/// The master's answer to `worker` asking, as `attempt_id`'s hold `holder` (decision 535),
+/// whether its cleanup (only its `rest`, if said) may start (B255, decision 504).
+async fn may_start(
+    core: &mut MasterCore,
+    (worker, holder): (&str, u32),
+    attempt_id: &str,
+    rest: bool,
+) -> bool {
+    let held = schedr_model::hold::HoldId::new(attempt_id, holder).to_string();
     let start = worker_message::Message::CleanupStart(pb::CleanupStart {
-        attempt_id: attempt_id.to_owned(),
+        attempt_id: held.clone(),
         rest,
     });
     let out = core
@@ -1252,7 +1271,8 @@ async fn may_start(core: &mut MasterCore, worker: &str, attempt_id: &str, rest: 
     };
     assert_eq!(
         (answer.worker_id.as_str(), go.attempt_id.as_str()),
-        (worker, attempt_id)
+        (worker, held.as_str()),
+        "answered to the hold that asked"
     );
     go.go
 }
@@ -1357,7 +1377,7 @@ async fn a_cleanup_let_through_still_moves_once_its_worker_is_lost() {
     core.tick(later(125)).await.unwrap();
     let moved = core.db.attempt(&attempt_id).await.unwrap().unwrap();
     assert_eq!((moved.worker_id.as_str(), moved.cleanup_moves), ("w2", 1));
-    assert!(may_start(&mut core, "w2", &attempt_id, false).await);
+    assert!(may_start(&mut core, ("w2", 1), &attempt_id, false).await);
 }
 
 #[tokio::test]
@@ -1374,7 +1394,7 @@ async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_ow
         .unwrap();
     core.tick(later(125)).await.unwrap();
     // Moved to w2: its whole cleanup is w2's, not w1's.
-    assert!(may_start(&mut core, "w2", &attempt_id, false).await);
+    assert!(may_start(&mut core, ("w2", 1), &attempt_id, false).await);
     let (registered, _) = core
         .register(&register("w1", "i1", running(&attempt_id, 0)), later(127))
         .await
@@ -1384,19 +1404,17 @@ async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_ow
         i32::from(pb::AttemptDecision::Kill)
     );
     assert!(
-        !may_start(&mut core, "w1", &attempt_id, false).await,
+        !may_start(&mut core, ("w1", 0), &attempt_id, false).await,
         "w1 was told Kill"
     );
-    let not_needed = finished_with_cleanup(
-        &attempt_id,
-        pb::AttemptStatus::Lost,
-        pb::CleanupStatus::NotNeeded,
-    );
-    core.handle_in_round("w2", not_needed, later(128))
+    // The moved cleanup run on w2 (a report of it not run doesn't end it: B304).
+    let cleaned =
+        finished_with_cleanup(&attempt_id, pb::AttemptStatus::Lost, pb::CleanupStatus::Ok);
+    core.handle_in_round("w2", held(cleaned, 1), later(128))
         .await
         .unwrap();
     assert!(
-        !may_start(&mut core, "w2", &attempt_id, false).await,
+        !may_start(&mut core, ("w2", 1), &attempt_id, false).await,
         "ended"
     );
     // w1 back with handles the master never got: the rest is its, the attempt ended or not.
@@ -1410,11 +1428,11 @@ async fn a_moved_cleanups_barrier_lets_through_only_its_new_worker_and_a_rest_ow
         i32::from(pb::AttemptDecision::CleanRest)
     );
     assert!(
-        may_start(&mut core, "w1", &attempt_id, true).await,
+        may_start(&mut core, ("w1", 0), &attempt_id, true).await,
         "the rest it owes"
     );
     assert!(
-        !may_start(&mut core, "w2", &attempt_id, true).await,
+        !may_start(&mut core, ("w2", 1), &attempt_id, true).await,
         "w2 owes no rest"
     );
 }
@@ -1440,12 +1458,10 @@ async fn a_worker_back_with_handles_a_moved_cleanup_lacked_cleans_them_and_adds_
                 && matches!(message(o), master_message::Message::AssignTask(_))),
         "the moved cleanup goes to w2: {out:?}"
     );
-    let not_needed = finished_with_cleanup(
-        &attempt_id,
-        pb::AttemptStatus::Lost,
-        pb::CleanupStatus::NotNeeded,
-    );
-    core.handle_in_round("w2", not_needed, later(126))
+    // The moved cleanup run on w2 (a report of it not run doesn't end it: B304).
+    let cleaned =
+        finished_with_cleanup(&attempt_id, pb::AttemptStatus::Lost, pb::CleanupStatus::Ok);
+    core.handle_in_round("w2", held(cleaned, 1), later(126))
         .await
         .unwrap();
     let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
@@ -1548,12 +1564,11 @@ async fn a_failed_rest_after_the_runs_success_makes_it_a_yellow_success() {
         .await
         .unwrap();
     core.tick(later(125)).await.unwrap();
-    let moved = finished_with_cleanup(
-        &attempt_id,
-        pb::AttemptStatus::Lost,
-        pb::CleanupStatus::NotNeeded,
-    );
-    core.handle_in_round("w2", moved, later(126)).await.unwrap();
+    // The moved cleanup run on w2 (a report of it not run doesn't end it: B304).
+    let moved = finished_with_cleanup(&attempt_id, pb::AttemptStatus::Lost, pb::CleanupStatus::Ok);
+    core.handle_in_round("w2", held(moved, 1), later(126))
+        .await
+        .unwrap();
     core.tick(later(127)).await.unwrap();
     let attempt = core.db.attempt(&attempt_id).await.unwrap().unwrap();
     let run_id = attempt.run_id.clone();
@@ -1919,7 +1934,7 @@ async fn a_start_or_result_that_couldnt_be_stored_keeps_the_attempt_from_being_t
             })
         };
         // As the stream's reader records it on arrival.
-        core.arrivals().start_arrived("w1", &id);
+        core.arrivals().start_arrived("w1", &hold(&id));
         core.db.fail_write(1);
         assert!(
             core.handle_in_round("w1", reported, later(1))
@@ -2484,32 +2499,32 @@ fn arrivals_keep_the_latest_per_worker_until_forgotten() {
 #[test]
 fn arrivals_hold_an_arrived_start_until_it_is_handled() {
     let arrivals = Arrivals::default();
-    assert!(!arrivals.start_waiting("a1"));
-    arrivals.clone().start_arrived("w1", "a1");
-    assert!(arrivals.start_waiting("a1"));
-    assert!(!arrivals.start_waiting("a2"));
-    arrivals.start_handled("w1", "a1");
-    assert!(!arrivals.start_waiting("a1"));
+    assert!(!arrivals.start_waiting(&hold("a1")));
+    arrivals.clone().start_arrived("w1", &hold("a1"));
+    assert!(arrivals.start_waiting(&hold("a1")));
+    assert!(!arrivals.start_waiting(&hold("a2")));
+    arrivals.start_handled("w1", &hold("a1"));
+    assert!(!arrivals.start_waiting(&hold("a1")));
     // A worker forgotten (lost, gone) takes its waiting starts with it.
-    arrivals.start_arrived("w1", "a3");
-    arrivals.start_arrived("w2", "a4");
+    arrivals.start_arrived("w1", &hold("a3"));
+    arrivals.start_arrived("w2", &hold("a4"));
     arrivals.forget("w1");
-    assert!(!arrivals.start_waiting("a3"));
-    assert!(arrivals.start_waiting("a4"));
+    assert!(!arrivals.start_waiting(&hold("a3")));
+    assert!(arrivals.start_waiting(&hold("a4")));
     // Handled twice (a `Started`, then its `Finished`): nothing left, nothing wrong.
-    arrivals.start_handled("w1", "a1");
-    assert!(!arrivals.start_waiting("a1"));
+    arrivals.start_handled("w1", &hold("a1"));
+    assert!(!arrivals.start_waiting(&hold("a1")));
     // Another worker's message stands for nothing of w1's, and clears nothing of it (decision
     // 520, agy's review of M5.2i14).
-    arrivals.start_arrived("w1", "a5");
-    arrivals.start_arrived("w2", "a5");
-    arrivals.start_handled("w2", "a5");
+    arrivals.start_arrived("w1", &hold("a5"));
+    arrivals.start_arrived("w2", &hold("a5"));
+    arrivals.start_handled("w2", &hold("a5"));
     assert!(
-        arrivals.start_waiting("a5"),
+        arrivals.start_waiting(&hold("a5")),
         "w2's handling cleared w1's start"
     );
     arrivals.forget_starts("w2");
-    assert!(arrivals.start_waiting("a5"));
+    assert!(arrivals.start_waiting(&hold("a5")));
 }
 
 #[tokio::test]
@@ -6104,16 +6119,16 @@ fn an_older_streams_answer_leaves_the_newer_streams_assignment() {
     let arrivals = Arrivals::default();
     let older = arrivals.new_stream("w1");
     let newer = arrivals.registered("w1");
-    arrivals.assigned("w1", newer, "a1", 5);
-    arrivals.answered_on("w1", older, "a1");
+    arrivals.assigned("w1", newer, &hold("a1"), 5);
+    arrivals.answered_on("w1", older, &hold("a1"));
     arrivals.read("w1", newer, 5);
     assert!(
-        arrivals.never_started("w1", "a1"),
+        arrivals.never_started("w1", &hold("a1")),
         "the newer stream's assignment kept"
     );
     // Its own stream's answer still counts.
-    arrivals.answered_on("w1", newer, "a1");
-    assert!(!arrivals.never_started("w1", "a1"));
+    arrivals.answered_on("w1", newer, &hold("a1"));
+    assert!(!arrivals.never_started("w1", &hold("a1")));
 }
 
 /// Agy's fifth review of M5.3g: a registration undone (never put in place) left the worker
@@ -6419,4 +6434,251 @@ async fn an_unknown_worker_failing_its_first_registration_stays_unknown() {
         !core.knows("w9"),
         "a failed first registration leaves it unknown"
     );
+}
+
+/// B304, the user's option A (2026-11-27, extending decision 308): a worker back while its own
+/// cleanup still waits to move, no other worker having it, gets it back whatever handles it
+/// holds: told to go on, never `Kill` (which made it report the cleanup not needed, and the try
+/// closed with no worker running it). Its cleanup then runs there, and its result ends the try.
+#[tokio::test]
+async fn a_worker_back_while_its_cleanup_waits_gets_it_back_and_cleans_up() {
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
+    });
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    // Lost: its cleanup waits to move, no worker to take it.
+    core.tick(later(61)).await.unwrap();
+    let waiting = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!((waiting.worker_id.as_str(), waiting.status), ("", None));
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 0)), later(62))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Continue),
+        "its own again"
+    );
+    let back = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!((back.worker_id.as_str(), back.status), ("w1", None));
+    assert!(
+        may_start(&mut core, ("w1", 0), &attempt_id, false).await,
+        "its cleanup may run there"
+    );
+    let cleaned =
+        finished_with_cleanup(&attempt_id, pb::AttemptStatus::Lost, pb::CleanupStatus::Ok);
+    core.handle_in_round("w1", cleaned, later(63))
+        .await
+        .unwrap();
+    core.tick(later(64)).await.unwrap();
+    let ended = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(ended.status, Some(schedr_model::AttemptStatus::Lost));
+    let run = core.db.run_tasks(&ended.run_id).await.unwrap().unwrap();
+    let instance = run
+        .instances
+        .iter()
+        .find(|i| i.id == ended.instance_id)
+        .unwrap();
+    assert_eq!(
+        instance.cleanup_result,
+        Some(schedr_model::CleanupResult::Ok),
+        "its cleanup ran"
+    );
+}
+
+/// w1's cleanup moved to w2 (its holder 1); w1, back, was told `Kill`. Then w2 refused it, and
+/// it waits again.
+async fn moved_to_w2_and_refused() -> (MasterCore, String) {
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
+    });
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    core.register(&register("w2", "i2", vec![]), later(62))
+        .await
+        .unwrap();
+    let heartbeat = worker_message::Message::Heartbeat(pb::Heartbeat::default());
+    core.handle_in_round("w2", heartbeat, later(100))
+        .await
+        .unwrap();
+    core.tick(later(125)).await.unwrap();
+    let given = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!((given.worker_id.as_str(), given.cleanup_holder), ("w2", 1));
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 0)), later(126))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill)
+    );
+    // w2 refuses under its hold's ID (decision 535).
+    let rejected = worker_message::Message::Rejected(pb::Rejected {
+        attempt_id: format!("{attempt_id}_1"),
+        reason: pb::RejectReason::NoFreeSlot.into(),
+        detail: String::new(),
+        service_readies: 0,
+    });
+    core.handle_in_round("w2", rejected, later(127))
+        .await
+        .unwrap();
+    core.tick(later(128)).await.unwrap();
+    let waiting = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!((waiting.worker_id.as_str(), waiting.status), ("", None));
+    (core, attempt_id)
+}
+
+/// agy's third review of B304 (decision 534): a worker told `Kill` for a cleanup another held is
+/// never its holder again by coming back, even once that one refused it and it waits again; its
+/// stale report doesn't end it either.
+#[tokio::test]
+async fn a_worker_told_kill_never_takes_back_a_cleanup_another_held() {
+    let (mut core, attempt_id) = Box::pin(moved_to_w2_and_refused()).await;
+    let (registered, _) = core
+        .register(&register("w1", "i1", running(&attempt_id, 0)), later(129))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill),
+        "not its cleanup any more"
+    );
+    let stale = finished_with_cleanup(
+        &attempt_id,
+        pb::AttemptStatus::Lost,
+        pb::CleanupStatus::NotNeeded,
+    );
+    core.handle_in_round("w1", stale, later(130)).await.unwrap();
+    core.tick(later(131)).await.unwrap();
+    let still = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        (still.worker_id.as_str(), still.status),
+        ("", None),
+        "still waiting for a worker"
+    );
+}
+
+/// agy's third review of B304: a cleanup taken back by its worker no longer shows as waiting
+/// for one.
+#[tokio::test]
+async fn a_cleanup_taken_back_no_longer_shows_as_waiting_for_a_worker() {
+    let mut core = with_dag_of(&anywhere_file()).await;
+    trigger(&mut core).await;
+    let out = core.tick(ts(NOW)).await.unwrap();
+    let master_message::Message::AssignTask(assign) = message(&out[0]) else {
+        panic!("expected AssignTask")
+    };
+    let attempt_id = assign.attempt_id.clone();
+    let started = worker_message::Message::Started(pb::Started {
+        attempt_id: attempt_id.clone(),
+        start_method: pb::StartMethod::Spawn.into(),
+        ..pb::Started::default()
+    });
+    core.handle_in_round("w1", started, ts(NOW)).await.unwrap();
+    core.disconnected("w1", ts(NOW)).await.unwrap();
+    core.tick(later(61)).await.unwrap();
+    // Past the move's wait, no worker: shown as waiting for one.
+    core.tick(later(125)).await.unwrap();
+    let attempt = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    let db = core.db.clone();
+    let reason = || async {
+        db.run_instances(&attempt.run_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|i| i.task_id == attempt.task_id)
+            .and_then(|i| i.queued_reason)
+    };
+    assert!(reason().await.is_some(), "waiting for a worker");
+    core.register(&register("w1", "i1", running(&attempt_id, 0)), later(126))
+        .await
+        .unwrap();
+    assert_eq!(reason().await, None, "its worker has it again");
+}
+
+/// `id`'s hold, as a worker names it (decision 535).
+fn hold(id: &str) -> schedr_model::hold::HoldId {
+    schedr_model::hold::HoldId::parse(id)
+}
+
+/// Decision 535 (agy's fifth review of B304): the rest of the handles is hold 0's, the task's
+/// own run's. A journal entry of another hold from the worker that owes the rest is told `Kill`,
+/// never `CLEAN_REST`.
+#[tokio::test]
+async fn only_hold_0_is_told_to_clean_the_rest() {
+    let (mut core, attempt_id) = Box::pin(moved_to_w2_and_refused()).await;
+    assert_eq!(
+        core.db.rest_owed_by(&attempt_id).await.unwrap().as_deref(),
+        Some("w1")
+    );
+    let other = vec![pb::JournalEntry {
+        attempt_id: format!("{attempt_id}_1"),
+        state: pb::JournalState::Running.into(),
+        handles: 5,
+    }];
+    let (registered, _) = core
+        .register(&register("w1", "i1", other), later(129))
+        .await
+        .unwrap();
+    assert_eq!(
+        registered.decisions[0].decision,
+        i32::from(pb::AttemptDecision::Kill),
+        "not hold 0"
+    );
+}
+
+/// agy's sixth review of B304: a commit cut off is read back about the hold it was for.
+#[tokio::test]
+async fn a_cut_off_commit_is_read_back_about_its_hold() {
+    let (core, attempt_id) = Box::pin(moved_to_w2_and_refused()).await;
+    let waiting = core.db.attempt(&attempt_id).await.unwrap().unwrap();
+    assert_eq!(
+        (waiting.cleanup_holder, waiting.worker_id.as_str()),
+        (1, "")
+    );
+    let hold = |n| schedr_model::hold::HoldId::new(&attempt_id, n);
+    // w2's refusal of hold 1 landed: the cleanup waits, no longer w2's.
+    assert!(super::refusal_landed("w2", &hold(1))(Some(&waiting)));
+    assert!(
+        super::refusal_landed("w2", &hold(1))(None),
+        "an assignment undone"
+    );
+    let mut given = waiting.clone();
+    given.worker_id = "w2".to_owned();
+    assert!(
+        !super::refusal_landed("w2", &hold(1))(Some(&given)),
+        "still w2's: not landed"
+    );
+    // A start of hold 1: landed only once it no longer waits to be started.
+    let mut started = given.clone();
+    started.moving = true;
+    assert!(
+        !super::start_landed(&hold(1))(Some(&started)),
+        "still waiting to start"
+    );
+    started.moving = false;
+    assert!(super::start_landed(&hold(1))(Some(&started)));
+    // An earlier hold's message stored nothing: nothing to wait for.
+    assert!(super::start_landed(&hold(0))(Some(&given)));
+    assert!(super::refusal_landed("w1", &hold(0))(Some(&given)));
 }

@@ -187,4 +187,8 @@ fn attempt_ids_are_uuids() {
     assert!(!is_attempt_id("0199f0c2a7b3e-7d10-8000-00000000a001"));
     assert!(!is_attempt_id("parse-etl.log"));
     assert!(!is_attempt_id("../../../../../etc/passwd/xxxxxxxxxxxx"));
+    // A moved cleanup's hold (decision 535; agy's fifth review of B304: its log was refused).
+    assert!(is_attempt_id(&format!("{ATTEMPT}_1")));
+    assert!(!is_attempt_id(&format!("{ATTEMPT}_+1")));
+    assert!(!is_attempt_id(&format!("{ATTEMPT}_0")));
 }

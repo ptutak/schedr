@@ -1,0 +1,11 @@
+title = "a stale Finished erases the stream's record of a later assignment of the same attempt, so the master can't tell that assignment never started"
+severity = "low"  # critical, high, medium, low
+probability = "rare"  # likely, possible, rare
+kind = "reliability"  # security, data, correctness, reliability, performance, usability, tests
+summary = "The stream reader calls `Arrivals::answered_on` for every `Finished` it reads (`service.rs`), removing the attempt from the stream's `assigned`. A late `Finished` from the task's own run, read after the same worker was assigned that attempt's moved cleanup, erases that assignment's record: `never_started` then answers not known (it may run there), so a cleanup assignment the worker never got waits for the worker's own answer or its loss instead of moving at once. The safe side: a delay, never a cleanup skipped or run twice."
+found = 2026-11-26
+suspected = true
+details = '''
+- **Found:** agy's review of B304's fix (finding 3, rated critical there); read by Claude: `answered_on` only removes, and `never_started` is `false` when the record is gone.
+- **A fix:** remove the record for a `Finished` only when it can close the assignment, or only on `Started` and `Rejected`.
+'''

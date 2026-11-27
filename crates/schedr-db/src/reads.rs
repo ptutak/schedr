@@ -116,6 +116,9 @@ pub struct CleanupRecord {
     pub error_summary: Option<String>,
     /// How many times it moved to another worker (`cleanup_anywhere`).
     pub moves: u32,
+    /// Its current holder (decision 535): 0 the task's own run; a moved cleanup's worker keeps
+    /// its log under its hold's ID.
+    pub holder: u32,
     /// The handles the attempt registered, each as JSON text (masked), in order.
     pub handles: Vec<String>,
 }
@@ -208,6 +211,7 @@ type CleanupRow = (
     Option<i64>,
     Option<String>,
     Option<String>,
+    i32,
     i32,
 );
 
@@ -905,7 +909,8 @@ impl Database {
             ORDER BY a.try_number";
         const CLEANUPS: &str = "SELECT a.id{text}, a.cleanup_result, a.cleanup_tries, \
             a.cleanup_duration_ms, a.cleanup_error_kind, a.cleanup_error_summary{text}, \
-            a.cleanup_moves FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
+            a.cleanup_moves, a.cleanup_holder FROM attempts a \
+            JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE t.run_id = $1{uuid} AND t.task_id = $2 AND t.map_index = $3";
         const HANDLES: &str = "SELECT h.attempt_id{text}, h.handle FROM cleanup_handles h \
             JOIN attempts a ON a.id = h.attempt_id \
@@ -936,7 +941,7 @@ impl Database {
                 )
             });
         let mut by_attempt: BTreeMap<String, CleanupRecord> = BTreeMap::new();
-        for (id, result, tries, duration_ms, error_kind, error_summary, moves) in cleanups {
+        for (id, result, tries, duration_ms, error_kind, error_summary, moves, holder) in cleanups {
             by_attempt.insert(
                 id,
                 CleanupRecord {
@@ -948,6 +953,7 @@ impl Database {
                     error_kind,
                     error_summary,
                     moves: u32::try_from(moves).unwrap_or(0),
+                    holder: u32::try_from(holder).unwrap_or(0),
                     handles: Vec::new(),
                 },
             );

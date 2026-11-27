@@ -81,6 +81,9 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 | # | Date | By | State | Topic | Title |
 |---|---|---|---|---|---|
+| D535 | 2026-11-27 | user | built (B304 fixed) | cleanup | A hold of an attempt has its own ID: <attempt>_<n> for a moved cleanup's holder n |
+| D534 | 2026-11-27 | user | superseded by D535 | cleanup | A cleanup's holder is numbered: only its current holder's reports of it count |
+| D533 | 2026-11-27 | user | built (B304 fixed) | cleanup | A worker back while its own cleanup still waits to move gets it back, whatever handles it holds |
 | D532 | 2026-11-26 | user | planned (M5.3c) | task-context | Scripts get schedr-ctx's speed by calling it: the worker's folder first on every task's PATH |
 | D531 | 2026-11-26 | user | built M5.3i | workers | A worker's sessions published lock-free: one map copied on each change (arc-swap) |
 | D530 | 2026-11-26 | user | built M5.3g | workers | The registration path keeps its structure: no single owner of a worker's registration |
@@ -668,6 +671,8 @@ Journal entries correcting or adding to a decision (`decisions/DN<n>.toml`, its 
 
 ### cleanup
 
+- D535: A hold of an attempt has its own ID: <attempt>_<n> for a moved cleanup's holder n
+- D533: A worker back while its own cleanup still waits to move gets it back, whatever handles it holds
 - D528: A cleanup let through is still moved after its worker is lost: at least once
 - D504: A movable cleanup's try waits at a barrier for the master's word, asked only once it waits
 - D346: Running cleanup continues past the drain deadline

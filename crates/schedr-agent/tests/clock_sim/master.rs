@@ -768,7 +768,7 @@ impl Sim {
                     (assigned, &self.core, self.stream_ids.get(&sid))
                 {
                     core.arrivals()
-                        .assigned(WORKERS[worker], stream, &attempt_id, number);
+                        .assigned(WORKERS[worker], stream, &hold(&attempt_id), number);
                 }
             }
         }
@@ -1445,11 +1445,11 @@ impl Sim {
             }
             worker_message::Message::Started(pb::Started { attempt_id, .. })
             | worker_message::Message::Finished(pb::Finished { attempt_id, .. }) => {
-                arrivals.start_arrived(id, attempt_id);
-                arrivals.answered(id, attempt_id);
+                arrivals.start_arrived(id, &hold(attempt_id));
+                arrivals.answered(id, &hold(attempt_id));
             }
             worker_message::Message::Rejected(pb::Rejected { attempt_id, .. }) => {
-                arrivals.answered(id, attempt_id);
+                arrivals.answered(id, &hold(attempt_id));
             }
             _ => {}
         }
@@ -1498,7 +1498,7 @@ impl Sim {
         let added: Vec<String> = register
             .journal
             .iter()
-            .filter(|e| arrivals.start_known(id, &e.attempt_id))
+            .filter(|e| arrivals.start_known(id, &hold(&e.attempt_id)))
             .map(|e| e.attempt_id.clone())
             .collect();
         match core.register(&register, ts(self.now)).await {
@@ -1513,7 +1513,7 @@ impl Sim {
             }
             Err(schedr_master::core::CoreError::Refused(_)) => {
                 for attempt_id in &added {
-                    arrivals.start_handled(id, attempt_id);
+                    arrivals.start_handled(id, &hold(attempt_id));
                 }
                 self.send(inst, sid, false, Event::Refused(inst, sid));
             }
@@ -1857,4 +1857,9 @@ fn group_of<'a>(batch: &'a mut Vec<(String, Group)>, id: &str) -> &'a mut Group 
         batch.len() - 1
     });
     &mut batch[at].1
+}
+
+/// `id`'s hold, as a worker names it (decision 535).
+fn hold(id: &str) -> schedr_model::hold::HoldId {
+    schedr_model::hold::HoldId::parse(id)
 }

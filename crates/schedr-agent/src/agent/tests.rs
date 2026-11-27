@@ -1813,6 +1813,9 @@ async fn a_moved_cleanup_given_while_cleaning_its_rest_is_refused() {
         unreachable!()
     };
     whole.cleanup_only = Some(pb::CleanupOnly::default());
+    // Under its hold's own ID, as the master sends it (decision 535; agy's sixth review of B304:
+    // compared by ID, the check never matched).
+    whole.attempt_id = "a1_1".to_owned();
     let script = vec![to_worker(master_message::Message::AssignTask(whole))];
     let (seen, _) = against_script_with(
         2,

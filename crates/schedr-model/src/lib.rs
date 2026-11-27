@@ -10,6 +10,7 @@ pub mod connection;
 pub mod ctx;
 pub mod dag;
 pub mod extension;
+pub mod hold;
 pub mod ids;
 pub mod log_line;
 pub mod logs;

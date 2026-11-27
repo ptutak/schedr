@@ -5,6 +5,7 @@
 //! The gRPC service ([`crate::service`]) only moves messages between workers' streams and
 //! this core, so everything here is tested without a network.
 
+use schedr_model::hold::HoldId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -479,6 +480,25 @@ impl CoreError {
     }
 }
 
+/// Whether a `Started` of `hold` cut off at its commit stored what it was for (decision 535;
+/// agy's sixth review of B304): nothing to store for a hold that isn't the attempt's current one;
+/// the current one started, and a moved cleanup's no longer waiting to be started.
+fn start_landed(
+    hold: &HoldId,
+) -> impl Fn(Option<&schedr_db::attempts::StoredAttempt>) -> bool + '_ {
+    move |attempt| attempt.is_some_and(|a| a.hold() != *hold || (a.started && !a.moving))
+}
+
+/// Whether a `Rejected` of `hold` from `worker_id` cut off at its commit stored what it was for
+/// (agy's sixth review of B304): an assignment undone is deleted; a moved cleanup's waits again,
+/// no longer this worker's; nothing to store for a hold that isn't the current one.
+fn refusal_landed<'a>(
+    worker_id: &'a str,
+    hold: &'a HoldId,
+) -> impl Fn(Option<&schedr_db::attempts::StoredAttempt>) -> bool + 'a {
+    move |attempt| attempt.is_none_or(|a| a.hold() != *hold || a.worker_id != worker_id)
+}
+
 /// Whether a `TaskEnded` cut off at its commit stored what it was for: the result kept, or the
 /// attempt over (nothing to keep it for).
 fn result_landed(attempt: Option<&schedr_db::attempts::StoredAttempt>) -> bool {
@@ -777,7 +797,8 @@ impl Arrivals {
     }
 
     /// As [`Self::start_arrived`], for stream `stream`: only its latest registered stream's.
-    pub fn start_arrived_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+    pub fn start_arrived_on(&self, worker_id: &str, stream: u64, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         let mut inner = self.inner();
         if Self::current(&inner, worker_id, stream) {
             inner
@@ -788,7 +809,8 @@ impl Arrivals {
 
     /// As [`Self::start_handled`], for stream `stream`: a later stream's start of the same
     /// attempt stays.
-    pub fn start_handled_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+    pub fn start_handled_on(&self, worker_id: &str, stream: u64, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         let mut inner = self.inner();
         if Self::current(&inner, worker_id, stream) {
             inner
@@ -798,7 +820,8 @@ impl Arrivals {
     }
 
     /// `attempt_id`'s assignment went out as message `number` of `worker_id`'s stream `stream`.
-    pub fn assigned(&self, worker_id: &str, stream: u64, attempt_id: &str, number: u64) {
+    pub fn assigned(&self, worker_id: &str, stream: u64, hold: &HoldId, number: u64) {
+        let attempt_id = &hold.to_string();
         let mut inner = self.inner();
         inner.unsent.remove(attempt_id);
         if let Some(read) = inner.streams.get_mut(worker_id)
@@ -810,7 +833,8 @@ impl Arrivals {
 
     /// `attempt_id`'s assignment to `worker_id` was never sent: no stream to it, or one full
     /// or closed (Grok's review of B240). It never started there.
-    pub fn unsent(&self, worker_id: &str, attempt_id: &str) {
+    pub fn unsent(&self, worker_id: &str, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         self.inner()
             .unsent
             .insert(attempt_id.to_owned(), worker_id.to_owned());
@@ -828,7 +852,8 @@ impl Arrivals {
 
     /// `worker_id` started or refused `attempt_id`, as heard: its assignment's number isn't
     /// needed any more.
-    pub fn answered(&self, worker_id: &str, attempt_id: &str) {
+    pub fn answered(&self, worker_id: &str, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         if let Some(read) = self.inner().streams.get_mut(worker_id) {
             read.assigned.remove(attempt_id);
         }
@@ -837,7 +862,8 @@ impl Arrivals {
     /// As [`Self::answered`], heard on `worker_id`'s stream `stream`: only its latest
     /// registered stream's assignments (agy's third review of M5.3g: an older stream's answer
     /// erased a newer stream's assignment of the same attempt, a moved cleanup's).
-    pub fn answered_on(&self, worker_id: &str, stream: u64, attempt_id: &str) {
+    pub fn answered_on(&self, worker_id: &str, stream: u64, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         if let Some(read) = self.inner().streams.get_mut(worker_id)
             && read.id == stream
         {
@@ -851,7 +877,8 @@ impl Arrivals {
     /// it, so a start would have arrived first (B240). Not known (another stream, a message
     /// not heard, an older worker): `false`, it may run there.
     #[must_use]
-    pub fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
+    pub fn never_started(&self, worker_id: &str, hold: &HoldId) -> bool {
+        let attempt_id = &hold.to_string();
         let inner = self.inner();
         let key = (attempt_id.to_owned(), worker_id.to_owned());
         !inner.started.contains(&key)
@@ -865,13 +892,14 @@ impl Arrivals {
     }
 
     /// A `Started` or `Finished` for `attempt_id` arrived from `worker_id`: the attempt started.
-    pub fn start_arrived(&self, worker_id: &str, attempt_id: &str) {
-        let _ = self.start_known(worker_id, attempt_id);
+    pub fn start_arrived(&self, worker_id: &str, hold: &HoldId) {
+        let _ = self.start_known(worker_id, hold);
     }
 
     /// As [`Self::start_arrived`]; returns whether the start wasn't known already.
     #[must_use]
-    pub fn start_known(&self, worker_id: &str, attempt_id: &str) -> bool {
+    pub fn start_known(&self, worker_id: &str, hold: &HoldId) -> bool {
+        let attempt_id = &hold.to_string();
         self.inner()
             .started
             .insert((attempt_id.to_owned(), worker_id.to_owned()))
@@ -879,7 +907,8 @@ impl Arrivals {
 
     /// Whether a `Started` or `Finished` for `attempt_id` arrived and isn't handled yet.
     #[must_use]
-    pub fn start_waiting(&self, attempt_id: &str) -> bool {
+    pub fn start_waiting(&self, hold: &HoldId) -> bool {
+        let attempt_id = &hold.to_string();
         let inner = self.inner();
         let from = (attempt_id.to_owned(), String::new());
         inner
@@ -903,7 +932,8 @@ impl Arrivals {
     }
 
     /// `worker_id`'s message about `attempt_id`'s start was handled (or failed to be).
-    pub fn start_handled(&self, worker_id: &str, attempt_id: &str) {
+    pub fn start_handled(&self, worker_id: &str, hold: &HoldId) {
+        let attempt_id = &hold.to_string();
         self.inner()
             .started
             .remove(&(attempt_id.to_owned(), worker_id.to_owned()));
@@ -1671,7 +1701,9 @@ impl MasterCore {
             .take(worker_id, "largest tasks", usage.largest_tasks)
             .into_iter()
             .map(|task| schedr_model::usage::TaskMemory {
-                attempt_id: limits.cut(task.attempt_id),
+                // The attempt, as its pages name it: a moved cleanup runs under its hold's ID
+                // (decision 535; agy's sixth review of B304).
+                attempt_id: limits.cut(HoldId::parse(&task.attempt_id).attempt().to_owned()),
                 dag_id: limits.cut(task.dag_id),
                 run_id: limits.cut(task.run_id),
                 task_id: limits.cut(task.task_id),
@@ -1908,13 +1940,13 @@ impl MasterCore {
                     Box::pin(db.atomically(self.dispatcher.started(worker_id, &started, now)))
                         .await;
                 let id = started.attempt_id.as_str();
-                let settled = self
-                    .settle(handled, memory, id, |a| a.is_some_and(|a| a.started))
-                    .await;
+                let hold = HoldId::parse(id);
+                let landed = start_landed(&hold);
+                let settled = self.settle(handled, memory, id, landed).await;
                 // Not stored, the start stays known in memory: the attempt runs, and isn't
                 // taken back meanwhile; its `Finished` (or a reconnect's journal) settles it.
                 if settled.is_ok() {
-                    self.arrivals.start_handled(worker_id, id);
+                    self.arrivals.start_handled(worker_id, &HoldId::parse(id));
                 }
                 match settled? {
                     Some(out) => out.into_iter().collect(),
@@ -1931,8 +1963,9 @@ impl MasterCore {
                 )))
                 .await;
                 let id = rejected.attempt_id.as_str();
-                // Undone, the attempt is deleted.
-                self.settle(handled, memory, id, |a| a.is_none()).await?;
+                let hold = HoldId::parse(id);
+                let landed = refusal_landed(worker_id, &hold);
+                self.settle(handled, memory, id, landed).await?;
                 Vec::new()
             }
             worker_message::Message::Finished(finished) => {
@@ -2462,7 +2495,7 @@ impl MasterCore {
         // As for `Started`: not stored, the worker sends it again (B41), and the
         // attempt isn't taken back meanwhile.
         if settled.is_ok() {
-            self.arrivals.start_handled(worker_id, id);
+            self.arrivals.start_handled(worker_id, &HoldId::parse(id));
         }
         Ok(vec![settled?.unwrap_or_else(|| {
             crate::dispatch::finished_ack(worker_id, id)
@@ -2552,7 +2585,7 @@ impl MasterCore {
         }
         self.metrics.count_staged();
         for id in group.attempt_ids() {
-            self.arrivals.start_handled(worker_id, id);
+            self.arrivals.start_handled(worker_id, &HoldId::parse(id));
         }
         Ok(out)
     }
@@ -2622,7 +2655,7 @@ impl MasterCore {
         self.metrics.count_staged();
         for (worker_id, group) in &batch {
             for id in group.attempt_ids() {
-                self.arrivals.start_handled(worker_id, id);
+                self.arrivals.start_handled(worker_id, &HoldId::parse(id));
             }
         }
         Ok(out)
@@ -2663,7 +2696,7 @@ impl MasterCore {
                     .read_back
                     .stored(|| async {
                         self.db
-                            .attempt(id)
+                            .attempt(HoldId::parse(id).attempt())
                             .await
                             .is_ok_and(|attempt| landed(attempt.as_ref()))
                     })
@@ -2792,11 +2825,16 @@ impl MasterCore {
         entry: &pb::JournalEntry,
         now: Timestamp,
     ) -> Result<(pb::AttemptDecision, u32, Option<Outgoing>), CoreError> {
-        let Some(mut attempt) = self.db.attempt(&entry.attempt_id).await? else {
+        let hold = HoldId::parse(&entry.attempt_id);
+        let Some(mut attempt) = self.db.attempt(hold.attempt()).await? else {
             return Ok((pb::AttemptDecision::Kill, 0, None));
         };
         let finished = entry.state == i32::from(pb::JournalState::Finished);
-        if attempt.worker_id.is_empty()
+        // Only the current hold may have it back or go on with it (decision 535): a worker's
+        // earlier hold, told `Kill` since, is another ID.
+        let holder = hold == attempt.hold();
+        if holder
+            && attempt.worker_id.is_empty()
             && attempt.status.is_none()
             && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id)
         {
@@ -2806,19 +2844,24 @@ impl MasterCore {
             if finished {
                 return Ok((pb::AttemptDecision::Continue, 0, None));
             }
-            // One not ended, holding handles the master never got: the only worker with all
-            // of them gets it back, adopted below, and nothing else cleans them (B169).
-            if entry.handles > self.known_handles(&attempt.id).await?
-                && self.take_back(&attempt, worker_id).await?
-            {
+            // One not ended, its cleanup still waiting for another worker: it gets it back,
+            // adopted below, and cleans up itself, with every handle it holds, the master's or
+            // not (B169). Whatever handles it holds (B304, the user's option A, extending
+            // decision 308): told `Kill` instead, it reported the cleanup not needed (decision
+            // 504) for a try still open, and every place a report settles an attempt had to
+            // learn to ignore it.
+            if self.take_back(&attempt, worker_id).await? {
                 attempt.worker_id = worker_id.to_owned();
             }
         }
-        if attempt.worker_id != worker_id {
+        if attempt.worker_id != worker_id || !holder {
             // Its cleanup moved from this worker, which may hold handles the master never got
             // (registered while it was cut off): it cleans those itself, and its result is
-            // added to the attempt's (B169). One that ended is sent again for that.
-            if self.db.rest_owed_by(&attempt.id).await?.as_deref() == Some(worker_id) {
+            // added to the attempt's (B169). One that ended is sent again for that. Only hold 0,
+            // the task's own run, owes it (decision 535; agy's fifth review of B304).
+            if hold.ran_the_task()
+                && self.db.rest_owed_by(&attempt.id).await?.as_deref() == Some(worker_id)
+            {
                 if finished {
                     return Ok((pb::AttemptDecision::Continue, 0, None));
                 }
@@ -2853,7 +2896,8 @@ impl MasterCore {
                     message: pb::MasterMessage {
                         message: Some(master_message::Message::CancelAttempt(pb::CancelAttempt {
                             interrupted: moving,
-                            attempt_id: attempt.id.clone(),
+                            // The hold it reported (decision 535): the attempt's current one.
+                            attempt_id: entry.attempt_id.clone(),
                         })),
                         clock: None,
                     },
@@ -2871,7 +2915,7 @@ impl MasterCore {
         start: pb::CleanupStart,
     ) -> Result<Outgoing, CoreError> {
         let go = self
-            .cleanup_may_start(worker_id, &start.attempt_id, start.rest)
+            .cleanup_may_start(worker_id, &HoldId::parse(&start.attempt_id), start.rest)
             .await?;
         Ok(Outgoing {
             worker_id: worker_id.to_owned(),
@@ -2893,16 +2937,19 @@ impl MasterCore {
     async fn cleanup_may_start(
         &self,
         worker_id: &str,
-        attempt_id: &str,
+        hold: &HoldId,
         rest: bool,
     ) -> Result<bool, CoreError> {
+        // The rest is the task's own run's (decision 308): hold 0.
         if rest {
-            return Ok(self.db.rest_owed_by(attempt_id).await?.as_deref() == Some(worker_id));
+            return Ok(hold.ran_the_task()
+                && self.db.rest_owed_by(hold.attempt()).await?.as_deref() == Some(worker_id));
         }
-        let Some(attempt) = self.db.attempt(attempt_id).await? else {
+        let Some(attempt) = self.db.attempt(hold.attempt()).await? else {
             return Ok(false);
         };
-        Ok(attempt.status.is_none() && attempt.worker_id == worker_id)
+        // Its current hold only (decision 535).
+        Ok(attempt.status.is_none() && attempt.worker_id == worker_id && attempt.hold() == *hold)
     }
 
     /// Undoes a waiting cleanup's move back to `worker_id` (B169). The task's result the
@@ -2913,7 +2960,9 @@ impl MasterCore {
         attempt: &schedr_db::attempts::StoredAttempt,
         worker_id: &str,
     ) -> Result<bool, CoreError> {
-        let lost_kept = attempt.cleanup_moves == 1
+        // Hold 0, the task's own run, taking it back (decision 535): the `lost` kept is the
+        // master's own then, the task having run there.
+        let lost_kept = attempt.hold().ran_the_task()
             && self
                 .db
                 .task_result(&attempt.id)

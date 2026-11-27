@@ -1,0 +1,30 @@
+title = "A hold of an attempt has its own ID: <attempt>_<n> for a moved cleanup's holder n"
+date = 2026-11-27
+by = "user"  # user, claude
+status = "active"  # active, superseded, dropped, untraced
+topic = "cleanup"
+section = "Moving and disconnection"
+summary = '''
+Every message about an attempt names one hold of it: the task's own run (hold 0) by the
+attempt's ID, its moved cleanup's `n`th holder by `<attempt>_<n>` (`schedr_model::hold::HoldId`;
+a UUID holds no `_`). The master gives each worker a moved cleanup is assigned to the next
+number (`attempts.cleanup_holder`, migration 0004, never lowered; a take-back keeps it) and sends
+the cleanup-only assignment under that ID; the worker treats it as any attempt, its journal,
+maps and logs keeping two holds of one attempt apart, and needs no change. The master parses the
+ID once where a message comes in and judges it against the attempt's current hold
+(`StoredAttempt::hold`): a `Started`, `Rejected`, `TaskEnded`, `HandlesAdded`, a cleanup's end, its
+barrier's `go` and a journal entry at registration count only from it; the rest of the handles
+(`CLEAN_REST`, decision 308) only from hold 0; what an earlier hold sends is acknowledged and
+never stored. Its per-stream record (`Arrivals`) takes a `HoldId`; worker slots stay by
+attempt. Hold 0 ran the task, any later hold the cleanup alone: whose result stands. The
+webserver reads a moved cleanup's log under its current hold's ID. No protocol field. Why (B304,
+agy's four reviews): every keyed place on either side used the attempt's ID, so a worker's
+earlier hold and its moved cleanup, one ID, were mixed up wherever a check was missing (decision
+534 added the holder as a separate field, and round four found ten such places). Supersedes
+decision 534. Not chosen: a fresh UUID per hold (a table to find the attempt again); a counter
+for attempts too (`<counter>_<n>`: every attempt ID in the system changed, a database round trip
+per assignment); keeping 534 and fixing its ten findings in place.
+'''
+history = "JOURNAL.md#D535"  # <a id="D535"></a> starts its JOURNAL.md entry
+step = "B304"
+code = ["crates/schedr-model/src/hold.rs::HoldId", "crates/schedr-db/src/attempts.rs::hold", "crates/schedr-master/src/dispatch.rs::finished", "crates/schedr-master/src/core.rs::journal_decision", "crates/schedr-master/src/core.rs::cleanup_may_start"]

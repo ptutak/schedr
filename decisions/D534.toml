@@ -1,0 +1,28 @@
+title = "A cleanup's holder is numbered: only its current holder's reports of it count"
+date = 2026-11-27
+by = "user"  # user, claude
+status = "superseded"  # active, superseded, dropped, untraced
+topic = "cleanup"
+section = "Moving and disconnection"
+summary = '''
+Each hold of an attempt's cleanup has a number, `attempts.cleanup_holder` (migration 0004): 0 for
+the task's own run, one more each time a moved cleanup is given to a worker, never lowered (a
+take-back keeps the holder's number: the same holder goes on). The master puts it in the
+cleanup's assignment (`CleanupOnly.holder`); the worker sends it back on that attempt's
+`Finished` (`cleanup_holder`), `CleanupStart` (`holder`) and journal entry (`cleanup_holder`),
+kept across its restart in the journal's assignment and result. A worker's report of the cleanup
+counts only from the current holder: its end, its barrier's `go`, its journal at registration
+(go on, or have it back while it waits: decisions 282 and 533). A worker that held it before,
+told `Kill` since, sends an older number, so whatever it reports is acknowledged and never
+stored. The rest of the handles stays the task's own run's worker's (decision 308). Protocol
+2.3's fields (not yet released: no new version). Why (B304, agy's three reviews): several
+workers report on one attempt under one ID, and the master guessed which run a report came from
+by what it said ("did the cleanup run?") and by fields that drift (`moved_from` left set after
+the cleanup was given on); each round found another guess failing. Not chosen: fixing round
+three's findings in place (F: the same pattern, a fourth round likely); a separate attempt for
+each move of a cleanup (G: a migration and many readers of attempts).
+'''
+superseded_by = 535
+history = "JOURNAL.md#D534"  # <a id="D534"></a> starts its JOURNAL.md entry
+step = "B304"
+code = ["crates/schedr-master/src/dispatch.rs::finished", "crates/schedr-master/src/core.rs::journal_decision", "crates/schedr-master/src/core.rs::cleanup_may_start", "crates/schedr-agent/src/agent.rs::holder_of"]

@@ -194,6 +194,7 @@ fn an_attempts_cleanup_shows_its_result_and_handles() {
             error_kind: Some("exit".to_owned()),
             error_summary: Some(r#"{"exception": "Boom"}"#.to_owned()),
             moves: 1,
+            holder: 1,
             handles: vec![
                 r#"{"handle_type": "Job", "value": {"id": 7, "password": "hunter2",
                     "dsn": "postgres://u:pw@db/x"}}"#

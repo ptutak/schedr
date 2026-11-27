@@ -5,6 +5,7 @@
 //! to send (assignments, cancels, acknowledgements) is delivered through it, from a stream's
 //! messages and from the loop's ticks alike.
 
+use schedr_model::hold::HoldId;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1110,7 +1111,7 @@ impl Hub {
             // An assignment that doesn't leave never started there (Grok's review of B240).
             let unsent = |attempt: Option<&String>| {
                 if let Some(attempt_id) = attempt {
-                    self.arrivals.unsent(&worker_id, attempt_id);
+                    self.arrivals.unsent(&worker_id, &HoldId::parse(attempt_id));
                 }
             };
             let Some(stream) = self.sessions.current(&worker_id) else {
@@ -1122,8 +1123,12 @@ impl Hub {
             match stream.send(message) {
                 Ok(number) => {
                     if let Some(attempt_id) = assigned {
-                        self.arrivals
-                            .assigned(&worker_id, stream.id(), &attempt_id, number);
+                        self.arrivals.assigned(
+                            &worker_id,
+                            stream.id(),
+                            &HoldId::parse(&attempt_id),
+                            number,
+                        );
                     }
                 }
                 Err(mpsc::error::TrySendError::Full(())) => {
@@ -2337,14 +2342,18 @@ async fn read_stream(
                     | worker_message::Message::Finished(pb::Finished { attempt_id, .. }),
                 ) = &message.message
                 {
-                    arrivals.start_arrived_on(&worker_id, acks.stream_id, attempt_id);
-                    arrivals.answered_on(&worker_id, acks.stream_id, attempt_id);
+                    arrivals.start_arrived_on(
+                        &worker_id,
+                        acks.stream_id,
+                        &HoldId::parse(attempt_id),
+                    );
+                    arrivals.answered_on(&worker_id, acks.stream_id, &HoldId::parse(attempt_id));
                 }
                 if let Some(worker_message::Message::Rejected(pb::Rejected {
                     attempt_id, ..
                 })) = &message.message
                 {
-                    arrivals.answered_on(&worker_id, acks.stream_id, attempt_id);
+                    arrivals.answered_on(&worker_id, acks.stream_id, &HoldId::parse(attempt_id));
                 }
                 if let Some(message) = message.message
                     && let Err(mpsc::error::SendError(unsent)) = queue.send(message)
@@ -2354,7 +2363,11 @@ async fn read_stream(
                     | worker_message::Message::Finished(pb::Finished { attempt_id, .. }) =
                         &unsent
                     {
-                        arrivals.start_handled_on(&worker_id, acks.stream_id, attempt_id);
+                        arrivals.start_handled_on(
+                            &worker_id,
+                            acks.stream_id,
+                            &HoldId::parse(attempt_id),
+                        );
                     }
                     return;
                 }
@@ -2478,7 +2491,7 @@ impl Master for Hub {
         if self.worker_identity.is_some() {
             let attempt = self
                 .db
-                .attempt(&attempt_id)
+                .attempt(HoldId::parse(&attempt_id).attempt())
                 .await
                 .map_err(|e| Status::internal(e.to_string()))?
                 .ok_or_else(|| Status::not_found(format!("no open attempt `{attempt_id}`")))?;

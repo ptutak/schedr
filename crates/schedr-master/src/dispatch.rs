@@ -22,6 +22,7 @@
 //!
 //! The dispatcher only builds messages; the gRPC server sends them (milestone 1.14).
 
+use schedr_model::hold::HoldId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,6 +167,10 @@ impl ResultsReads {
     ///
     /// [`DispatchError::Db`] if the database fails.
     pub async fn read(db: &Database, ids: &[&str]) -> Result<Self, DispatchError> {
+        // By attempt: a hold's ID names its attempt (decision 535).
+        let holds: Vec<HoldId> = ids.iter().map(|id| HoldId::parse(id)).collect();
+        let attempt_ids: Vec<&str> = holds.iter().map(HoldId::attempt).collect();
+        let ids = attempt_ids.as_slice();
         let mut reads = Self::default();
         if ids.is_empty() {
             return Ok(reads);
@@ -1750,7 +1755,7 @@ impl Dispatcher {
         for attempt in open.iter().filter(|a| a.run_id == run_id) {
             let unstarted = !attempt.started
                 && !attempt.moving
-                && !self.arrivals.start_waiting(&attempt.id)
+                && !self.arrivals.start_waiting(&attempt.hold())
                 && run.dag.resource_of_cleanup(&attempt.task_id).is_none();
             let instance = run
                 .instances
@@ -2172,7 +2177,10 @@ impl Dispatcher {
             return false;
         };
         self.read_back
-            .stored(|| async { matches!(self.db.attempt(attempt_id).await, Ok(Some(_))) })
+            .stored(|| async {
+                let hold = HoldId::parse(attempt_id);
+                matches!(self.db.attempt(hold.attempt()).await, Ok(Some(_)))
+            })
             .await
     }
 
@@ -2653,12 +2661,11 @@ impl Dispatcher {
     ) -> Result<Option<Outgoing>, DispatchError> {
         let method = start_method(started);
         let at = self.start_time(started, now);
-        let attempt = self.db.attempt(&started.attempt_id).await?;
-        if let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id)
-            && self
-                .db
-                .mark_started(&started.attempt_id, method, at)
-                .await?
+        // Its current hold only (decision 535): a worker's earlier hold of it is not it.
+        let hold = HoldId::parse(&started.attempt_id);
+        let attempt = self.db.attempt(hold.attempt()).await?;
+        if let Some(attempt) = attempt.filter(|a| a.worker_id == worker_id && a.hold() == hold)
+            && self.db.mark_started(&attempt.id, method, at).await?
         {
             // A start already recorded changes only the method: no witness of this write.
             if !attempt.started {
@@ -2731,10 +2738,12 @@ impl Dispatcher {
         batch: &[(&str, &[pb::Started])],
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
-        let ids: Vec<&str> = batch
+        // By attempt; each start counts only from its attempt's current hold (decision 535).
+        let holds: Vec<HoldId> = batch
             .iter()
-            .flat_map(|(_, group)| group.iter().map(|s| s.attempt_id.as_str()))
+            .flat_map(|(_, group)| group.iter().map(|s| HoldId::parse(&s.attempt_id)))
             .collect();
+        let ids: Vec<&str> = holds.iter().map(HoldId::attempt).collect();
         // Read under the lock, not before it (Codex's review of M5.2c): a registration's
         // adoption may have started one meanwhile, and a start's witness of the commit
         // (`Witness::Started`) must say what this write changed.
@@ -2745,17 +2754,21 @@ impl Dispatcher {
             .into_iter()
             .map(|a| (a.id.clone(), a))
             .collect();
-        let theirs =
-            |worker_id: &str, id: &str| attempts.get(id).is_some_and(|a| a.worker_id == worker_id);
+        let theirs = |worker_id: &str, wire: &str| {
+            let hold = HoldId::parse(wire);
+            attempts
+                .get(hold.attempt())
+                .is_some_and(|a| a.worker_id == worker_id && a.hold() == hold)
+        };
         // Each attempt's last start method, as one by one would leave it, and its first
         // `Started`'s time (a later one is kept by the database anyway).
-        let mut methods: BTreeMap<&str, (&str, Timestamp)> = BTreeMap::new();
+        let mut methods: BTreeMap<String, (&str, Timestamp)> = BTreeMap::new();
         for &(worker_id, group) in batch {
             for started in group {
                 if theirs(worker_id, &started.attempt_id) {
                     let at = self.start_time(started, now);
                     methods
-                        .entry(&started.attempt_id)
+                        .entry(HoldId::parse(&started.attempt_id).attempt().to_owned())
                         .and_modify(|(method, _)| *method = start_method(started))
                         .or_insert((start_method(started), at));
                 }
@@ -2766,7 +2779,7 @@ impl Dispatcher {
             let of: Vec<(&str, Timestamp)> = methods
                 .iter()
                 .filter(|&(_, (m, _))| *m == method)
-                .map(|(id, (_, at))| (*id, *at))
+                .map(|(id, (_, at))| (id.as_str(), *at))
                 .collect();
             running.extend(self.db.mark_started_many(&of, method).await?);
         }
@@ -2787,7 +2800,8 @@ impl Dispatcher {
                 group
                     .iter()
                     .filter(|s| {
-                        !(running.contains(&s.attempt_id) && theirs(worker_id, &s.attempt_id))
+                        !(running.contains(HoldId::parse(&s.attempt_id).attempt())
+                            && theirs(worker_id, &s.attempt_id))
                     })
                     .map(move |s| cancel(worker_id, &s.attempt_id))
             })
@@ -2796,8 +2810,9 @@ impl Dispatcher {
 
     /// Whether `worker_id` surely never started `attempt_id`, as its messages' echo says
     /// ([`crate::core::Arrivals::never_started`], B240).
-    fn never_started(&self, worker_id: &str, attempt_id: &str) -> bool {
-        self.trust_unknown || self.arrivals.never_started(worker_id, attempt_id)
+    fn never_started(&self, worker_id: &str, attempt: &StoredAttempt) -> bool {
+        // Its current hold: a moved cleanup's is assigned under its own ID (decision 535).
+        self.trust_unknown || self.arrivals.never_started(worker_id, &attempt.hold())
     }
 
     /// Times this dispatcher on `steady` (see [`crate::clock`]).
@@ -2826,9 +2841,14 @@ impl Dispatcher {
             worker_id: worker_id.to_owned(),
             reason: e.to_string(),
         })?;
-        let Some(attempt) = self.db.attempt(&rejected.attempt_id).await? else {
+        let hold = HoldId::parse(&rejected.attempt_id);
+        let Some(attempt) = self.db.attempt(hold.attempt()).await? else {
             return Ok(());
         };
+        // An earlier hold's refusal is not the current holder's (decision 535).
+        if attempt.hold() != hold {
+            return Ok(());
+        }
         if attempt.moving && attempt.worker_id == worker_id && attempt.status.is_none() {
             // A moved cleanup goes on waiting, this worker asked last.
             self.rejections
@@ -2930,8 +2950,10 @@ impl Dispatcher {
         result: &pb::Finished,
         now: Timestamp,
     ) -> Result<(), DispatchError> {
-        if let Some(attempt) = self.db.attempt(&result.attempt_id).await?
+        let hold = HoldId::parse(&result.attempt_id);
+        if let Some(attempt) = self.db.attempt(hold.attempt()).await?
             && attempt.worker_id == worker_id
+            && attempt.hold() == hold
             && attempt.status.is_none()
         {
             self.db
@@ -2968,20 +2990,35 @@ impl Dispatcher {
                 worker_id: worker_id.to_owned(),
                 reason: e.to_string(),
             })?;
-        if let Some(attempt) = self.db.attempt(&finished.attempt_id).await? {
+        let hold = HoldId::parse(&finished.attempt_id);
+        if let Some(attempt) = self.db.attempt(hold.attempt()).await? {
             // A cleanup under way when its worker was cut off (decision 255), reported when it
             // came back, while the cleanup waits to move: it ran, so it counts and doesn't
             // move (decision 282). The worker ran the task too, if it is the first move: its
-            // own result stands (see `kept` below).
-            let left_by_it = attempt.worker_id.is_empty()
+            // own result stands (see `kept` below). Only one that ran: not needed (the master
+            // dropped its gate, or its process never started) it never ran, and the move still
+            // waits (B304).
+            let ran = cleanup_ran(finished.cleanup.as_ref());
+            // Only the current hold ends it (decision 535): a worker's earlier hold, told `Kill`
+            // since, reports under its own ID, whatever it says.
+            let holder = hold == attempt.hold();
+            let left_by_it = holder
+                && attempt.worker_id.is_empty()
                 && attempt.status.is_none()
-                && finished.cleanup.is_some()
+                && ran
                 && self.db.cleanup_moved_from(&attempt.id).await?.as_deref() == Some(worker_id);
             // The handles the master never got, cleaned by the worker its cleanup first moved
             // from (B169): added to the attempt's cleanup, ended or not. Said to be a rest, it
             // never counts as the whole cleanup, even from the attempt's worker now.
             let rest_only = finished.cleanup.as_ref().is_some_and(|c| c.rest);
-            if (rest_only || (attempt.worker_id != worker_id && !left_by_it))
+            // Only a rest that ran (agy's review of B304: one not needed was added as the rest,
+            // and the rest then owed by nobody), and only hold 0's, the task's own run's
+            // (decision 308). Any report not from the current hold may be it: a sender is its
+            // hold, not its worker (agy's fifth review: the worker given the moved cleanup
+            // itself sent hold 0's whole cleanup, and it was dropped).
+            if (rest_only || (!holder && !left_by_it))
+                && ran
+                && hold.ran_the_task()
                 && let Some(rest) = &finished.cleanup
                 && self.db.rest_owed_by(&attempt.id).await?.as_deref() == Some(worker_id)
             {
@@ -2995,9 +3032,10 @@ impl Dispatcher {
                 // Added already, or not this worker's to clean: ignored.
                 return Ok(finished_ack(worker_id, &finished.attempt_id));
             }
-            if attempt.worker_id != worker_id && !left_by_it {
-                // Not its attempt (B46): only the worker it was assigned to ran it. Acknowledged
-                // so the sender stops resending, never stored, as `Started` is refused.
+            if (attempt.worker_id != worker_id || !holder) && !left_by_it {
+                // Not its attempt (B46): only the worker it was assigned to ran it, as its
+                // current holder (decision 534). Acknowledged so the sender stops resending,
+                // never stored, as `Started` is refused.
                 tracing::warn!(
                     worker_id,
                     attempt_id = %finished.attempt_id,
@@ -3022,11 +3060,10 @@ impl Dispatcher {
                 .map(|c| cleanup_end(c, worker_id))
                 .transpose()?;
             // A cleanup that moved knows nothing of the task: its result is the kept one
-            // (a refused one is reported as `result_not_stored`, and stands). Only the worker
-            // it first moved from ran the task: one it moved from later ran the cleanup alone.
-            let ran_the_task = left_by_it && attempt.cleanup_moves == 1;
+            // (a refused one is reported as `result_not_stored`, and stands). Only hold 0, the
+            // task's own run, ran the task; any later hold ran the cleanup alone (decision 535).
             let kept = if attempt.cleanup_moves > 0
-                && !ran_the_task
+                && !hold.ran_the_task()
                 && finished.error_kind != RESULT_NOT_STORED
             {
                 self.kept_result(&attempt).await?
@@ -3157,10 +3194,12 @@ impl Dispatcher {
         batch: &[(&str, &[pb::Finished])],
         now: Timestamp,
     ) -> Result<Vec<Outgoing>, DispatchError> {
-        let ids: Vec<&str> = batch
+        // By attempt: a hold's ID names its attempt (decision 535).
+        let holds: Vec<HoldId> = batch
             .iter()
-            .flat_map(|(_, group)| group.iter().map(|f| f.attempt_id.as_str()))
+            .flat_map(|(_, group)| group.iter().map(|f| HoldId::parse(&f.attempt_id)))
             .collect();
+        let ids: Vec<&str> = holds.iter().map(HoldId::attempt).collect();
         let attempts = self.batch_attempts(&ids).await?;
         // A repeat is a worker's second `Finished` for an attempt; another worker's is its own
         // (a moved cleanup's rest).
@@ -3169,7 +3208,7 @@ impl Dispatcher {
         for &(worker_id, group) in batch {
             for finished in group {
                 let first = seen.insert((worker_id, finished.attempt_id.as_str()));
-                match attempts.get(&finished.attempt_id) {
+                match attempts.get(HoldId::parse(&finished.attempt_id).attempt()) {
                     Some(attempt) if first && is_common(attempt, finished, worker_id) => {
                         common.push((worker_id, attempt, finished));
                     }
@@ -3653,7 +3692,7 @@ impl Dispatcher {
             .chain(cleanups.into_iter().map(|a| (a, true)))
         {
             if self.adopted_unrecorded.contains(&attempt.id)
-                || !self.never_started(&attempt.worker_id, &attempt.id)
+                || !self.never_started(&attempt.worker_id, &attempt)
             {
                 continue;
             }
@@ -3704,12 +3743,12 @@ impl Dispatcher {
         let mut left = Vec::new();
         let mut never = Vec::new();
         for attempt in self.db.open_attempts(Some(worker_id)).await? {
-            if reported.contains(attempt.id.as_str()) {
+            if reported.contains(attempt.hold().to_string().as_str()) {
                 continue;
             }
             // Not started here: the task never heard starting, or a moved cleanup assigned
             // here and not started (the task's own start was elsewhere).
-            if (!attempt.started || attempt.moving) && self.never_started(worker_id, &attempt.id) {
+            if (!attempt.started || attempt.moving) && self.never_started(worker_id, &attempt) {
                 never.push(attempt);
             } else {
                 left.push(attempt.id);
@@ -3799,7 +3838,10 @@ impl Dispatcher {
             .open_attempts(Some(worker_id))
             .await?
             .into_iter()
-            .filter(|a| (!a.started || a.moving) && !reported.contains(a.id.as_str()))
+            // Its current hold reported: a worker's earlier hold is another ID (decision 535).
+            .filter(|a| {
+                (!a.started || a.moving) && !reported.contains(a.hold().to_string().as_str())
+            })
             .collect();
         // Read from the database: after a master's restart the hold isn't in memory yet.
         let held: BTreeSet<String> = if unstarted.is_empty() {
@@ -3838,8 +3880,9 @@ impl Dispatcher {
             .open_attempts(Some(worker_id))
             .await?
             .into_iter()
+            // Its current hold reported (decision 535).
+            .filter(|attempt| attempt_ids.contains(&attempt.hold().to_string()))
             .map(|attempt| attempt.id)
-            .filter(|id| attempt_ids.contains(id))
             .collect();
         // After a restart the hold isn't in memory yet: cleared in the database all the same.
         self.db.clear_replaced(&own).await?;
@@ -3971,7 +4014,7 @@ impl Dispatcher {
             // `Started` held up on the way (a one-way cut): as a started one, `lost` using a
             // retry, its cleanup moving if it may (B234), the worker running on with an
             // ordinary task (decision 252).
-            if !self.never_started(worker_id, &attempt.id) {
+            if !self.never_started(worker_id, &attempt) {
                 self.end_lost(
                     in_round,
                     &attempt,
@@ -4268,6 +4311,11 @@ impl Dispatcher {
             (inputs, outcomes, params),
         );
         self.add_event(ready, &mut message).await?;
+        // Under its hold's own ID, numbered when assigned (decision 535): the worker keeps it
+        // apart from any earlier hold of the attempt, and only it counts.
+        if let Some(attempt) = self.db.attempt(attempt_id).await? {
+            message.attempt_id = attempt.hold().to_string();
+        }
         message.cleanup_only = Some(pb::CleanupOnly {
             handle_json: handles.into_iter().map(String::into_bytes).collect(),
         });
@@ -4286,10 +4334,13 @@ impl Dispatcher {
         worker_id: &str,
         added: &pb::HandlesAdded,
     ) -> Result<(), DispatchError> {
-        let Some(attempt) = self.db.attempt(&added.attempt_id).await? else {
+        let hold = HoldId::parse(&added.attempt_id);
+        let Some(attempt) = self.db.attempt(hold.attempt()).await? else {
             return Ok(());
         };
-        if attempt.worker_id != worker_id || attempt.status.is_some() {
+        // The task's run registers handles: only its current hold's (agy's fourth review of
+        // B304: a dying earlier hold's came in under a moved cleanup's).
+        if attempt.worker_id != worker_id || attempt.hold() != hold || attempt.status.is_some() {
             return Ok(());
         }
         let handles: Option<Vec<String>> = added
@@ -4367,7 +4418,7 @@ impl Dispatcher {
             .into_iter()
             .filter(|a| a.run_id == run_id && &a.task_id == task_id)
             .filter(|a| map_index.is_none_or(|i| a.map_index == i))
-            .map(|a| cancel(&a.worker_id, &a.id))
+            .map(|a| cancel(&a.worker_id, &a.hold().to_string()))
             .collect();
         Ok((cancelled, stopping))
     }
@@ -4417,7 +4468,7 @@ impl Dispatcher {
             .await?
             .into_iter()
             .filter(|a| a.run_id == run_id && running.contains(&(&a.task_id, a.map_index)))
-            .map(|a| cancel(&a.worker_id, &a.id))
+            .map(|a| cancel(&a.worker_id, &a.hold().to_string()))
             .collect())
     }
 
@@ -4465,7 +4516,7 @@ impl Dispatcher {
                         && !a.worker_id.is_empty()
                         && stopping.contains(&(&a.task_id, a.map_index))
                 })
-                .map(|a| cancel(&a.worker_id, &a.id)),
+                .map(|a| cancel(&a.worker_id, &a.hold().to_string())),
         );
         Ok(())
     }
@@ -4988,6 +5039,7 @@ fn start_method(started: &pb::Started) -> &'static str {
 /// would end up doing, without its reads and writes.
 fn is_repeat(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) -> bool {
     attempt.worker_id == worker_id
+        && HoldId::parse(&finished.attempt_id) == attempt.hold()
         && attempt.status.is_some()
         && attempt.cleanup_moves == 0
         && !finished.cleanup.as_ref().is_some_and(|c| c.rest)
@@ -4995,6 +5047,7 @@ fn is_repeat(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) 
 
 fn is_common(attempt: &StoredAttempt, finished: &pb::Finished, worker_id: &str) -> bool {
     attempt.worker_id == worker_id
+        && HoldId::parse(&finished.attempt_id) == attempt.hold()
         && attempt.status.is_none()
         && attempt.cleanup_moves == 0
         && !finished.cleanup.as_ref().is_some_and(|c| c.rest)
@@ -5206,10 +5259,12 @@ pub async fn attempt_inputs(
     db: &Database,
     attempt_id: &str,
 ) -> Result<Option<Vec<u8>>, DispatchError> {
-    let Some(attempt) = db.attempt(attempt_id).await? else {
+    // Its attempt's, for its current hold only (decision 535; agy's fifth review of B304).
+    let hold = HoldId::parse(attempt_id);
+    let Some(attempt) = db.attempt(hold.attempt()).await? else {
         return Ok(None);
     };
-    if attempt.status.is_some() {
+    if attempt.status.is_some() || attempt.hold() != hold {
         return Ok(None);
     }
     let Some(run) = db.run_tasks(&attempt.run_id).await? else {
@@ -5325,4 +5380,11 @@ fn decide(found: Option<&OtherRun>) -> Option<WaitEnd> {
         }),
         _ => None,
     }
+}
+
+/// Whether a worker's report says its cleanup ran ([`CleanupResult::ran`]): only then does it
+/// stand for a cleanup waiting to move or moved (B304); none, one not needed (refused here,
+/// decision 504) or a status this master doesn't know, not.
+fn cleanup_ran(cleanup: Option<&pb::CleanupResult>) -> bool {
+    cleanup.is_some_and(|c| cleanup_result_from_proto(c.status).is_ok_and(CleanupResult::ran))
 }

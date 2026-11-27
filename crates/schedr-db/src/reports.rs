@@ -170,14 +170,20 @@ impl Database {
         statuses: &[ReportedStatus],
         links: &[ReportedLink],
     ) -> Result<(usize, usize), DbError> {
-        // The worker's attempt.
-        const OWNED: &str = "EXISTS (SELECT 1 FROM attempts WHERE id = $1{uuid} \
-            AND worker_id = $2)";
+        // The worker's attempt, as its current hold (decision 535; agy's fifth review of B304:
+        // an earlier hold's reports were stored): `${holder}` the hold its ID names.
+        let owned = |holder: u8| {
+            format!(
+                "EXISTS (SELECT 1 FROM attempts WHERE id = $1{{uuid}} AND worker_id = $2 \
+                 AND cleanup_holder = ${holder})"
+            )
+        };
+        let (owned_status, owned_link) = (owned(9), owned(5));
         let add = format!(
             "INSERT INTO attempt_statuses (attempt_id, seq, at, phase, message, progress, \
              extension, extension_version) SELECT $1{{uuid}}, COALESCE((SELECT MAX(seq) + 1 \
              FROM attempt_statuses WHERE attempt_id = $1{{uuid}}), 0), $3{{ts}}, $4, $5, $6, $7, $8 \
-             WHERE {OWNED}"
+             WHERE {owned_status}"
         );
         // Past MAX_STATUSES, the oldest after the first goes.
         let drop_second = format!(
@@ -188,12 +194,12 @@ impl Database {
         );
         let replace = format!(
             "UPDATE attempt_links SET url = $4 WHERE attempt_id = $1{{uuid}} AND label = $3 \
-             AND {OWNED}"
+             AND {owned_link}"
         );
         let add_link = format!(
             "INSERT INTO attempt_links (attempt_id, label, url, position) SELECT $1{{uuid}}, $3, \
              $4, CAST((SELECT COUNT(*) FROM attempt_links WHERE attempt_id = $1{{uuid}}) AS INTEGER) \
-             WHERE {OWNED} AND (SELECT COUNT(*) FROM attempt_links WHERE attempt_id = $1{{uuid}}) \
+             WHERE {owned_link} AND (SELECT COUNT(*) FROM attempt_links WHERE attempt_id = $1{{uuid}}) \
              < {MAX_LINKS}"
         );
         if statuses.is_empty() && links.is_empty() {
@@ -203,8 +209,9 @@ impl Database {
             let mut kept = (0, 0);
             for reported in statuses {
                 let status = &reported.status;
+                let hold = schedr_model::hold::HoldId::parse(&reported.attempt_id);
                 let added = crate::query::query(crate::query::sql_text(backend, &add))
-                    .bind(&reported.attempt_id)
+                    .bind(hold.attempt())
                     .bind(&reported.worker_id)
                     .bind(db_time(status.at))
                     .bind(&status.phase)
@@ -212,33 +219,37 @@ impl Database {
                     .bind(status.progress)
                     .bind(&reported.extension)
                     .bind(&reported.version)
+                    .bind(i64::from(hold.holder()))
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
                 if added > 0 {
                     kept.0 += 1;
                     crate::query::query(crate::query::sql_text(backend, &drop_second))
-                        .bind(&reported.attempt_id)
+                        .bind(hold.attempt())
                         .execute(&mut *tx)
                         .await?;
                 }
             }
             for reported in links {
                 let link = &reported.link;
+                let hold = schedr_model::hold::HoldId::parse(&reported.attempt_id);
                 let mut set = crate::query::query(crate::query::sql_text(backend, &replace))
-                    .bind(&reported.attempt_id)
+                    .bind(hold.attempt())
                     .bind(&reported.worker_id)
                     .bind(&link.label)
                     .bind(&link.url)
+                    .bind(i64::from(hold.holder()))
                     .execute(&mut *tx)
                     .await?
                     .rows_affected();
                 if set == 0 {
                     set = crate::query::query(crate::query::sql_text(backend, &add_link))
-                        .bind(&reported.attempt_id)
+                        .bind(hold.attempt())
                         .bind(&reported.worker_id)
                         .bind(&link.label)
                         .bind(&link.url)
+                        .bind(i64::from(hold.holder()))
                         .execute(&mut *tx)
                         .await?
                         .rows_affected();

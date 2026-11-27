@@ -32,7 +32,7 @@ fn handled_unstarted(dispatcher: &Dispatcher, worker: &str, attempts: &[&str]) {
     for (number, attempt) in (1..).zip(attempts) {
         dispatcher
             .arrivals
-            .assigned(worker, stream, attempt, number);
+            .assigned(worker, stream, &hold(attempt), number);
     }
     dispatcher
         .arrivals
@@ -874,7 +874,7 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
     let attempt = assignment(&out[0]).attempt_id.clone();
     handled_unstarted(&dispatcher, "w1", &[&attempt]);
     // Its `Started` arrived; the master hasn't handled it yet.
-    arrivals.start_arrived("w1", &attempt);
+    arrivals.start_arrived("w1", &hold(&attempt));
     assert_eq!(
         dispatcher
             .step(&InRound::for_tests(), later(11))
@@ -883,7 +883,7 @@ async fn an_attempt_whose_start_arrived_is_not_taken_back() {
         []
     );
     // Handled, it no longer protects the attempt: with no `Started` stored, it expires.
-    arrivals.start_handled("w1", &attempt);
+    arrivals.start_handled("w1", &hold(&attempt));
     let out = dispatcher
         .step(&InRound::for_tests(), later(12))
         .await
@@ -1337,6 +1337,13 @@ fn job(id: &str) -> Json {
     json!({"handle_type": "Job", "value": {"id": id}})
 }
 
+/// `finished` as from the attempt's hold `holder`, under that hold's ID (decision 535): w2,
+/// given a moved cleanup, holds it as hold 1.
+fn held(mut finished: pb::Finished, holder: u32) -> pb::Finished {
+    finished.attempt_id = schedr_model::hold::HoldId::new(&finished.attempt_id, holder).to_string();
+    finished
+}
+
 fn cleaned(attempt: &str) -> pb::Finished {
     pb::Finished {
         attempt_id: attempt.to_owned(),
@@ -1392,16 +1399,25 @@ async fn a_cleanup_anywhere_moves_to_another_worker_with_its_handles() {
         .unwrap();
     assert_eq!((out.len(), out[0].worker_id.as_str()), (1, "w2"));
     let assigned = assignment(&out[0]);
-    assert_eq!(assigned.attempt_id, attempt);
+    assert_eq!(
+        assigned.attempt_id,
+        format!("{attempt}_1"),
+        "under its hold's ID"
+    );
     let only = assigned.cleanup_only.as_ref().expect("only the cleanup");
     assert_eq!(only.handle_json, added.handle_json);
     dispatcher
-        .started("w2", &started(&attempt), ts(NOW))
+        .started("w2", &started(&format!("{attempt}_1")), ts(NOW))
         .await
         .unwrap();
     // The new worker knows nothing of the task: the kept result stands.
     dispatcher
-        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
+        .finished(
+            &InRound::for_tests(),
+            "w2",
+            &held(cleaned(&attempt), 1),
+            ts(NOW),
+        )
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -1439,7 +1455,12 @@ async fn a_task_lost_with_its_worker_is_retried_after_its_moved_cleanup() {
         .await
         .unwrap();
     dispatcher
-        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
+        .finished(
+            &InRound::for_tests(),
+            "w2",
+            &held(cleaned(&attempt), 1),
+            ts(NOW),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1593,7 +1614,8 @@ async fn a_moved_cleanup_its_worker_surely_never_started_waits_again_at_once() {
             .step(&InRound::for_tests(), ts(NOW))
             .await
             .unwrap();
-        handled_unstarted(&dispatcher, "w2", &[&attempt]);
+        let held = format!("{attempt}_1");
+        handled_unstarted(&dispatcher, "w2", &[&held]);
         if lost {
             dispatcher
                 .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, later(9))
@@ -1642,7 +1664,9 @@ async fn a_moved_cleanup_never_sent_waits_again_without_a_move() {
         .step(&InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
-    dispatcher.arrivals.unsent("w2", &attempt);
+    dispatcher
+        .arrivals
+        .unsent("w2", &hold(&format!("{attempt}_1")));
     dispatcher
         .worker_lost(&InRound::for_tests(), "w2", KeptResults::Used, later(61))
         .await
@@ -1704,7 +1728,11 @@ async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
         .step(&InRound::for_tests(), ts(NOW))
         .await
         .unwrap();
-    let refused = rejected(&attempt, pb::RejectReason::CodeMismatch, "not yet");
+    let refused = rejected(
+        &format!("{attempt}_1"),
+        pb::RejectReason::CodeMismatch,
+        "not yet",
+    );
     dispatcher
         .rejected(&InRound::for_tests(), "w2", &refused, ts(NOW))
         .await
@@ -1717,7 +1745,10 @@ async fn a_moved_cleanup_refused_or_never_started_waits_again_without_a_move() {
     let again = later(600);
     let out = dispatcher.step(&InRound::for_tests(), again).await.unwrap();
     assert_eq!(out.len(), 1);
-    handled_unstarted(&dispatcher, "w2", &[&attempt]);
+    // The next hold, under its own ID.
+    let held = assignment(&out[0]).attempt_id.clone();
+    assert_eq!(held, format!("{attempt}_2"));
+    handled_unstarted(&dispatcher, "w2", &[&held]);
     let expired = later(1200);
     dispatcher
         .expire(&InRound::for_tests(), expired)
@@ -1800,7 +1831,12 @@ async fn a_cleanup_reported_by_a_worker_it_moved_from_again_keeps_the_tasks_resu
     let waiting = db.attempt(&attempt).await.unwrap().unwrap();
     assert_eq!((waiting.worker_id.as_str(), waiting.cleanup_moves), ("", 2));
     dispatcher
-        .finished(&InRound::for_tests(), "w2", &cleaned(&attempt), ts(NOW))
+        .finished(
+            &InRound::for_tests(),
+            "w2",
+            &held(cleaned(&attempt), 1),
+            ts(NOW),
+        )
         .await
         .unwrap();
     let extract = extract_instance(&db, &run_id).await;
@@ -1883,14 +1919,15 @@ async fn a_moved_cleanup_whose_start_arrived_is_not_taken_back() {
     let arrivals = crate::core::Arrivals::default();
     let mut dispatcher = dispatcher.with_arrivals(arrivals.clone());
     let attempt = moved_to_w2(&mut dispatcher).await;
-    handled_unstarted(&dispatcher, "w2", &[&attempt]);
-    arrivals.start_arrived("w2", &attempt);
+    let held = format!("{attempt}_1");
+    handled_unstarted(&dispatcher, "w2", &[&held]);
+    arrivals.start_arrived("w2", &hold(&held));
     dispatcher
         .expire(&InRound::for_tests(), later(1200))
         .await
         .unwrap();
     assert_eq!(db.attempt(&attempt).await.unwrap().unwrap().worker_id, "w2");
-    arrivals.start_handled("w2", &attempt);
+    arrivals.start_handled("w2", &hold(&held));
     dispatcher
         .expire(&InRound::for_tests(), later(1200))
         .await
@@ -1923,7 +1960,11 @@ async fn a_moved_cleanup_refused_goes_to_another_worker_and_back_if_none_is_left
         .register("w2", "i1", &[], 9, ts(NOW))
         .await
         .unwrap();
-    let refused = rejected(&attempt, pb::RejectReason::DiskNotWritable, "full");
+    let refused = rejected(
+        &format!("{attempt}_1"),
+        pb::RejectReason::DiskNotWritable,
+        "full",
+    );
     dispatcher
         .rejected(&InRound::for_tests(), "w2", &refused, ts(NOW))
         .await
@@ -1933,8 +1974,14 @@ async fn a_moved_cleanup_refused_goes_to_another_worker_and_back_if_none_is_left
         .await
         .unwrap();
     assert_eq!(out[0].worker_id, "w3");
+    // w3's is the next hold, under its own ID.
+    let by_w3 = rejected(
+        &assignment(&out[0]).attempt_id,
+        pb::RejectReason::DiskNotWritable,
+        "full",
+    );
     dispatcher
-        .rejected(&InRound::for_tests(), "w3", &refused, later(600))
+        .rejected(&InRound::for_tests(), "w3", &by_w3, later(600))
         .await
         .unwrap();
     let out = dispatcher
@@ -2129,7 +2176,7 @@ async fn an_assignment_that_never_left_the_master_goes_back_without_a_retry() {
         .await
         .unwrap();
     let attempt = assignment(&out[0]).attempt_id.clone();
-    dispatcher.arrivals.unsent("w1", &attempt);
+    dispatcher.arrivals.unsent("w1", &hold(&attempt));
     dispatcher
         .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, later(61))
         .await
@@ -2217,8 +2264,10 @@ async fn a_replaced_incarnation_gives_back_what_it_surely_never_started_and_hold
         assignment(&out[1]).attempt_id.clone(),
     );
     let stream = dispatcher.arrivals.new_stream("w1");
-    dispatcher.arrivals.assigned("w1", stream, &known, 1);
-    dispatcher.arrivals.assigned("w1", stream, &unknown, 2);
+    dispatcher.arrivals.assigned("w1", stream, &hold(&known), 1);
+    dispatcher
+        .arrivals
+        .assigned("w1", stream, &hold(&unknown), 2);
     dispatcher.arrivals.read("w1", stream, 1);
     let none = BTreeSet::new();
     let held = dispatcher
@@ -4240,7 +4289,7 @@ async fn starts_waiting_in_memory_dont_fill_a_rounds_expiries() {
     handled_unstarted(&dispatcher, "w1", &ids_of);
     // The oldest ones' starts arrived and wait for a busy master.
     for attempt in &unstarted[..EXPIRIES_PER_ROUND] {
-        arrivals.start_arrived("w1", &attempt.id);
+        arrivals.start_arrived("w1", &hold(&attempt.id));
     }
     dispatcher
         .step(&InRound::for_tests(), later(11))
@@ -7720,5 +7769,189 @@ async fn an_uncommon_failure_after_a_mapped_siblings_success_leaves_the_success(
     assert_eq!(
         db.output(&one.id).await.unwrap(),
         Some(("SUCCESS".to_owned(), json!(7)))
+    );
+}
+
+/// B304 (Grok, from chaos seed 7): the worker a cleanup moved from reporting it *not needed*
+/// (its gate dropped by the master's `Kill`, so it never ran) doesn't stand for the cleanup: the
+/// move still waits, and another worker gets it. Decision 282 counts only a cleanup that ran.
+#[tokio::test]
+async fn a_not_needed_report_while_a_cleanup_waits_to_move_is_ignored() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = started_attempt(&mut dispatcher).await;
+    dispatcher
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    let mut not_needed = cleaned(&attempt);
+    not_needed.cleanup = Some(pb::CleanupResult {
+        status: pb::CleanupStatus::NotNeeded.into(),
+        ..pb::CleanupResult::default()
+    });
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &not_needed, ts(NOW))
+        .await
+        .unwrap();
+    let stored = db.attempt(&attempt).await.unwrap().unwrap();
+    assert_eq!(
+        (stored.status, stored.worker_id.as_str()),
+        (None, ""),
+        "the move still waits"
+    );
+    // Nor taken as the rest of its handles (agy's review of B304): still owed by w1.
+    assert_eq!(
+        db.rest_owed_by(&attempt).await.unwrap().as_deref(),
+        Some("w1"),
+        "the rest still owed"
+    );
+    dispatcher
+        .register("w2", "i1", &[], 1, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), ts(NOW))
+        .await
+        .unwrap();
+    assert!(
+        out.iter().any(|o| assignment(o).cleanup_only.is_some()),
+        "another worker gets the cleanup: {out:?}"
+    );
+}
+
+/// `id`'s hold, as a worker names it (decision 535).
+fn hold(id: &str) -> schedr_model::hold::HoldId {
+    schedr_model::hold::HoldId::parse(id)
+}
+
+/// A started attempt whose worker `w1` was lost, its cleanup then given back to `w1` itself as
+/// hold 1 (no other worker): `w1` holds both its earlier run (the attempt's ID) and the moved
+/// cleanup (`<attempt>_1`), which round four of agy's reviews of B304 found mixed up.
+async fn moved_back_to_w1(dispatcher: &mut Dispatcher) -> String {
+    let attempt = started_attempt(dispatcher).await;
+    dispatcher
+        .worker_lost(&InRound::for_tests(), "w1", KeptResults::Used, ts(NOW))
+        .await
+        .unwrap();
+    dispatcher
+        .register("w1", "i2", &[], 2, ts(NOW))
+        .await
+        .unwrap();
+    let out = dispatcher
+        .step(&InRound::for_tests(), later(600))
+        .await
+        .unwrap();
+    let given = assignment(&out[0]);
+    assert_eq!(
+        (out[0].worker_id.as_str(), given.attempt_id.clone()),
+        ("w1", format!("{attempt}_1"))
+    );
+    attempt
+}
+
+/// Decision 535: a worker's earlier hold and its moved cleanup's in one batch are two
+/// reports, each judged on its own: the stale one changes nothing, the current one ends it
+/// (agy's fourth review of B304: the second, the same attempt's, was dropped as a repeat).
+#[tokio::test]
+async fn a_stale_hold_and_the_current_one_in_one_batch_are_each_judged() {
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_back_to_w1(&mut dispatcher).await;
+    let mut stale = cleaned(&attempt);
+    stale.cleanup = Some(pb::CleanupResult {
+        status: pb::CleanupStatus::NotNeeded.into(),
+        ..pb::CleanupResult::default()
+    });
+    let current = held(cleaned(&attempt), 1);
+    let group = [stale, current];
+    dispatcher
+        .finished_batch(&InRound::for_tests(), &[("w1", &group)], later(601))
+        .await
+        .unwrap();
+    let extract = extract_instance(&db, &run_id).await;
+    assert_eq!(
+        extract.cleanup_result,
+        Some(CleanupResult::Ok),
+        "the current hold's report ended it"
+    );
+}
+
+/// Decision 535: handles come only from the attempt's current hold; a dying earlier run's,
+/// under the attempt's own ID, aren't added to the moved cleanup's (agy's fourth review).
+#[tokio::test]
+async fn handles_of_an_earlier_hold_are_not_the_moved_cleanups() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_back_to_w1(&mut dispatcher).await;
+    let stale = handles_of(&attempt, 0, &[job("late")]);
+    dispatcher.handles_added("w1", &stale).await.unwrap();
+    assert_eq!(db.cleanup_handles(&attempt).await.unwrap().len(), 0);
+}
+
+/// Decision 535: a worker holding a moved cleanup that reports only its earlier hold at
+/// registration hasn't reported the cleanup: unstarted, it is taken back (agy's fourth
+/// review: the attempt's ID alone counted as reporting it, and it stayed open).
+#[tokio::test]
+async fn reporting_an_earlier_hold_is_not_reporting_the_moved_cleanup() {
+    let (mut dispatcher, _db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_back_to_w1(&mut dispatcher).await;
+    let only_stale = BTreeSet::from([attempt.as_str()]);
+    let found = dispatcher
+        .unreported_unstarted("w1", &only_stale)
+        .await
+        .unwrap();
+    assert_eq!(found, 1, "the moved cleanup, unreported");
+    let held = format!("{attempt}_1");
+    let reported = BTreeSet::from([held.as_str()]);
+    assert_eq!(
+        dispatcher
+            .unreported_unstarted("w1", &reported)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// Decision 535 (agy's fifth review of B304): a sender is its hold, not its worker. The
+/// worker given the moved cleanup itself sends hold 0's whole cleanup, failed, which ran while
+/// it was cut off: it counts as the rest of the handles, not dropped as another's.
+#[tokio::test]
+async fn hold_0s_cleanup_from_the_moved_cleanups_own_worker_counts_as_the_rest() {
+    let (mut dispatcher, db, run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_back_to_w1(&mut dispatcher).await;
+    let mut whole = cleaned(&attempt);
+    whole.cleanup = Some(pb::CleanupResult {
+        status: pb::CleanupStatus::Failed.into(),
+        tries: 1,
+        ..pb::CleanupResult::default()
+    });
+    dispatcher
+        .finished(&InRound::for_tests(), "w1", &whole, later(601))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.rest_owed_by(&attempt).await.unwrap(),
+        None,
+        "the rest came"
+    );
+    assert_eq!(
+        extract_instance(&db, &run_id).await.cleanup_result,
+        Some(CleanupResult::Failed)
+    );
+}
+
+/// Decision 535 (agy's fifth review of B304): only the attempt's current hold gets its
+/// inputs.
+#[tokio::test]
+async fn only_the_current_hold_gets_its_attempts_inputs() {
+    let (mut dispatcher, db, _run_id) = with_run(dag_with_anywhere(1, 0)).await;
+    let attempt = moved_back_to_w1(&mut dispatcher).await;
+    assert!(
+        attempt_inputs(&db, &format!("{attempt}_1"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        attempt_inputs(&db, &attempt).await.unwrap(),
+        None,
+        "hold 0 isn't current"
     );
 }

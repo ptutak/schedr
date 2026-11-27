@@ -185,7 +185,13 @@ fn cancel_problems(
 ) {
     use TaskInstanceState as S;
     for (worker, attempt_id) in dispatcher.queued_cancels() {
-        let Some(attempt) = open.iter().find(|a| a.id == attempt_id) else {
+        // Queued under its hold's ID (decision 535): found by its attempt, and only its current
+        // hold (agy's sixth review of B304).
+        let hold = schedr_model::hold::HoldId::parse(&attempt_id);
+        let Some(attempt) = open
+            .iter()
+            .find(|a| a.id == hold.attempt() && a.hold() == hold)
+        else {
             continue;
         };
         let step_failed = run.instances.iter().any(|i| {

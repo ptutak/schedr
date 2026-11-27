@@ -116,13 +116,11 @@ pub fn router(endpoint: LogEndpoint) -> Router {
         .with_state(endpoint)
 }
 
-/// Whether `text` looks like an attempt ID (a UUID): nothing else names a log file here.
+/// Whether `text` names an attempt's log: its UUID, or a hold of it (`<attempt>_<n>`, a moved
+/// cleanup's, decision 535). Nothing else names a log file here.
 #[must_use]
 pub fn is_attempt_id(text: &str) -> bool {
-    text.len() == 36
-        && text.bytes().enumerate().all(|(i, b)| {
-            matches!(i, 8 | 13 | 18 | 23) == (b == b'-') && (b == b'-' || b.is_ascii_hexdigit())
-        })
+    schedr_model::hold::HoldId::is_valid(text)
 }
 
 async fn get_log(

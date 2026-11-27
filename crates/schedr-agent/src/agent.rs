@@ -4021,7 +4021,11 @@ impl<E: Executor> Agent<E> {
                 service_readies: 0,
             }))
         };
-        if assign.cleanup_only.is_some() && self.cleaning_rest(&assign.attempt_id) {
+        // The rest is cleaned under the attempt's own ID, the moved cleanup comes under its
+        // hold's (decision 535): the same attempt either way.
+        if assign.cleanup_only.is_some()
+            && self.cleaning_rest(schedr_model::hold::HoldId::parse(&assign.attempt_id).attempt())
+        {
             // Its whole cleanup, given here while this worker cleans the handles the master
             // didn't have (B169): refused, it goes elsewhere or comes back after.
             let detail = "cleaning the rest of this attempt's handles".to_owned();

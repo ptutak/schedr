@@ -226,8 +226,20 @@ pub struct StoredAttempt {
     pub result_kept: bool,
     /// How many times its cleanup moved to another worker.
     pub cleanup_moves: u32,
+    /// Its cleanup's current holder (decision 534): 0 the task's own run, one more for each
+    /// worker a moved cleanup was given to. Only that holder's reports of the cleanup count.
+    pub cleanup_holder: u32,
     /// Whether its moved cleanup was assigned, and hasn't been started yet.
     pub moving: bool,
+}
+
+impl StoredAttempt {
+    /// Its current hold (decision 535): the task's own run, or its moved cleanup's current
+    /// holder. What a worker holding it names it by.
+    #[must_use]
+    pub fn hold(&self) -> schedr_model::hold::HoldId {
+        schedr_model::hold::HoldId::new(&self.id, self.cleanup_holder)
+    }
 }
 
 /// How an attempt ended.
@@ -318,6 +330,7 @@ type AttemptRow = (
     i32,
     bool,
     i32,
+    i32,
     bool,
 );
 
@@ -328,18 +341,18 @@ pub const ENDS_PER_STATEMENT: usize = 100;
 
 const ATTEMPT_BY_ID: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, a.cleanup_holder, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.id = $1{uuid}";
 const OPEN_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, a.cleanup_holder, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.chained_run_id IS NULL AND ($1 IS NULL OR a.worker_id = $1) \
     ORDER BY a.assigned_at, a.id";
 const UNSTARTED_CLEANUPS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, a.cleanup_holder, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.moved_at < $1{ts} \
     AND a.worker_id NOT IN (SELECT value FROM {json_each}($3{json})) \
@@ -350,7 +363,7 @@ const ACTIVE_ATTEMPTS: &str = "SELECT a.id{text}, r.dag_id, t.run_id{text}, t.ta
     ORDER BY a.id";
 const UNSTARTED_ATTEMPTS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
     t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+    t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, a.cleanup_holder, \
     a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
     WHERE a.status IS NULL AND a.chained_run_id IS NULL AND a.started_at IS NULL \
     AND a.assigned_at < $1{ts} \
@@ -1036,14 +1049,24 @@ impl Database {
             task_result = CASE WHEN $2 THEN NULL ELSE task_result END \
             WHERE id = $3{uuid} AND status IS NULL AND worker_id IS NULL AND moved_from = $1 \
             AND cleanup_moves > 0";
+        // Its worker has it again: no longer waiting for one (agy's third review of B304).
+        const REASON: &str = "UPDATE task_instances SET queued_reason = NULL \
+            WHERE id = (SELECT task_instance_id FROM attempts WHERE id = $1{uuid})";
         let updated = in_tx!(self, |tx, backend| {
-            crate::query::query(sql(backend, BACK))
+            let updated = crate::query::query(sql(backend, BACK))
                 .bind(worker_id)
                 .bind(drop_result)
                 .bind(attempt_id)
                 .execute(&mut *tx)
                 .await?
-                .rows_affected()
+                .rows_affected();
+            if updated == 1 {
+                crate::query::query(sql(backend, REASON))
+                    .bind(attempt_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            updated
         });
         Ok(updated == 1)
     }
@@ -1096,7 +1119,9 @@ impl Database {
         worker_id: &str,
         now: Timestamp,
     ) -> Result<bool, DbError> {
-        const ASSIGN: &str = "UPDATE attempts SET worker_id = $1, moved_at = $2{ts} \
+        // The next holder (decision 534): the earlier ones' reports no longer count.
+        const ASSIGN: &str = "UPDATE attempts SET worker_id = $1, moved_at = $2{ts}, \
+            cleanup_holder = cleanup_holder + 1, moved_from = NULL \
             WHERE id = $3{uuid} AND status IS NULL AND worker_id IS NULL";
         const REASON: &str = "UPDATE task_instances SET queued_reason = NULL \
             WHERE id = (SELECT task_instance_id FROM attempts WHERE id = $1{uuid})";
@@ -1108,10 +1133,13 @@ impl Database {
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
-            crate::query::query(sql(backend, REASON))
-                .bind(attempt_id)
-                .execute(&mut *tx)
-                .await?;
+            // Only once it has a worker (agy's fourth review of B304).
+            if updated == 1 {
+                crate::query::query(sql(backend, REASON))
+                    .bind(attempt_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             updated
         });
         Ok(updated == 1)
@@ -1409,7 +1437,7 @@ impl Database {
     pub async fn attempts_by_ids(&self, ids: &[&str]) -> Result<Vec<StoredAttempt>, DbError> {
         const BY_IDS: &str = "SELECT a.id{text}, a.task_instance_id{text}, t.run_id{text}, \
             t.task_id, a.try_number, a.worker_id, a.status, a.started_at IS NOT NULL, \
-            t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, \
+            t.map_index, a.task_result IS NOT NULL, a.cleanup_moves, a.cleanup_holder, \
             a.moved_at IS NOT NULL FROM attempts a JOIN task_instances t ON t.id = a.task_instance_id \
             WHERE a.id IN (SELECT value{uuid} FROM {json_each}($1{json}))";
         if ids.is_empty() {
@@ -2080,6 +2108,7 @@ fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
         map_index,
         kept,
         moves,
+        holder,
         moving,
     ) = row;
     Ok(StoredAttempt {
@@ -2096,6 +2125,7 @@ fn stored_attempt(row: AttemptRow) -> Result<StoredAttempt, DbError> {
         map_index,
         result_kept: kept,
         cleanup_moves: u32::try_from(moves).unwrap_or(0),
+        cleanup_holder: u32::try_from(holder).unwrap_or(0),
         moving,
     })
 }

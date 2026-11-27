@@ -61,10 +61,11 @@ with `cleanup_anywhere`, or sooner once the master's own count of that lease may
 out (its last message held on the way). They end `lost` and use a retry. A master outage
 longer than the lease therefore stops these tasks. When the connection is lost, their
 cleanup waits for the master's answer, including when a task ends by itself while
-disconnected: `Continue` runs it here; `Kill` drops it. If the master has fewer handles than
-the returning original worker, a move still waiting is given back to that worker. If the
-move was assigned elsewhere or ended, the original worker cleans the remaining handles
-(`CLEAN_REST`). The run may already have ended; if this late cleanup fails after a success,
+disconnected: `Continue` runs it here; `Kill` drops it. A move still waiting, given to no
+other worker yet, goes back to the returning worker, which runs the cleanup itself with every
+handle it holds. If the move was given to another worker or ended, the returning worker is told
+`Kill`, and nothing it reports counts for that cleanup any more; it still cleans the handles the
+master never got (`CLEAN_REST`). The run may already have ended; if this late cleanup fails after a success,
 the run stays successful but becomes a [yellow
 success](../03-guide/03-life-of-a-run.md#7-the-next-task-and-the-end). The cleanup normally
 runs here or on another worker. After the master marks the worker lost, it waits 40 s by

@@ -1541,7 +1541,10 @@ pub(crate) async fn log_source(
                 "task `{task_id}` of run `{run_id}` has no try {try_number}"
             ))
         })?;
-    let attempt_id = attempt.id;
+    // Its current worker keeps it under its current hold's ID (decision 535): a moved
+    // cleanup's under its own.
+    let attempt_id =
+        schedr_model::hold::HoldId::new(&attempt.id, attempt.cleanup.holder).to_string();
     let worker_id = match (attempt.worker_id, attempt.started_at, attempt.status) {
         (Some(worker_id), Some(_), _) => worker_id,
         (_, _, None) => {
@@ -1608,7 +1611,11 @@ pub async fn get_log(
     let place = log_source(&state, (&run_id, task_id), try_number, query.map_index).await?;
     let part = read_log_part(&state, &place, query.from, query.limit).await?;
     Ok(Json(LogChunk {
-        attempt_id: place.attempt_id,
+        // The attempt, as its other pages name it; the hold's ID only fetched it (decision 535;
+        // agy's fifth review of B304).
+        attempt_id: schedr_model::hold::HoldId::parse(&place.attempt_id)
+            .attempt()
+            .to_owned(),
         try_number,
         worker_id: place.worker_id,
         from: part.from,

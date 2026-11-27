@@ -10,15 +10,15 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - **Then:** M5.3e, R1.3, M6.1, M6.2, M6.3.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
-- **Open bugs:** 3; first: B304 (high/rare), B39 (low/possible), B38 (low/possible) (`BUGS.md`).
+- **Open bugs:** 3; first: B39 (low/possible), B38 (low/possible), B305 (low/rare) (`BUGS.md`).
 
 ## Recent
 
+- D535 (2026-11-27): a hold of an attempt has its own ID
+- D534 (2026-11-27): a cleanup's holder is numbered
+- D533 (2026-11-27): a worker back while its cleanup waits gets it back
 - D532 (2026-11-26): scripts call `schedr-ctx` for its speed
 - D531 (2026-11-26): a worker's sessions published lock-free
-- DN43 (2026-11-26): The registration path restructured in 1.3.0: one owner, changes under the core's lock, reads from a published copy (M5.3i) (corrects D530)
-- D530 (2026-11-26): the registration path keeps its structure
-- DN42 (2026-11-26): What a left registration keeps: only for one that would have been accepted, of a known worker, with no stream live or one it would replace (corrects D524)
 - M5.3i (2026-11-26): A worker's session owned by the core: the registration path restructured
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
 - M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
@@ -27,7 +27,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - M5.3i done and pushed (d465ce38, d2227ae6): paired run within noise, the user accepted it; chaos seeds 2, 7, 11 on CI (45861804673), its result to report.
 - M5.3c building: schedr-ctx measured 3.65 ms against 10.52 ms (0.35); the library split and the program committed locally (9886af94). Waiting for the user: scripts opt in by calling schedr-ctx (option 1) or no script changes through a second schedr on PATH (option 2); then the worker's PATH, the wheel and images checked, the task-ctx tests against both, docs.
-- Then M5.3e, R1.3 (ask before the version commit and the tag).
+- Then M5.3e, R1.3, 1.3.0rc1, then 1.3.0 (both approved, the tags pushed too).
 
 ## Waiting for the user
 
@@ -36,6 +36,7 @@ Nothing.
 ## Rules in force
 
 - Until 1.3.0 (the user, 2026-11-26, "go on until release 1.3.0"): M5.3c's docs on two pages (the context page and the shell plugin's), the other examples keep `schedr task-ctx`; M5.3e fixes a cause inside the design (test first, review, checks, push), one needing a design change is written up with options and waits; R1.3 prepared to all but the version (changelog, upgrade check, full Stress and the kind workflow on CI, pushed), then ask before the version commit and the tag.
+- The user, 2026-11-26 ("you're good to go for 1-4"): B304's fix pushed after agy's review and make check; M5.3e as above; R1.3 prepared; then the version commit and the tag without asking again: 1.3.0rc1 (the user, 2026-11-27: a protocol field and a migration, so a release candidate first, as is the tradition); then, once rc1's release run passes and the whole plan is done, 1.3.0 and its tag pushed without asking (the user, 2026-11-27). A failure on the way, or M5.3e needing a design change, stops and waits. A cause of M5.3e needing a design change still waits for the user, and the round limit going back to 5 s is theirs.
 - Until 1.3.0 (the user, 2026-11-26): Claude goes on alone; each finished step pushed once reviewed (agy) and checked; ask before the 1.3.0 version commit and the tag.
 - Review rules (the user, 2026-11-26, in AI_INSTRUCTIONS.md): before fixing a finding, find the similar places and fix the rule they keep in one place; after three rounds, findings less severe or fewer, else propose a better design and wait.
 - Compatibility with older versions mostly ignorable (the user, 2026-11-24: no one uses schedr yet): no fallbacks, redirects or old fields kept; released migrations and the protocol rules still hold.

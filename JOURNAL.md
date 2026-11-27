@@ -3913,3 +3913,51 @@ with their situations (an existing script, a new one, the user CLI from a task, 
 `dags test`, debugging which `schedr` runs, an older worker during an upgrade, a pip install) and
 edge cases: scripts opt in by calling `schedr-ctx`, the worker's folder first on tasks' `PATH`; or a
 small `schedr` first on `PATH` handing anything but `task-ctx` to the real one. The user: "1".
+
+### <a id="D533"></a>2026-11-27: a worker back while its cleanup waits gets it back (decision 533)
+
+B304 (chaos seed 7 on M5.3i, cause found by Grok): a worker cut off while its task ran, its
+`cleanup_anywhere` cleanup waiting to move, came back still holding the attempt. With no handles
+the master lacked, it was told `Kill`; its gate dropped, it reported the cleanup not needed
+(decision 504), and decision 282's rule took that report as the cleanup's end: the try closed lost
+and no worker ran the cleanup. The first fix let only a cleanup that ran stand for one; agy's
+first review found that report then taken as the rest of the handles, and a moved cleanup given
+to a worker closed on any report. Reworked so a report that didn't run it was ignored there too,
+agy's second review found three places that assume a worker's report settles its attempt: the
+stream's record of assignments (B305), adoption on registration, a batch's repeats. Fewer
+findings than the first round, but of the same kind: the shape was the problem. The user chose
+option A: the returning worker gets its cleanup back whenever it still waits, extending decision
+308; the stale report is never made. Kept: a report stands for a cleanup waiting to move, or for
+the rest, only if it ran (both lead into branches that already ignored reports). Removed: round
+one's "ignore a moved cleanup's report" branch. Not chosen: B (ignore it in the three places),
+C (the agent reports a refused cleanup as nothing, changing decision 504).
+
+### <a id="D534"></a>2026-11-27: a cleanup's holder is numbered (decision 534)
+
+agy's third review of B304, on option A (decision 533), found two more critical cases: a moved
+cleanup closed by its new worker's report of no cleanup, and a worker told `Kill` that came back
+after the cleanup's next worker refused it and took it back (`moved_from` still named it), its
+stale report then ending it. Three rounds, findings no fewer or milder (6, 4, 4; criticals 3, 2,
+2): the design check (the user's rule of 2026-11-26). All three rounds had one cause: several
+workers report on one attempt under one ID, and the master guessed whose a report was. The user
+chose E: each hold of the cleanup numbered (0 the task's run, one more per worker given it), sent
+in the assignment and back on every report; only the current holder's count. `assign_cleanup`
+clears `moved_from` and numbers the next holder; a take-back clears the instance's waiting
+reason (round three's third finding). As the step is a protocol and a migration change, 1.3.0
+goes through a release candidate first (the user's tradition, 2026-11-27).
+
+### <a id="D535"></a>2026-11-27: a hold of an attempt has its own ID (decision 535)
+
+agy's fourth review, of decision 534 (a holder number sent as a field beside the attempt's ID),
+found ten findings, three critical; the simulator, in `make check`, found an attempt left open.
+Most were one thing: every keyed place on the worker (journal, running, unacknowledged, the
+holders map) and in the master (the stream's assignments, the batch's repeats, the reconcile's
+reported set, the handles) used the attempt's ID, so a worker's earlier run of an attempt and the
+moved cleanup it was later given, one ID, were mixed up wherever a holder check was missing.
+Four rounds without fewer or milder findings (6, 4, 4, 10): the user's design rule. The user
+chose H: each hold its own ID on the wire, `<attempt>_<n>` (asked why not a counter: the attempt's
+UUID keeps hold 0 unchanged and needs no round trip; a counter for holds alone is what this is),
+typed `HoldId` in the master so the compiler finds every place mixing the two forms. The agent
+and the protocol fields of 534 reverted; the holder column kept. Proved: three tests (two holds
+in one batch, an earlier hold's handles, an earlier hold reported at registration) each fail with
+its check broken.

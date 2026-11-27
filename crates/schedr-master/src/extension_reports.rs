@@ -5,6 +5,7 @@
 //! (`master_extension_reports_dropped`) and warned of at most once a minute: extensions rank
 //! below native tasks, and their reports never slow the master.
 
+use schedr_model::hold::HoldId;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -474,9 +475,11 @@ impl Writer {
 /// An attempt's report, checked and cut as from any worker, into the flush: each phase change
 /// (consecutive statuses of one phase coalesced to the newest), the newest URL of each label. Its owner is checked when it is stored.
 fn attempt_report(flush: &mut Flush, worker_id: String, reported: pb::AttemptReported) {
-    // An attempt's ID is a UUID: another would fail the flush's whole transaction on Postgres
-    // (agy's review), so it is dropped here, as its owner check would drop it.
-    if uuid::Uuid::parse_str(&reported.attempt_id).is_err() {
+    // An attempt's UUID or a hold of it (decision 535): another would fail the flush's whole
+    // transaction on Postgres (agy's review), so it is dropped here, as its owner check would
+    // drop it. Kept under the ID it came with, so two holds' reports never coalesce; the
+    // store keeps it under its attempt, from its current hold only.
+    if !HoldId::is_valid(&reported.attempt_id) {
         return;
     }
     let cut = |text: String| -> String { storable(&text) };

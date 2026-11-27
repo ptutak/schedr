@@ -66,6 +66,13 @@ pub enum CleanupResult {
 }
 
 impl CleanupResult {
+    /// Whether the cleanup ran (succeeded or failed): only then does a worker's report stand
+    /// for it (B304: one not needed, never run, closed a cleanup waiting to move).
+    #[must_use]
+    pub const fn ran(self) -> bool {
+        matches!(self, Self::Ok | Self::Failed)
+    }
+
     /// Whether it fails the run (see archive/PROJECT.md, Run result).
     #[must_use]
     pub const fn fails_the_run(self) -> bool {
