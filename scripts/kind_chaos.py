@@ -432,6 +432,32 @@ class Run:
         """
         return self.k("exec", pod, "--", "psql", "-U", "postgres", "-tAc", sql).stdout
 
+    def psql_when_up(
+        self,
+        sql: str,
+        pod: str,
+        *,
+        wait: float = 60.0,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> str:
+        """As `psql`, tried again each second for `wait` seconds while the server refuses it.
+
+        A fresh Postgres pod is ready during its image's first init too, a server that stops
+        and starts the real one after it: a statement between the two finds no server (chaos
+        seed 7's setup on 701a8882).
+        """
+        deadline = clock() + wait
+        while True:
+            done = self.k("exec", pod, "--", "psql", "-U", "postgres", "-tAc", sql, check=False)
+            if done.returncode == 0:
+                return done.stdout
+            if clock() >= deadline:
+                raise RuntimeError(
+                    f"psql in {pod} still refused after {wait:.0f} s: {done.stderr.strip()}"
+                )
+            sleep(1.0)
+
 
 def require_local_context() -> None:
     """The context's server on this machine, or no command at all (as kind-lib.sh's)."""
@@ -653,7 +679,7 @@ def setup(r: Run) -> None:
     r.k("rollout", "status", "statefulset/postgres", "--timeout=180s")
     r.k("apply", "-f", "-", stdin=marks_postgres())
     r.k("rollout", "status", "statefulset/chaos-marks", "--timeout=180s")
-    r.psql(MARKS_TABLE, MARKS_POD)
+    r.psql_when_up(MARKS_TABLE, MARKS_POD)
     r.k(
         "create",
         "secret",

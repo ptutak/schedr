@@ -282,3 +282,39 @@ def test_the_load_dag_builds() -> None:
     # first run: `cleanup_anywhere` without a cleanup, on each other task).
     namespace: dict[str, object] = {}
     exec(compile(chaos().DAG, "chaos.py", "exec"), namespace)
+
+
+def test_a_statement_waits_for_the_marks_postgres_to_answer(tmp_path: Path) -> None:
+    # Its image's first start restarts the server after init: the readiness probe passes
+    # between the two, a `psql` there fails (chaos seed 7 on 701a8882's setup).
+    module = chaos()
+    run = module.Run(tmp_path, "podman")
+    answers = iter([2, 2, 0])
+    calls: list[tuple[str, ...]] = []
+
+    def k(*args: str, check: bool = True, stdin: str | None = None) -> object:
+        assert not check, "a refusal is waited out, not raised"
+        calls.append(args)
+        code = next(answers)
+        return type("Done", (), {"returncode": code, "stdout": "ok\n", "stderr": "no socket"})()
+
+    run.k = k  # type: ignore[method-assign]
+    slept: list[float] = []
+    assert run.psql_when_up("SELECT 1", "chaos-marks-0", sleep=slept.append) == "ok\n"
+    assert len(calls) == 3
+    assert slept == [1.0, 1.0]
+
+
+def test_a_statement_still_refused_after_the_wait_fails_with_its_error(tmp_path: Path) -> None:
+    module = chaos()
+    run = module.Run(tmp_path, "podman")
+
+    def k(*args: str, check: bool = True, stdin: str | None = None) -> object:
+        return type("Done", (), {"returncode": 2, "stdout": "", "stderr": "no socket"})()
+
+    run.k = k  # type: ignore[method-assign]
+    times = iter([0.0, 0.0, 30.0, 61.0, 61.0])
+    with pytest.raises(RuntimeError, match="no socket"):
+        run.psql_when_up(
+            "SELECT 1", "chaos-marks-0", wait=60.0, sleep=lambda _: None, clock=lambda: next(times)
+        )
