@@ -21,6 +21,20 @@ schema and protocol changed in place (decision 156).
   10 minutes (decision 529).
 - **A `cleanup_anywhere` cleanup runs at least once** (decision 528): let through, then its worker
   lost, it is still moved; the guarantees page says so.
+- **A moved cleanup runs, and runs once** (B304, decisions 533 and 535): a worker cut off while its
+  `cleanup_anywhere` task ran, its cleanup waiting to move, could come back, be told to stop, and
+  report the refused cleanup as not needed; the try then closed with no worker running its cleanup.
+  A worker back while its own cleanup still waits now gets it back and runs it. Each hold of an
+  attempt has its own ID: a moved cleanup runs under `<attempt>_<n>` on its worker (its log there
+  too), and only the attempt's current hold's messages count. Migration 0004
+  (`attempts.cleanup_holder`).
+- **`schedr-ctx`, a small program for scripts** (M5.3c, decision 532): `schedr task-ctx`'s commands,
+  arguments, output and exit codes, starting in about 3.6 ms against 10.5 ms. The worker puts its
+  own program's folder first on every task's `PATH`, so a task finds the `schedr-ctx` beside its
+  `schedr`; `schedr task-ctx` stays.
+- A worker's connection to the master is kept in one place the master's hot paths read without its
+  lock (M5.3i, decision 531): deliveries, the stream readers' checks and heartbeat answers no longer
+  wait behind a round.
 - Scenarios 1 and 6 of the stress suite: the round's p99 limit 7 s.
 
 ## 1.2.1
