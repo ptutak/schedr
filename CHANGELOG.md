@@ -5,7 +5,13 @@ on, the database schema changes only through new migrations and the protocol bet
 processes only additively within a major version (decision 456); 0.1.0 was a preview, its
 schema and protocol changed in place (decision 156).
 
-## Unreleased
+## 1.3.0
+
+Workers, their connections and moved cleanups made sound under faults found by a chaos run on
+kind: a worker's new connection replaces one that died without a word, a moved cleanup runs and
+runs once, and a worker's session is read without the master's lock. Extension tasks go to the
+workers offering their extension at its version, and scripts get `schedr-ctx`. A migration
+(0004) and protocol 2.3: **upgrade the workers with the master**, the master first.
 
 - **A worker's new connection replaces one that died without a word** (B301, decision 525): each
   `Register` numbers its connection; a newer one of the same process replaces the old stream at
