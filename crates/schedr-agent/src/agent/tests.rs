@@ -3670,10 +3670,14 @@ const LATE: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[tokio::test]
 async fn a_try_asked_again_runs_on_the_rest_the_master_said_meanwhile() {
+    const ANSWERS: [(bool, std::time::Duration); 2] =
+        [(true, std::time::Duration::from_secs(5)), (true, AT_ONCE)];
     // Codex's review of B255: a try with no word in time, then `CLEAN_REST` while it waited,
     // then the next try let through: it runs as a rest, asks as one and says so.
-    let wait = std::time::Duration::from_millis(300);
-    let (attempt, gate, asked) = behind_a_barrier(&[(true, LATE), (true, AT_ONCE)], wait);
+    // Each ask waits 1.5 s: the second one's answer, at once, still goes through the stand-in's
+    // process, which a loaded make check slowed past 300 ms; the first's comes well after.
+    let wait = std::time::Duration::from_millis(1_500);
+    let (attempt, gate, asked) = behind_a_barrier(&ANSWERS, wait);
     let resting = tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         gate.send_replace(super::Gate::Rest(0));
