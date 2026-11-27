@@ -3961,3 +3961,17 @@ typed `HoldId` in the master so the compiler finds every place mixing the two fo
 and the protocol fields of 534 reverted; the holder column kept. Proved: three tests (two holds
 in one batch, an earlier hold's handles, an earlier hold reported at registration) each fail with
 its check broken.
+
+### 2026-11-27: scenario 24's long rounds explained (M5.3e)
+
+The slow-tick log (`SCHEDR_HIDDEN__MASTER__SLOW_TICK_LOG`, each tick's parts, its waits for the core's
+lock and who held it) on CI's full scenario 24 (Stress run 45947557799, master `3669f3eb`): 17 ticks of
+2 s or more, 16 of them in the two minutes the 500 triggers fired. Each waited 1.6 to 6.3 s for the
+core's lock, nothing unaccounted (not Postgres, not the runner's CPU): behind workers' turns (1 to
+4 s a tick) and the trigger loop's passes (0.7 to 2.4 s); the round's own parts were small (results at
+most 0.35 s). The lock serves who asked first, so a round queues behind every turn and pass queued
+before it in the burst; each is short (turns' p99 0.2 s). Totals: turns other than trigger messages
+held it 40.3 s, trigger messages 25.9 s, of the rounds' 229.8 s. The round's p99 was 4.1 s (1.2.0:
+5.79 s; M5.3i between them). The user chose to accept it (option S), the limit put at 7 s. Not
+chosen: the round served before queued turns (P), trigger messages in the round's queue as results
+are (Q, decision 505's pattern), smaller turns (R).

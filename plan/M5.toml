@@ -831,7 +831,8 @@ scope = '''
 done_when = '''
 the slow rounds of a full scenario 24 explained by their trace (which, when, waiting for what), said in the journal; the user's choice on a fix and the limit taken
 '''
-status = "planned"
+status = "done"
+done = 2026-11-27
 
 [[steps]]
 id = "R1.3"

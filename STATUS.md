@@ -7,7 +7,7 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 
 - **Milestone:** M5, Performance, metrics, the master's throughput.
 - **Next step:** M5.3c, A small `schedr-ctx` program for `schedr task-ctx`, if its start is measured faster (decisions D532). Done when: first, its premise measured: a small binary of `task-ctx`'s code alone against `schedr`'s start on an idle machine (2026-11-23, loaded: `schedr --version` 20-70 ms, `/bin/ls` ~10 ms, mostly kernel time; 86 MB of mapped code; a stripped copy no faster); at most half of its time is the gain asked for (the user, 2026-11-25: "a half is enough"); short of it, the step is dropped with those numbers. Measured (2026-11-26, release builds, 300 runs each alternately, after a warm-up, load 1.8-2.1, both failing without an agent): `schedr task-ctx` median 10.51 ms (p90 12.47), a 0.9 MB program of the same crates and first steps 2.90 ms (p90 3.62), `/bin/true` 1.85 ms: 0.28 of it (0.12 above the floor), so built. Otherwise: a script's `task-ctx` calls run through the small program with the same results (the existing task-ctx tests passing through it); one call's time measured idle before and after; scenario 25's shell plugin run measured again; the guide's pages on `task-ctx` and shell plugins say how it is found
-- **Then:** M5.3e, R1.3, M6.1, M6.2, M6.3.
+- **Then:** R1.3, M6.1, M6.2, M6.3, M6.4.
 - **Open questions:** 1 (`DECISIONS.md`).
 - **The user's notes:** 1; latest: N1 (2026-11-19): Scenario 1's round trace: what each step and point cost, and where the trace points are (M5.2g) (`NOTES.md`).
 - **Open bugs:** 3; first: B39 (low/possible), B38 (low/possible), B305 (low/rare) (`BUGS.md`).
@@ -19,9 +19,9 @@ Start here, then read only what the step needs: `PLAN.md` (the step's row), `DEC
 - D533 (2026-11-27): a worker back while its cleanup waits gets it back
 - D532 (2026-11-26): scripts call `schedr-ctx` for its speed
 - D531 (2026-11-26): a worker's sessions published lock-free
+- M5.3e (2026-11-27): Scenario 24's long rounds investigated
 - M5.3i (2026-11-26): A worker's session owned by the core: the registration path restructured
 - M5.3h (2026-11-26): One kind test on CI by hand, on 1.2.1's images
-- M5.3g (2026-11-26): Connections numbered: a worker's new one replaces its dead one
 
 ## In progress
 

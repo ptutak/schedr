@@ -255,7 +255,7 @@ impl Stress {
     }
 
     /// [`Self::measure`] with a round p99 limit of its own, for a scenario whose load makes
-    /// rounds longer than the others' 5 s (scenario 24: 10 s, the user, 2026-11-25).
+    /// rounds longer than the others' 5 s (scenario 24: 7 s, the user, 2026-11-27).
     pub fn measure_rounds_within(
         &self,
         report: &mut Report,

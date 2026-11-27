@@ -2264,7 +2264,9 @@ fn stress_24_many_triggers() {
         report.set("pokes", pokes as f64);
         report.set("firing", firing as f64);
     }
-    stress.measure_rounds_within(&mut report, "master", 1.0, 10.0);
+    // 7 s (the user, 2026-11-27, M5.3e): its slow rounds wait for the core's lock behind workers'
+    // turns and trigger passes queued during the burst (the full run on CI: 4.1 s at p99).
+    stress.measure_rounds_within(&mut report, "master", 1.0, 7.0);
     // An event's way: found on the worker (its own wall time, `at`), received by the master, its
     // run made, its task started (one machine: one wall clock).
     let db = &stress.db;
